@@ -101,4 +101,3 @@ const emit = defineEmits(['callback'])
   }
 }
 </style>
-

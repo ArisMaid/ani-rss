@@ -58,10 +58,10 @@
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item @click="openLazy('add', addRef)">
+                <el-dropdown-item data-testid="open-add" @click="openLazy('add')">
                   添加订阅
                 </el-dropdown-item>
-                <el-dropdown-item @click="openLazy('collection', collectionRef)">
+                <el-dropdown-item data-testid="open-collection" @click="openLazy('collection')">
                   添加合集
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -69,7 +69,7 @@
           </el-dropdown>
         </div>
         <div style="margin: 0 4px;">
-          <el-button bg text @click="openLazy('torrents', torrentsInfosRef)">
+          <el-button data-testid="open-torrents" bg text @click="openLazy('torrents')">
             <el-icon :class="elIconClass">
               <Download/>
             </el-icon>
@@ -93,7 +93,7 @@
           </popconfirm>
         </div>
         <div style="margin: 0 4px;">
-          <el-button text bg @click="openLazy('manage', manageRef)">
+          <el-button data-testid="open-manage" text bg @click="openLazy('manage')">
             <el-icon :class="elIconClass">
               <Fold/>
             </el-icon>
@@ -104,7 +104,7 @@
         </div>
         <div style="margin: 0 4px;">
           <el-badge :is-dot="about.update" class="item">
-            <el-button @click="openLazy('config', configRef, about.update)" text bg>
+            <el-button data-testid="open-config" @click="openLazy('config', about.update)" text bg>
               <el-icon :class="elIconClass">
                 <Setting/>
               </el-icon>
@@ -115,7 +115,7 @@
           </el-badge>
         </div>
         <div style="margin-left: 4px;">
-          <el-button @click="openLazy('logs', logsRef)" text bg>
+          <el-button data-testid="open-logs" @click="openLazy('logs')" text bg>
             <el-icon :class="elIconClass">
               <Tickets/>
             </el-icon>
@@ -156,6 +156,14 @@ const logsRef = ref()
 const manageRef = ref()
 const collectionRef = ref()
 const torrentsInfosRef = ref()
+const componentRefs = {
+  config: configRef,
+  add: addRef,
+  logs: logsRef,
+  manage: manageRef,
+  collection: collectionRef,
+  torrents: torrentsInfosRef
+}
 const mounted = reactive({
   config: false,
   add: false,
@@ -165,7 +173,8 @@ const mounted = reactive({
   torrents: false
 })
 
-const openLazy = (name, componentRef, ...args) => {
+const openLazy = (name, ...args) => {
+  const componentRef = componentRefs[name]
   mounted[name] = true
   if (componentRef.value) {
     componentRef.value.show(...args)

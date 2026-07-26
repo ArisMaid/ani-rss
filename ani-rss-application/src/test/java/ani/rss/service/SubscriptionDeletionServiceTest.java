@@ -45,15 +45,16 @@ class SubscriptionDeletionServiceTest {
         service = new SubscriptionDeletionService(
                 ownershipService, store, remoteTasks);
 
-        Path root = Files.createDirectories(tempDir.resolve("downloads"));
-        ownedFile = root.resolve("episode.mkv");
+        Path root = Files.createDirectories(tempDir.resolve("downloads").resolve("Example"));
+        ownedFile = root.resolve("season-1").resolve("episode.mkv");
+        Files.createDirectories(ownedFile.getParent());
         Files.writeString(ownedFile, "episode");
         long now = System.currentTimeMillis();
         repository.createPending(new DownloadOwnership(
                 "ownership", "qBittorrent", "remote-task", "info-hash", "subscription",
                 1, "1.0", root.toString(), OwnershipState.ACTIVE, now, now));
         repository.replaceFiles("ownership", List.of(
-                new OwnedFile("ownership", "episode.mkv", "FILE", 7L)));
+                new OwnedFile("ownership", "season-1/episode.mkv", "FILE", 7L)));
         remoteTasks.tasks.add(task("remote-task", "info-hash"));
         remoteTasks.tasks.add(task("same-hash-unowned", "info-hash"));
         remoteTasks.tasks.add(task("unowned-task", "other-hash"));
@@ -81,6 +82,34 @@ class SubscriptionDeletionServiceTest {
         assertEquals(1, result.deletedFiles());
         assertEquals(OwnershipState.DELETED,
                 repository.find("ownership").orElseThrow().state());
+    }
+
+    @Test
+    void deletesEmptySubscriptionDirectoryButNotItsDownloadBase() {
+        Path subscriptionRoot = ownedFile.getParent().getParent();
+        Path downloadBase = subscriptionRoot.getParent();
+
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), true);
+
+        assertFalse(Files.exists(ownedFile));
+        assertFalse(Files.exists(ownedFile.getParent()));
+        assertFalse(Files.exists(subscriptionRoot));
+        assertTrue(Files.isDirectory(downloadBase));
+        assertEquals(1, result.deletedFiles());
+    }
+
+    @Test
+    void retainsAnEmptySharedSaveRootForAnotherLiveOwnership() {
+        long now = System.currentTimeMillis();
+        Path sharedRoot = ownedFile.getParent().getParent();
+        repository.createPending(new DownloadOwnership(
+                "other-pending", "qBittorrent", null, "other-hash", "other-subscription",
+                1, "1.0", sharedRoot.toString(), OwnershipState.PENDING, now, now));
+
+        service.delete(List.of("subscription"), true);
+
+        assertTrue(Files.isDirectory(sharedRoot));
+        assertFalse(Files.exists(ownedFile));
     }
 
     @Test
@@ -176,9 +205,9 @@ class SubscriptionDeletionServiceTest {
         long now = System.currentTimeMillis();
         repository.createPending(new DownloadOwnership(
                 "other-ownership", "qBittorrent", "other-task", "other-hash", "other-subscription",
-                1, "1.0", ownedFile.getParent().toString(), OwnershipState.ACTIVE, now, now));
+                1, "1.0", ownedFile.getParent().getParent().toString(), OwnershipState.ACTIVE, now, now));
         repository.replaceFiles("other-ownership", List.of(
-                new OwnedFile("other-ownership", "episode.mkv", "FILE", 7L)));
+                new OwnedFile("other-ownership", "season-1/episode.mkv", "FILE", 7L)));
         remoteTasks.tasks.add(task("other-task", "other-hash"));
 
         SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), true);
@@ -196,7 +225,7 @@ class SubscriptionDeletionServiceTest {
 
     @Test
     void pathTraversalInManifestDoesNotEscapeTheOwnedRoot() throws Exception {
-        Path outside = tempDir.resolve("outside.mkv");
+        Path outside = ownedFile.getParent().getParent().getParent().resolve("outside.mkv");
         Files.writeString(outside, "outside");
         repository.replaceFiles("ownership", List.of(
                 new OwnedFile("ownership", "../outside.mkv", "FILE", 7L)));

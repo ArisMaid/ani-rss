@@ -112,13 +112,17 @@ public final class SubscriptionDeletionService {
             for (TorrentsInfo task : ownedTasks) {
                 remoteTasks.deleteTaskOnly(task);
             }
-            OwnershipService.FileDeletionOutcome fileOutcome = deleteFiles
-                    ? ownershipService.deletePreparedFilesBestEffort(fileDeletion.files())
-                    : new OwnershipService.FileDeletionOutcome(0, 0);
+            OwnershipService.FileDeletionResult fileDeletionResult = deleteFiles
+                    ? ownershipService.deletePreparedFilesBestEffortWithDetails(fileDeletion.files())
+                    : new OwnershipService.FileDeletionResult(List.of(), 0);
             // Explicit user deletion releases managed identities before the
             // subscription list is persisted. Completion finalization keeps
             // them active because its files and seeding tasks intentionally remain.
             ownershipService.markDeleted(deletableOwnerships);
+            if (deleteFiles) {
+                ownershipService.pruneEmptyDirectoriesAfterDeletion(
+                        fileDeletionResult.deletedFiles(), deletableOwnerships);
+            }
             if (recoveryService != null) {
                 for (String id : ids) {
                     recoveryService.cancelSubscription(id);
@@ -131,8 +135,8 @@ public final class SubscriptionDeletionService {
             return new DeletionResult(
                     ids.size(),
                     ownedTasks.size(),
-                    fileOutcome.deletedFiles(),
-                    fileDeletion.skippedFiles() + fileOutcome.skippedFiles());
+                    fileDeletionResult.deletedFiles().size(),
+                    fileDeletion.skippedFiles() + fileDeletionResult.skippedFiles());
         }
     }
 

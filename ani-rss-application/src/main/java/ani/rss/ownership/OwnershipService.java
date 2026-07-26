@@ -18,6 +18,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -548,13 +549,24 @@ public class OwnershipService {
      * deletion to a stale manifest entry.
      */
     public FileDeletionOutcome deletePreparedFilesBestEffort(Collection<VerifiedOwnedFile> files) {
+        FileDeletionResult result = deletePreparedFilesBestEffortWithDetails(files);
+        return new FileDeletionOutcome(result.deletedFiles().size(), result.skippedFiles());
+    }
+
+    /**
+     * Deletes each prevalidated file independently and retains the exact list
+     * of files that were actually removed. Callers can use that list to prune
+     * only now-empty directories without treating a stale manifest as proof
+     * that a directory is disposable.
+     */
+    public FileDeletionResult deletePreparedFilesBestEffortWithDetails(Collection<VerifiedOwnedFile> files) {
         if (files == null || files.isEmpty()) {
-            return new FileDeletionOutcome(0, 0);
+            return new FileDeletionResult(List.of(), 0);
         }
 
         List<VerifiedOwnedFile> selected = List.copyOf(files);
         Set<Path> conflictedPaths = conflictingOwnershipPaths(selected);
-        int deletedFiles = 0;
+        List<VerifiedOwnedFile> deletedFiles = new ArrayList<>();
         int skippedFiles = 0;
         for (VerifiedOwnedFile file : selected) {
             if (conflictedPaths.contains(file.path())) {
@@ -564,12 +576,69 @@ public class OwnershipService {
             try {
                 validatePreparedFile(file);
                 Files.delete(file.path());
-                deletedFiles++;
+                deletedFiles.add(file);
             } catch (Exception ignored) {
                 skippedFiles++;
             }
         }
-        return new FileDeletionOutcome(deletedFiles, skippedFiles);
+        return new FileDeletionResult(List.copyOf(deletedFiles), skippedFiles);
+    }
+
+    /**
+     * Removes empty directories left by an explicit subscription deletion.
+     * This method never walks above an ownership's saved root and never
+     * recursively deletes anything. A directory shared with, or containing,
+     * another live ownership root is retained even when it is currently empty.
+     */
+    public int pruneEmptyDirectoriesAfterDeletion(
+            Collection<VerifiedOwnedFile> deletedFiles,
+            Collection<DownloadOwnership> releasedOwnerships) {
+        if (deletedFiles == null || deletedFiles.isEmpty()) {
+            return 0;
+        }
+
+        Set<String> releasedIds = new HashSet<>();
+        if (releasedOwnerships != null) {
+            for (DownloadOwnership ownership : releasedOwnerships) {
+                if (ownership != null) {
+                    releasedIds.add(ownership.ownershipId());
+                }
+            }
+        }
+        List<Path> protectedRoots = liveOwnershipRootsExcept(releasedIds);
+        Set<Path> candidates = new HashSet<>();
+        for (VerifiedOwnedFile file : deletedFiles) {
+            if (file == null) {
+                continue;
+            }
+            try {
+                Path root = ownershipRoot(file.ownership());
+                for (Path current = file.path().getParent(); current != null; current = current.getParent()) {
+                    PathPolicy.requireWithin(root, current);
+                    candidates.add(current);
+                    if (current.equals(root)) {
+                        break;
+                    }
+                }
+            } catch (Exception ignored) {
+                // An invalid path must not authorize directory deletion.
+            }
+        }
+
+        List<Path> ordered = candidates.stream()
+                .sorted(Comparator.comparingInt(Path::getNameCount).reversed()
+                        .thenComparing(Path::toString))
+                .toList();
+        int deletedDirectories = 0;
+        for (Path candidate : ordered) {
+            if (isProtectedDirectory(candidate, protectedRoots)) {
+                continue;
+            }
+            if (deleteEmptyDirectory(candidate)) {
+                deletedDirectories++;
+            }
+        }
+        return deletedDirectories;
     }
 
     public void markDeleted(Collection<DownloadOwnership> ownerships) {
@@ -734,6 +803,56 @@ public class OwnershipService {
         }
         requireNoLinksFromFileSystemRoot(root);
         return root;
+    }
+
+    private List<Path> liveOwnershipRootsExcept(Set<String> releasedIds) {
+        List<Path> roots = new ArrayList<>();
+        for (DownloadOwnership ownership : repository.listAll()) {
+            if (releasedIds.contains(ownership.ownershipId()) || ownership.state() == OwnershipState.DELETED) {
+                continue;
+            }
+            try {
+                roots.add(ownershipRoot(ownership));
+            } catch (Exception ignored) {
+                // An invalid foreign ownership is not a safe deletion boundary.
+                // Retain all candidates beneath it by recording its normalized root
+                // when possible.
+                try {
+                    roots.add(Path.of(ownership.saveRoot()).toAbsolutePath().normalize());
+                } catch (Exception ignoredAgain) {
+                    // No usable root means this record cannot expand deletion scope.
+                }
+            }
+        }
+        return List.copyOf(roots);
+    }
+
+    private static boolean isProtectedDirectory(Path candidate, Collection<Path> protectedRoots) {
+        for (Path protectedRoot : protectedRoots) {
+            if (candidate.equals(protectedRoot) || protectedRoot.startsWith(candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean deleteEmptyDirectory(Path directory) {
+        try {
+            if (PathPolicy.isFileSystemRoot(directory) || Files.isSymbolicLink(directory) ||
+                    !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) {
+                return false;
+            }
+            requireNoLinksFromFileSystemRoot(directory);
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory)) {
+                if (stream.iterator().hasNext()) {
+                    return false;
+                }
+            }
+            Files.delete(directory);
+            return true;
+        } catch (java.io.IOException | RuntimeException ignored) {
+            return false;
+        }
     }
 
     private static Path safeOwnedPath(Path root, OwnedFile ownedFile) {
@@ -927,6 +1046,12 @@ public class OwnershipService {
     }
 
     public record FileDeletionOutcome(int deletedFiles, int skippedFiles) {
+    }
+
+    public record FileDeletionResult(List<VerifiedOwnedFile> deletedFiles, int skippedFiles) {
+        public FileDeletionResult {
+            deletedFiles = List.copyOf(deletedFiles == null ? List.of() : deletedFiles);
+        }
     }
 
     public record MediaVerification(boolean manifestAvailable, List<OwnedFile> missingFiles) {

@@ -19,6 +19,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class TaskService {
     public static final AtomicBoolean LOOP = new AtomicBoolean(false);
     public static final List<Thread> THREADS = new Vector<>();
+    private final TaskCoordinator coordinator;
+
+    public TaskService(TaskCoordinator coordinator) {
+        this.coordinator = coordinator;
+    }
 
     public synchronized void stop() {
         if (!stop(Duration.ofSeconds(30))) {
@@ -50,9 +55,11 @@ public class TaskService {
             THREADS.stream()
                     .filter(Thread::isAlive)
                     .forEach(thread -> log.error("任务线程停止超时: {}", thread.getName()));
+            coordinator.taskStopFailed();
             return false;
         }
         THREADS.clear();
+        coordinator.taskStopped();
         return true;
     }
 
@@ -62,6 +69,7 @@ public class TaskService {
     }
 
     public synchronized void start() {
+        coordinator.requireStartAllowed();
         if (LOOP.get() && !THREADS.isEmpty()) {
             log.warn("任务已经在运行中");
             return;
@@ -79,5 +87,6 @@ public class TaskService {
         for (Thread thread : THREADS) {
             thread.start();
         }
+        coordinator.taskStarted();
     }
 }

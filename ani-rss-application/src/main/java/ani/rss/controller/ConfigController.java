@@ -11,6 +11,7 @@ import ani.rss.entity.web.Header;
 import ani.rss.entity.web.Result;
 import ani.rss.service.BackupService;
 import ani.rss.service.ConfigService;
+import ani.rss.service.RestoreService;
 import ani.rss.service.TaskService;
 import ani.rss.util.other.AniUtil;
 import ani.rss.util.other.ConfigUtil;
@@ -50,6 +51,9 @@ public class ConfigController extends BaseController {
 
     @Resource
     private ConfigService configService;
+
+    @Resource
+    private RestoreService restoreService;
 
     @Auth
     @Operation(summary = "获取设置")
@@ -165,26 +169,13 @@ public class ConfigController extends BaseController {
     @Auth
     @Operation(summary = "导入设置")
     @PostMapping(value = "/importConfig", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public Result<Void> importConfig(@RequestParam("file") MultipartFile file) throws IOException {
-        String originalFilename = file.getOriginalFilename();
-        String extName = FileUtil.extName(originalFilename);
-        Assert.isTrue("zip".equals(extName), "导入格式异常");
-
-        File configDir = ConfigUtil.getConfigDir();
-
-        // 删除旧的种子记录
-        FileUtil.del(configDir + "/torrents");
-
-        @Cleanup
-        InputStream inputStream = file.getInputStream();
-
-        ZipUtil.unzip(inputStream, configDir, StandardCharsets.UTF_8);
-
-        // 重新加载设置
-        ConfigUtil.load();
-        AniUtil.load();
-        taskService.restart();
-
-        return Result.success("导入成功");
+    public Result<RestoreService.RestoreOperationView> importConfig(
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "confirm", defaultValue = "false") boolean confirm) throws IOException {
+        RestoreService.RestoreOperationView staged = restoreService.stage(file.getInputStream(), file.getSize());
+        if (confirm && staged.status() == RestoreService.RestoreStatus.VALIDATED) {
+            staged = restoreService.confirm(staged.operationId());
+        }
+        return Result.success(staged);
     }
 }

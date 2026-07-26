@@ -1,143 +1,104 @@
 package ani.rss.service;
 
-import ani.rss.commons.FileUtils;
-import ani.rss.entity.Config;
-import ani.rss.util.other.AniUtil;
+import ani.rss.backup.BackupArchive;
+import ani.rss.commons.MavenUtils;
 import ani.rss.util.other.ConfigUtil;
+import ani.rss.util.other.AniUtil;
 import cn.hutool.core.date.DatePattern;
 import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.io.FileUtil;
-import cn.hutool.core.io.IoUtil;
-import cn.hutool.core.util.ArrayUtil;
-import cn.hutool.core.util.ZipUtil;
-import jakarta.annotation.Resource;
-import lombok.Cleanup;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.io.File;
+import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
+import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Date;
-import java.util.List;
-import java.util.stream.Stream;
+import java.util.UUID;
 
 @Slf4j
 @Service
 public class BackupService {
+    private final ClearService clearService;
 
-    @Resource
-    private ClearService clearService;
+    public BackupService(ClearService clearService) {
+        this.clearService = clearService;
+    }
 
-    private static final Config CONFIG = ConfigUtil.CONFIG;
-
-    /**
-     * 备份
-     */
     public synchronized void backup() {
-        Boolean configBackup = CONFIG.getConfigBackup();
-        if (!configBackup) {
+        if (!Boolean.TRUE.equals(ConfigUtil.snapshot().getConfigBackup())) {
             return;
         }
-
         clearBackup();
-
-        File configDir = ConfigUtil.getConfigDir();
-        File backupDir = new File(configDir, "backup");
-
+        Path configDir = ConfigUtil.getConfigDir().toPath().toAbsolutePath().normalize();
+        Path backupDir = configDir.resolve("backup");
         String date = DateUtil.format(new Date(), DatePattern.NORM_DATE_PATTERN);
-        File backupFile = new File(backupDir, date + ".zip");
-
-        if (backupFile.exists()) {
+        Path backupFile = backupDir.resolve(date + ".zip");
+        if (Files.exists(backupFile, LinkOption.NOFOLLOW_LINKS)) {
             return;
         }
-
-        log.info("正在备份设置 {}", backupFile.getName());
-
+        Path temporary = backupDir.resolve("." + date + "." + UUID.randomUUID() + ".tmp");
+        log.info("正在备份设置 {}", backupFile.getFileName());
         try {
-            @Cleanup
-            OutputStream outputStream = FileUtil.getOutputStream(backupFile);
-            backup(outputStream);
-            log.info("备份设置成功 {}", backupFile.getName());
+            Files.createDirectories(backupDir);
+            try (FileChannel channel = FileChannel.open(temporary,
+                    StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+                OutputStream output = java.nio.channels.Channels.newOutputStream(channel);
+                backup(output);
+                channel.force(true);
+            }
+            Files.move(temporary, backupFile, StandardCopyOption.ATOMIC_MOVE);
+            log.info("备份设置成功 {}", backupFile.getFileName());
         } catch (Exception e) {
-            log.error("备份失败 {}", backupFile.getName());
-            log.error(e.getMessage(), e);
-        }
-    }
-
-    /**
-     * 备份设置
-     *
-     * @param outputStream 文件流
-     */
-    public synchronized void backup(OutputStream outputStream) {
-        // 清理残余封面
-        clearService.clearCover();
-
-        File configDir = ConfigUtil.getConfigDir();
-        List<File> backupFiles = Stream.of(
-                        "files", "torrents", "database.db",
-                        AniUtil.FILE_NAME, ConfigUtil.FILE_NAME
-                )
-                .map(s -> configDir + "/" + s)
-                .map(File::new)
-                .filter(File::exists)
-                .toList();
-
-        try {
-            ZipUtil.zip(outputStream, StandardCharsets.UTF_8, true, pathname -> {
-                if (pathname.isFile()) {
-                    String name = pathname.getName();
-                    return !name.startsWith(".");
-                }
-                File[] files = FileUtils.listFiles(pathname);
-                return !ArrayUtil.isEmpty(files);
-            }, backupFiles.toArray(new File[0]));
-        } finally {
-            IoUtil.close(outputStream);
-        }
-    }
-
-
-    /**
-     * 清理备份
-     */
-    public synchronized void clearBackup() {
-        Integer configBackupDay = CONFIG.getConfigBackupDay();
-
-        // 过期时间
-        long expirationTime = DateUtil.offsetDay(new Date(), -configBackupDay).getTime();
-
-        File configDir = ConfigUtil.getConfigDir();
-        File backupDir = new File(configDir, "backup");
-        if (!backupDir.exists()) {
-            return;
-        }
-
-        File[] files = FileUtils.listFiles(backupDir);
-        if (ArrayUtil.isEmpty(files)) {
-            return;
-        }
-
-        for (File file : files) {
-            if (file.isDirectory()) {
-                continue;
-            }
-            String extName = FileUtil.extName(file);
-            if (!"zip".equals(extName)) {
-                continue;
-            }
-            String mainName = FileUtil.mainName(file);
             try {
-                long time = DateUtil.parse(mainName, DatePattern.NORM_DATE_PATTERN).getTime();
-                if (time > expirationTime) {
-                    continue;
-                }
-                log.info("{} 备份已过期, 自动删除", file.getName());
-                FileUtil.del(file);
-            } catch (Exception e) {
-                log.error(e.getMessage(), e);
+                Files.deleteIfExists(temporary);
+            } catch (IOException cleanupError) {
+                e.addSuppressed(cleanupError);
             }
+            log.error("备份失败 {}", backupFile.getFileName(), e);
+            throw new IllegalStateException("backup failed", e);
+        }
+    }
+
+    /** Writes a manifest-backed archive without closing the caller-owned stream. */
+    public synchronized void backup(OutputStream outputStream) throws IOException {
+        clearService.clearCover();
+        BackupArchive.create(outputStream,
+                ConfigUtil.getConfigDir().toPath(),
+                MavenUtils.getVersion());
+    }
+
+    public synchronized void clearBackup() {
+        Integer days = ConfigUtil.snapshot().getConfigBackupDay();
+        long expiration = DateUtil.offsetDay(new Date(), -Math.max(1, days == null ? 7 : days)).getTime();
+        Path backupDir = ConfigUtil.getConfigDir().toPath().toAbsolutePath().normalize().resolve("backup");
+        if (!Files.isDirectory(backupDir, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(backupDir)) {
+            return;
+        }
+        try (var files = Files.list(backupDir)) {
+            files.filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+                    .filter(path -> !Files.isSymbolicLink(path))
+                    .filter(path -> "zip".equalsIgnoreCase(FileUtil.extName(path.toString())))
+                    .forEach(path -> removeExpired(path, expiration));
+        } catch (IOException e) {
+            throw new IllegalStateException("list backups failed", e);
+        }
+    }
+
+    private void removeExpired(Path file, long expiration) {
+        try {
+            long timestamp = DateUtil.parse(FileUtil.mainName(file.toString()), DatePattern.NORM_DATE_PATTERN).getTime();
+            if (timestamp <= expiration) {
+                Files.deleteIfExists(file);
+                log.info("备份已过期，自动删除 {}", file.getFileName());
+            }
+        } catch (Exception e) {
+            log.warn("skip invalid backup filename {}", file.getFileName());
         }
     }
 }

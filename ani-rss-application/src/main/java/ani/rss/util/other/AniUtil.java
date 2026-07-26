@@ -7,6 +7,7 @@ import ani.rss.entity.dto.RssToAniDTO;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.exception.ResultException;
 import ani.rss.ownership.OwnershipService;
+import ani.rss.persistence.SubscriptionRepository;
 import ani.rss.service.DownloadService;
 import ani.rss.service.MikanService;
 import ani.rss.util.basic.HttpReq;
@@ -41,6 +42,9 @@ public class AniUtil {
 
     public static final List<Ani> ANI_LIST = new CopyOnWriteArrayList<>();
     public static final String FILE_NAME = "ani.v2.json";
+    private static final SubscriptionRepository REPOSITORY = new SubscriptionRepository(
+            ANI_LIST,
+            () -> getAniFile().toPath());
 
     /**
      * 获取订阅配置文件
@@ -59,17 +63,25 @@ public class AniUtil {
         File configFile = getAniFile();
 
         if (!configFile.exists()) {
-            FileUtil.writeUtf8String(GsonStatic.toJson(ANI_LIST), configFile);
+            try {
+                AtomicFileWriter.writeUtf8(configFile.toPath(), GsonStatic.toJson(List.of()));
+            } catch (Exception e) {
+                throw new IllegalStateException("create subscription file failed", e);
+            }
         }
-        String s = FileUtil.readUtf8String(configFile);
-        List<Ani> anis = GsonStatic.fromJsonList(s, Ani.class);
+        List<Ani> anis;
+        try {
+            anis = REPOSITORY.readFromDisk();
+        } catch (Exception e) {
+            throw new IllegalStateException("load subscriptions failed", e);
+        }
 
         CopyOptions copyOptions = CopyOptions
                 .create()
                 .setIgnoreNullValue(true)
                 .setOverride(false);
 
-        ANI_LIST.clear();
+        List<Ani> loaded = new ArrayList<>();
         for (Ani ani : anis) {
             Date releaseDate = ani.getReleaseDate();
             if (Objects.isNull(releaseDate)) {
@@ -92,26 +104,22 @@ public class AniUtil {
 
             Ani newAni = AniUtil.createAni();
             BeanUtil.copyProperties(newAni, ani, copyOptions);
-            ANI_LIST.add(ani);
+            loaded.add(ani);
         }
-        log.debug("加载订阅 共{}项", ANI_LIST.size());
+        REPOSITORY.markCommitted(loaded);
+        log.debug("加载订阅 共{}项", loaded.size());
     }
 
     /**
      * 将订阅配置保存到磁盘
      */
     public static synchronized void sync() {
-        File configFile = getAniFile();
-        log.debug("保存订阅 {}", configFile);
-        try {
-            String json = GsonStatic.toJson(ANI_LIST);
-            AtomicFileWriter.writeUtf8(configFile.toPath(), json);
-            log.debug("保存成功 {}", configFile);
-        } catch (Exception e) {
-            log.error("保存失败 {}", configFile);
-            log.error(e.getMessage(), e);
-            throw new IllegalStateException("保存订阅失败", e);
-        }
+        REPOSITORY.commitRuntimeCandidate();
+        log.debug("保存成功 {}", REPOSITORY.path());
+    }
+
+    public static List<Ani> snapshot() {
+        return REPOSITORY.snapshot();
     }
 
     /**

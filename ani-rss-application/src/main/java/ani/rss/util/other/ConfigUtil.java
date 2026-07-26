@@ -9,6 +9,7 @@ import ani.rss.entity.Login;
 import ani.rss.entity.NotificationConfig;
 import ani.rss.enums.AniSortTypeEnum;
 import ani.rss.enums.BgmTokenTypeEnum;
+import ani.rss.persistence.ConfigStore;
 import ani.rss.util.basic.LogUtil;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.bean.DynaBean;
@@ -34,6 +35,10 @@ public class ConfigUtil {
 
     public static final Config CONFIG = new Config();
     public static final String FILE_NAME = "config.v2.json";
+    private static final ConfigStore STORE = new ConfigStore(
+            CONFIG,
+            () -> getConfigFile().toPath(),
+            ConfigUtil::format);
 
     /*
       默认配置
@@ -226,6 +231,7 @@ public class ConfigUtil {
                 .setAutoStart(false)
                 .setAllowCors(false)
                 .setUuid(UUID.randomUUID().toString());
+        STORE.markCommitted(CONFIG);
     }
 
     /**
@@ -268,20 +274,9 @@ public class ConfigUtil {
      * 加载设置
      */
     public static synchronized void load() {
-        File configFile = getConfigFile();
-
-        if (!configFile.exists()) {
-            FileUtil.writeUtf8String(GsonStatic.toJson(CONFIG), configFile);
-        }
-        String s = FileUtil.readUtf8String(configFile);
-
-        CopyOptions copyOptions = CopyOptions
-                .create()
-                .setIgnoreNullValue(true);
-        BeanUtil.copyProperties(GsonStatic.fromJson(s, Config.class), CONFIG, copyOptions);
-        format(CONFIG);
+        STORE.load(STORE.snapshot());
         LogUtil.loadLogback();
-        log.debug("加载配置文件 {}", configFile);
+        log.debug("加载配置文件 {}", STORE.path());
         TorrentUtil.loadDownloadTool();
     }
 
@@ -289,27 +284,21 @@ public class ConfigUtil {
      * 将设置保存到磁盘
      */
     public static synchronized void sync() {
-        sync(CONFIG);
+        STORE.commitRuntimeCandidate();
         LogUtil.loadLogback();
     }
 
     public static synchronized void sync(Config config) {
-        File configFile = getConfigFile();
-        log.debug("保存配置 {}", configFile);
-        try {
-            ConfigUtil.format(config);
-            String json = GsonStatic.toJson(config);
-            AtomicFileWriter.writeUtf8(configFile.toPath(), json);
-            log.debug("保存成功 {}", configFile);
-        } catch (Exception e) {
-            log.error("保存失败 {}", configFile);
-            log.error(e.getMessage(), e);
-            throw new IllegalStateException("保存配置失败", e);
-        }
+        STORE.commit(config);
+        log.debug("保存成功 {}", STORE.path());
     }
 
     public static Config copy(Config config) {
         return GsonStatic.fromJson(GsonStatic.toJson(config), Config.class);
+    }
+
+    public static Config snapshot() {
+        return STORE.snapshot();
     }
 
     /**

@@ -85,6 +85,45 @@ public final class DatabaseManager {
         });
     }
 
+    public static boolean integrityCheck(Path databasePath) {
+        Path normalized = databasePath.toAbsolutePath().normalize();
+        if (!Files.isRegularFile(normalized) || Files.isSymbolicLink(normalized)) {
+            return false;
+        }
+        try {
+            Class.forName("org.sqlite.JDBC");
+            try (Connection checkConnection = DriverManager.getConnection("jdbc:sqlite:" + normalized);
+                 Statement statement = checkConnection.createStatement();
+                 ResultSet resultSet = statement.executeQuery("PRAGMA integrity_check")) {
+                return resultSet.next() && "ok".equalsIgnoreCase(resultSet.getString(1));
+            }
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Creates a consistent online snapshot without closing the active connection. */
+    public static void backupTo(Path target) {
+        Path normalized = target.toAbsolutePath().normalize();
+        synchronized (LOCK) {
+            if (Files.exists(normalized)) {
+                throw new IllegalArgumentException("database snapshot target already exists");
+            }
+            try {
+                Files.createDirectories(normalized.getParent());
+                String escaped = normalized.toString().replace("'", "''");
+                try (Statement statement = connection().createStatement()) {
+                    statement.executeUpdate("VACUUM INTO '" + escaped + "'");
+                }
+                if (!integrityCheck(normalized)) {
+                    throw new IllegalStateException("database snapshot integrity check failed");
+                }
+            } catch (Exception e) {
+                throw new IllegalStateException("create database snapshot failed", e);
+            }
+        }
+    }
+
     public static Path path() {
         return ConfigUtil.getConfigDir().toPath()
                 .toAbsolutePath()

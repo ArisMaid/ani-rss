@@ -108,6 +108,22 @@ class SubscriptionDeletionServiceTest {
     }
 
     @Test
+    void deletesRegisteredAuxiliaryTorrentFilesBeforePruningTheSubscriptionDirectory() throws Exception {
+        Path auxiliaryFile = ownedFile.getParent().resolve("cover.jpg");
+        Files.writeString(auxiliaryFile, "cover");
+        repository.replaceFiles("ownership", List.of(
+                new OwnedFile("ownership", "season-1/episode.mkv", "FILE", 7L),
+                new OwnedFile("ownership", "season-1/cover.jpg", "FILE", 5L)));
+
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), true);
+
+        assertFalse(Files.exists(ownedFile));
+        assertFalse(Files.exists(auxiliaryFile));
+        assertFalse(Files.exists(subscriptionRoot));
+        assertEquals(2, result.deletedFiles());
+    }
+
+    @Test
     void deletesEmptyTemplateDirectoriesWhenNoMediaFileCouldBeVerified() throws Exception {
         Path subscriptionRoot = ownedFile.getParent().getParent();
         Path downloadBase = subscriptionRoot.getParent();

@@ -246,7 +246,13 @@ public class qBittorrent implements BaseDownload {
                     .form("hashes", hash), response -> {
                 requireSuccess(response);
                 return GsonStatic.fromJsonList(response.body(), qBittorrentTorrentsInfo.class).stream()
-                        .map(value -> value.toTorrentsInfo(task -> files(task, true)))
+                        // The ownership manifest must describe every selected
+                        // torrent payload, not just media files.  Otherwise
+                        // artwork, fonts, and README files survive a
+                        // subscription deletion and prevent its now-empty
+                        // directory from being removed.  Rename still uses
+                        // its own media-only query below.
+                        .map(value -> value.toTorrentsInfo(task -> files(task, false)))
                         .filter(task -> StrUtil.equalsIgnoreCase(hash, task.getHash()))
                         .findFirst()
                         .map(DownloaderResult::success)
@@ -313,7 +319,7 @@ public class qBittorrent implements BaseDownload {
                     requireSuccess(res);
                     List<qBittorrentTorrentsInfo> torrentsInfos = GsonStatic.fromJsonList(res.body(), qBittorrentTorrentsInfo.class);
                     return torrentsInfos.stream()
-                            .map(value -> value.toTorrentsInfo(task -> files(task, true)))
+                            .map(value -> value.toTorrentsInfo(task -> files(task, false)))
                             .filter(torrentsInfo -> {
                                 // 过滤出 ani-rss 标签或分类
                                 String category = torrentsInfo.getCategory();

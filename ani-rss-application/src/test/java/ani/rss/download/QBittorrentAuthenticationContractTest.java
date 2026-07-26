@@ -23,10 +23,14 @@ class QBittorrentAuthenticationContractTest {
     private final List<Request> requests = new CopyOnWriteArrayList<>();
     private HttpServer server;
     private volatile int versionStatus;
+    private volatile String torrentsInfoResponse;
+    private volatile String torrentFilesResponse;
 
     @BeforeEach
     void startServer() throws IOException {
         versionStatus = 200;
+        torrentsInfoResponse = "[]";
+        torrentFilesResponse = "[]";
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", this::handle);
         server.start();
@@ -64,6 +68,24 @@ class QBittorrentAuthenticationContractTest {
         assertEquals("QBITTORRENT_AUTHENTICATION_FAILED", result.errorCode());
     }
 
+    @Test
+    void preservesEverySelectedTorrentFileForOwnershipTracking() {
+        torrentsInfoResponse = "[{\"hash\":\"hash\",\"name\":\"episode\",\"tags\":\"ani-rss\","
+                + "\"category\":\"ani-rss\",\"save_path\":\"/downloads/Example/Season 1\","
+                + "\"state\":\"downloading\",\"completed\":0,\"size\":2}]";
+        torrentFilesResponse = "["
+                + "{\"index\":0,\"name\":\"episode.mkv\",\"size\":1,\"priority\":1},"
+                + "{\"index\":1,\"name\":\"cover.jpg\",\"size\":1,\"priority\":1},"
+                + "{\"index\":2,\"name\":\"README.txt\",\"size\":0,\"priority\":1},"
+                + "{\"index\":3,\"name\":\"ignored.nfo\",\"size\":1,\"priority\":0}]";
+
+        TorrentsInfo task = new qBittorrent(new DownloadService(), config("qbt_local-test"))
+                .getTorrentsInfos().get(0);
+
+        assertEquals(List.of("episode.mkv", "cover.jpg", "README.txt"),
+                task.getFilesSupplier().get());
+    }
+
     private Config config(String password) {
         return new Config()
                 .setDownloadToolType("qBittorrent")
@@ -83,7 +105,11 @@ class QBittorrentAuthenticationContractTest {
             return;
         }
         if (path.equals("/api/v2/torrents/info")) {
-            respond(exchange, 200, "[]");
+            respond(exchange, 200, torrentsInfoResponse);
+            return;
+        }
+        if (path.equals("/api/v2/torrents/files")) {
+            respond(exchange, 200, torrentFilesResponse);
             return;
         }
         respond(exchange, 200, "Ok.");

@@ -5,5 +5,6 @@ public enum OwnershipState {
     ACTIVE,
     LEGACY_ADOPTED,
     QUARANTINED,
+    DELETED,
     FAILED
 }

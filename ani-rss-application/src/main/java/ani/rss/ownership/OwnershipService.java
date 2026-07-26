@@ -437,6 +437,69 @@ public class OwnershipService {
         return List.copyOf(result);
     }
 
+    /**
+     * Prepares exact regular files for an irreversible subscription deletion.
+     * Every candidate is checked before any file is removed, and files shared
+     * by another active ownership record are rejected.
+     */
+    public List<VerifiedOwnedFile> prepareSubscriptionFileDeletion(Collection<String> subscriptionIds) {
+        LinkedHashSet<String> ids = new LinkedHashSet<>();
+        if (subscriptionIds != null) {
+            subscriptionIds.stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(id -> !id.isEmpty())
+                    .forEach(ids::add);
+        }
+        if (ids.isEmpty()) {
+            throw new IllegalArgumentException("at least one subscription id is required");
+        }
+
+        Map<Path, VerifiedOwnedFile> files = new LinkedHashMap<>();
+        for (String subscriptionId : ids) {
+            for (VerifiedOwnedFile file : verifiedSubscriptionFiles(subscriptionId)) {
+                VerifiedOwnedFile existing = files.putIfAbsent(file.path(), file);
+                if (existing != null && !existing.ownership().ownershipId()
+                        .equals(file.ownership().ownershipId())) {
+                    throw new IllegalStateException("owned file has conflicting ownership records");
+                }
+            }
+        }
+        ensureNoDeletionOwnershipConflicts(files.values());
+        return List.copyOf(files.values());
+    }
+
+    /** Deletes only file paths produced by {@link #prepareSubscriptionFileDeletion(Collection)}. */
+    public int deletePreparedFiles(Collection<VerifiedOwnedFile> files) {
+        if (files == null || files.isEmpty()) {
+            return 0;
+        }
+        List<VerifiedOwnedFile> selected = List.copyOf(files);
+        ensureNoDeletionOwnershipConflicts(selected);
+        for (VerifiedOwnedFile file : selected) {
+            validatePreparedFile(file);
+        }
+        try {
+            for (VerifiedOwnedFile file : selected) {
+                Files.delete(file.path());
+            }
+            return selected.size();
+        } catch (Exception failure) {
+            throw new IllegalStateException("delete verified owned files failed", failure);
+        }
+    }
+
+    public void markDeleted(Collection<DownloadOwnership> ownerships) {
+        if (ownerships == null) {
+            return;
+        }
+        for (DownloadOwnership ownership : ownerships) {
+            if (ownership != null) {
+                repository.updateState(ownership.ownershipId(), OwnershipState.DELETED);
+            }
+        }
+    }
+
     OwnershipRepository repository() {
         return repository;
     }
@@ -553,6 +616,50 @@ public class OwnershipService {
             if (owners.getOrDefault(file.source(), Set.of()).size() > 1) {
                 throw new IllegalStateException("owned source has conflicting ownership records");
             }
+        }
+    }
+
+    private void ensureNoDeletionOwnershipConflicts(Collection<VerifiedOwnedFile> selected) {
+        Map<Path, Set<String>> owners = new HashMap<>();
+        for (DownloadOwnership ownership : repository.listAll()) {
+            if (ownership.state() != OwnershipState.ACTIVE && ownership.state() != OwnershipState.LEGACY_ADOPTED) {
+                continue;
+            }
+            Path root = Path.of(ownership.saveRoot()).toAbsolutePath().normalize();
+            for (OwnedFile file : repository.listFiles(ownership.ownershipId())) {
+                try {
+                    Path path = PathPolicy.resolveWithin(root, file.relativePath());
+                    owners.computeIfAbsent(path, ignored -> new LinkedHashSet<>())
+                            .add(ownership.ownershipId());
+                } catch (RuntimeException ignored) {
+                    // Invalid unrelated ownership cannot authorize deletion.
+                }
+            }
+        }
+        for (VerifiedOwnedFile file : selected) {
+            if (owners.getOrDefault(file.path(), Set.of()).size() > 1) {
+                throw new IllegalStateException("owned file has conflicting ownership records");
+            }
+        }
+    }
+
+    private static void validatePreparedFile(VerifiedOwnedFile file) {
+        if (file == null) {
+            throw new IllegalArgumentException("owned file is required");
+        }
+        Path root = ownershipRoot(file.ownership());
+        Path expected = safeOwnedPath(root, file.ownedFile());
+        if (!expected.equals(file.path())) {
+            throw new IllegalArgumentException("owned file path changed after validation");
+        }
+        PathPolicy.requireNoSymbolicLinks(root, expected);
+        try {
+            BasicFileAttributes attributes = readRegularFile(expected);
+            if (attributes.size() != file.size()) {
+                throw new IllegalStateException("owned file size changed after validation");
+            }
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("validate owned file before deletion failed", e);
         }
     }
 

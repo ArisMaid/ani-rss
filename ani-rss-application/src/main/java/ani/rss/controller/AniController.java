@@ -13,7 +13,6 @@ import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.entity.web.Result;
 import ani.rss.enums.AniSortTypeEnum;
 import ani.rss.ownership.OwnershipService;
-import ani.rss.ownership.QuarantineService;
 import ani.rss.service.AniService;
 import ani.rss.service.ClearService;
 import ani.rss.service.DownloadService;
@@ -216,13 +215,9 @@ public class AniController extends BaseController {
     @Auth
     @Operation(summary = "删除订阅")
     @PostMapping("/deleteAni")
-    public Result<Void> deleteAni(@RequestBody List<String> ids, @RequestParam("deleteFiles") Boolean deleteFiles) {
+    public Result<Void> deleteAni(@RequestBody List<String> ids) {
         Assert.notEmpty(ids, "未选择订阅");
-        if (Boolean.TRUE.equals(deleteFiles)) {
-            throw new IllegalStateException("file deletion requires the /api/v2/subscriptions deletion plan API");
-        }
-        SubscriptionDeletionService.DeletionPlan plan = subscriptionDeletionService.plan(ids, false);
-        subscriptionDeletionService.execute(plan.operationId());
+        subscriptionDeletionService.delete(ids, true);
         return Result.success("删除订阅成功");
     }
 

@@ -8,7 +8,6 @@ import ani.rss.ownership.OwnedFile;
 import ani.rss.ownership.OwnershipRepository;
 import ani.rss.ownership.OwnershipService;
 import ani.rss.ownership.OwnershipState;
-import ani.rss.ownership.QuarantineService;
 import ani.rss.persistence.DatabaseManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,7 +21,6 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -31,7 +29,6 @@ class SubscriptionDeletionServiceTest {
     Path tempDir;
 
     private OwnershipRepository repository;
-    private QuarantineService quarantineService;
     private FakeSubscriptionStore store;
     private FakeRemoteTasks remoteTasks;
     private SubscriptionDeletionService service;
@@ -43,11 +40,10 @@ class SubscriptionDeletionServiceTest {
         DatabaseManager.close();
         repository = new OwnershipRepository();
         OwnershipService ownershipService = new OwnershipService(repository);
-        quarantineService = new QuarantineService(ownershipService, repository);
         store = new FakeSubscriptionStore(List.of(subscription("subscription", "Example")));
         remoteTasks = new FakeRemoteTasks();
         service = new SubscriptionDeletionService(
-                ownershipService, quarantineService, store, remoteTasks);
+                ownershipService, store, remoteTasks);
 
         Path root = Files.createDirectories(tempDir.resolve("downloads"));
         ownedFile = root.resolve("episode.mkv");
@@ -59,6 +55,7 @@ class SubscriptionDeletionServiceTest {
         repository.replaceFiles("ownership", List.of(
                 new OwnedFile("ownership", "episode.mkv", "FILE", 7L)));
         remoteTasks.tasks.add(task("remote-task", "info-hash"));
+        remoteTasks.tasks.add(task("same-hash-unowned", "info-hash"));
         remoteTasks.tasks.add(task("unowned-task", "other-hash"));
     }
 
@@ -69,31 +66,28 @@ class SubscriptionDeletionServiceTest {
     }
 
     @Test
-    void previewsExactFilesThenDeletesOnlyOwnedRemoteTask() {
-        SubscriptionDeletionService.DeletionPlan plan =
-                service.plan(List.of("subscription"), true);
+    void deletesExactFilesAndOnlyOwnedRemoteTasksImmediately() throws Exception {
+        Path unrelated = ownedFile.getParent().resolve("unrelated.mkv");
+        Files.writeString(unrelated, "unrelated");
 
-        assertTrue(Files.exists(ownedFile));
-        assertEquals(1, plan.files().size());
-        assertEquals(ownedFile.toString(), plan.files().get(0).path());
-
-        SubscriptionDeletionService.DeletionResult result = service.execute(plan.operationId());
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), true);
 
         assertFalse(Files.exists(ownedFile));
+        assertTrue(Files.exists(unrelated));
         assertTrue(store.snapshot().isEmpty());
         assertEquals(List.of("remote-task"), remoteTasks.deletedIds);
         assertEquals(1, result.deletedSubscriptions());
         assertEquals(1, result.deletedRemoteTasks());
-        assertNotNull(result.quarantineOperationId());
+        assertEquals(1, result.deletedFiles());
+        assertEquals(OwnershipState.DELETED,
+                repository.find("ownership").orElseThrow().state());
     }
 
     @Test
-    void remoteFailureRestoresFilesAndKeepsSubscription() {
-        SubscriptionDeletionService.DeletionPlan plan =
-                service.plan(List.of("subscription"), true);
+    void remoteFailureLeavesFilesAndSubscriptionUntouched() {
         remoteTasks.failDelete = true;
 
-        assertThrows(IllegalStateException.class, () -> service.execute(plan.operationId()));
+        assertThrows(IllegalStateException.class, () -> service.delete(List.of("subscription"), true));
 
         assertTrue(Files.exists(ownedFile));
         assertEquals("episode", read(ownedFile));
@@ -103,43 +97,26 @@ class SubscriptionDeletionServiceTest {
     }
 
     @Test
-    void persistenceFailureRestoresFilesAndKeepsRuntimeSnapshot() {
-        SubscriptionDeletionService.DeletionPlan plan =
-                service.plan(List.of("subscription"), true);
+    void persistenceFailureLeavesSubscriptionVisibleAfterDirectDeleteFailure() {
         store.failCommit = true;
 
-        assertThrows(IllegalStateException.class, () -> service.execute(plan.operationId()));
+        assertThrows(IllegalStateException.class, () -> service.delete(List.of("subscription"), true));
 
-        assertTrue(Files.exists(ownedFile));
         assertEquals(1, store.snapshot().size());
-        assertEquals(OwnershipState.ACTIVE,
+        assertFalse(Files.exists(ownedFile));
+        assertEquals(OwnershipState.DELETED,
                 repository.find("ownership").orElseThrow().state());
     }
 
     @Test
-    void subscriptionChangeAfterPreviewLeavesDiskAndRemoteTasksUntouched() {
-        SubscriptionDeletionService.DeletionPlan plan =
-                service.plan(List.of("subscription"), true);
-        store.values.get(0).setTitle("Changed");
-
-        assertThrows(IllegalStateException.class, () -> service.execute(plan.operationId()));
-
-        assertTrue(Files.exists(ownedFile));
-        assertTrue(remoteTasks.deletedIds.isEmpty());
-        assertEquals(1, store.snapshot().size());
-    }
-
-    @Test
     void deletingSubscriptionOnlyDoesNotTouchFilesOrDownloader() {
-        SubscriptionDeletionService.DeletionPlan plan =
-                service.plan(List.of("subscription"), false);
-
-        SubscriptionDeletionService.DeletionResult result = service.execute(plan.operationId());
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), false);
 
         assertTrue(Files.exists(ownedFile));
         assertTrue(remoteTasks.deletedIds.isEmpty());
         assertTrue(store.snapshot().isEmpty());
         assertEquals(0, result.deletedRemoteTasks());
+        assertEquals(0, result.deletedFiles());
     }
 
     private static Ani subscription(String id, String title) {

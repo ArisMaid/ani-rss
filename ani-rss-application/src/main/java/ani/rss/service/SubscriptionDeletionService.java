@@ -1,13 +1,11 @@
 package ani.rss.service;
 
-import ani.rss.commons.GsonStatic;
 import ani.rss.download.DownloaderResult;
 import ani.rss.entity.Ani;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.ownership.DownloadOwnership;
 import ani.rss.ownership.OwnershipService;
 import ani.rss.ownership.OwnershipState;
-import ani.rss.ownership.QuarantineService;
 import ani.rss.recovery.MissingEpisodeRecoveryService;
 import ani.rss.util.other.AniUtil;
 import ani.rss.util.other.ConfigUtil;
@@ -15,8 +13,6 @@ import ani.rss.util.other.TorrentUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -27,211 +23,92 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
-/** Two-step deletion boundary for subscriptions, remote tasks, and owned files. */
+/** Deletes subscriptions and their verified owned content in one confirmed operation. */
 @Service
 public final class SubscriptionDeletionService {
-    public static final Duration PLAN_TTL = Duration.ofMinutes(10);
-
     private final OwnershipService ownershipService;
-    private final QuarantineService quarantineService;
     private final SubscriptionStore subscriptionStore;
     private final RemoteTaskGateway remoteTasks;
     private final MissingEpisodeRecoveryService recoveryService;
-    private final ConcurrentMap<String, PlanState> plans = new ConcurrentHashMap<>();
+    private final Object deletionLock = new Object();
 
     @Autowired
     public SubscriptionDeletionService(
             OwnershipService ownershipService,
-            QuarantineService quarantineService,
             MissingEpisodeRecoveryService recoveryService) {
-        this(ownershipService, quarantineService, new AniUtilSubscriptionStore(), new TorrentRemoteTaskGateway(), recoveryService);
+        this(ownershipService, new AniUtilSubscriptionStore(), new TorrentRemoteTaskGateway(), recoveryService);
     }
 
     SubscriptionDeletionService(
             OwnershipService ownershipService,
-            QuarantineService quarantineService,
             SubscriptionStore subscriptionStore,
             RemoteTaskGateway remoteTasks) {
-        this(ownershipService, quarantineService, subscriptionStore, remoteTasks, null);
+        this(ownershipService, subscriptionStore, remoteTasks, null);
     }
 
     SubscriptionDeletionService(
             OwnershipService ownershipService,
-            QuarantineService quarantineService,
             SubscriptionStore subscriptionStore,
             RemoteTaskGateway remoteTasks,
             MissingEpisodeRecoveryService recoveryService) {
         this.ownershipService = Objects.requireNonNull(ownershipService, "ownershipService");
-        this.quarantineService = Objects.requireNonNull(quarantineService, "quarantineService");
         this.subscriptionStore = Objects.requireNonNull(subscriptionStore, "subscriptionStore");
         this.remoteTasks = Objects.requireNonNull(remoteTasks, "remoteTasks");
         this.recoveryService = recoveryService;
     }
 
-    public DeletionPlan plan(Collection<String> subscriptionIds, boolean deleteFiles) {
-        trimPlans();
-        LinkedHashSet<String> ids = normalizedIds(subscriptionIds);
-        List<Ani> current = subscriptionStore.snapshot();
-        Map<String, Ani> byId = subscriptionsById(current);
-        List<Ani> selected = ids.stream()
-                .map(id -> {
-                    Ani ani = byId.get(id);
-                    if (ani == null) {
-                        throw new IllegalArgumentException("subscription does not exist: " + id);
-                    }
-                    return ani;
-                })
-                .toList();
-
-        List<DownloadOwnership> ownerships = ids.stream()
-                .flatMap(id -> ownershipService.listBySubscription(id).stream())
-                .filter(SubscriptionDeletionService::isActive)
-                .toList();
-        String quarantinePlanId = null;
-        List<QuarantineService.PlannedFile> files = List.of();
-        if (deleteFiles && !ownerships.isEmpty()) {
-            for (DownloadOwnership ownership : ownerships) {
-                if (!remoteTasks.supports(ownership.downloaderType())) {
-                    throw new IllegalStateException(
-                            "active downloader cannot safely remove ownership " + ownership.ownershipId());
-                }
-            }
-            QuarantineService.DestructiveOperationPlan quarantinePlan = quarantineService.planOwnerships(
-                    ownerships.stream().map(DownloadOwnership::ownershipId).toList());
-            quarantinePlanId = quarantinePlan.operationId();
-            files = quarantinePlan.files();
-        }
-
-        String operationId = UUID.randomUUID().toString();
-        long createdAt = System.currentTimeMillis();
-        long expiresAt = createdAt + PLAN_TTL.toMillis();
-        List<SubscriptionSummary> subscriptions = selected.stream()
-                .map(ani -> new SubscriptionSummary(ani.getId(), ani.getTitle(), ani.getSeason()))
-                .toList();
-        DeletionPlan view = new DeletionPlan(
-                operationId,
-                createdAt,
-                expiresAt,
-                deleteFiles,
-                subscriptions,
-                ownerships.stream().map(DownloadOwnership::ownershipId).toList(),
-                files);
-        PlanState state = new PlanState(
-                view,
-                fingerprints(selected),
-                List.copyOf(ownerships),
-                quarantinePlanId);
-        if (plans.putIfAbsent(operationId, state) != null) {
-            cancelQuarantine(quarantinePlanId);
-            throw new IllegalStateException("operation id collision");
-        }
-        return view;
-    }
-
     /** Removes subscription metadata only; owned media and remote tasks stay intact. */
     public DeletionResult deleteWithoutFiles(Collection<String> subscriptionIds) {
-        DeletionPlan plan = plan(subscriptionIds, false);
-        return execute(plan.operationId());
+        return delete(subscriptionIds, false);
     }
 
-    public DeletionResult execute(String operationId) {
-        PlanState plan = requirePlan(operationId);
-        synchronized (plan) {
-            if (plans.get(operationId) != plan) {
-                throw new IllegalArgumentException("subscription deletion plan has already been consumed");
-            }
-            if (plan.view().expiresAt() <= System.currentTimeMillis()) {
-                plans.remove(operationId, plan);
-                cancelQuarantine(plan.quarantinePlanId());
-                throw new IllegalStateException("subscription deletion plan has expired");
-            }
-
+    public DeletionResult delete(Collection<String> subscriptionIds, boolean deleteFiles) {
+        synchronized (deletionLock) {
+            LinkedHashSet<String> ids = normalizedIds(subscriptionIds);
             List<Ani> current = subscriptionStore.snapshot();
-            verifySubscriptionsUnchanged(current, plan.subscriptionFingerprints());
-            List<TorrentsInfo> tasks = plan.view().deleteFiles()
-                    ? remoteTasks.list()
-                    : List.of();
-            List<TorrentsInfo> ownedTasks = matchOwnedTasks(tasks, plan.ownerships());
+            Map<String, Ani> byId = subscriptionsById(current);
+            for (String id : ids) {
+                if (!byId.containsKey(id)) {
+                    throw new IllegalArgumentException("subscription does not exist: " + id);
+                }
+            }
 
-            String quarantineOperationId = null;
-            try {
-                if (plan.quarantinePlanId() != null) {
-                    quarantineOperationId = quarantineService.executePlan(plan.quarantinePlanId());
-                }
-                for (TorrentsInfo task : ownedTasks) {
-                    remoteTasks.deleteTaskOnly(task);
-                }
-                Set<String> ids = plan.subscriptionFingerprints().keySet();
-                List<Ani> candidate = current.stream()
-                        .filter(ani -> !ids.contains(ani.getId()))
-                        .toList();
-                subscriptionStore.commit(candidate);
-                if (recoveryService != null) {
-                    for (String id : ids) {
-                        recoveryService.cancelSubscription(id);
+            List<DownloadOwnership> ownerships = ids.stream()
+                    .flatMap(id -> ownershipService.listBySubscription(id).stream())
+                    .filter(SubscriptionDeletionService::isActive)
+                    .toList();
+            List<OwnershipService.VerifiedOwnedFile> files = List.of();
+            List<TorrentsInfo> ownedTasks = List.of();
+            if (deleteFiles) {
+                for (DownloadOwnership ownership : ownerships) {
+                    if (!remoteTasks.supports(ownership.downloaderType())) {
+                        throw new IllegalStateException(
+                                "active downloader cannot safely remove ownership " + ownership.ownershipId());
                     }
                 }
-                plans.remove(operationId, plan);
-                return new DeletionResult(
-                        operationId,
-                        quarantineOperationId,
-                        ids.size(),
-                        ownedTasks.size());
-            } catch (Exception failure) {
-                if (quarantineOperationId != null) {
-                    try {
-                        quarantineService.restore(quarantineOperationId);
-                    } catch (Exception restoreFailure) {
-                        failure.addSuppressed(restoreFailure);
-                    }
+                files = ownershipService.prepareSubscriptionFileDeletion(ids);
+                ownedTasks = matchOwnedTasks(remoteTasks.list(), ownerships);
+            }
+
+            for (TorrentsInfo task : ownedTasks) {
+                remoteTasks.deleteTaskOnly(task);
+            }
+            int deletedFiles = deleteFiles ? ownershipService.deletePreparedFiles(files) : 0;
+            // From this point onward the owned content is gone. Mark it before
+            // persisting the subscription list so a persistence failure cannot
+            // make the recovery worker requeue deliberately deleted media.
+            ownershipService.markDeleted(ownerships);
+            if (recoveryService != null) {
+                for (String id : ids) {
+                    recoveryService.cancelSubscription(id);
                 }
-                throw failure instanceof RuntimeException runtime
-                        ? runtime
-                        : new IllegalStateException("subscription deletion failed", failure);
             }
-        }
-    }
-
-    public void cancel(String operationId) {
-        PlanState plan = plans.remove(operationId);
-        if (plan == null) {
-            throw new IllegalArgumentException("subscription deletion plan does not exist");
-        }
-        cancelQuarantine(plan.quarantinePlanId());
-    }
-
-    private PlanState requirePlan(String operationId) {
-        if (operationId == null || operationId.isBlank()) {
-            throw new IllegalArgumentException("operation id is required");
-        }
-        PlanState plan = plans.get(operationId);
-        if (plan == null) {
-            throw new IllegalArgumentException("subscription deletion plan does not exist");
-        }
-        return plan;
-    }
-
-    private void trimPlans() {
-        long now = System.currentTimeMillis();
-        for (Map.Entry<String, PlanState> entry : plans.entrySet()) {
-            if (entry.getValue().view().expiresAt() <= now && plans.remove(entry.getKey(), entry.getValue())) {
-                cancelQuarantine(entry.getValue().quarantinePlanId());
-            }
-        }
-    }
-
-    private void cancelQuarantine(String operationId) {
-        if (operationId == null) {
-            return;
-        }
-        try {
-            quarantineService.cancelPlan(operationId);
-        } catch (IllegalArgumentException ignored) {
-            // The nested plan may already have expired or been consumed.
+            List<Ani> candidate = current.stream()
+                    .filter(ani -> !ids.contains(ani.getId()))
+                    .toList();
+            subscriptionStore.commit(candidate);
+            return new DeletionResult(ids.size(), ownedTasks.size(), deletedFiles);
         }
     }
 
@@ -263,26 +140,6 @@ public final class SubscriptionDeletionService {
         return result;
     }
 
-    private static Map<String, String> fingerprints(List<Ani> subscriptions) {
-        Map<String, String> result = new LinkedHashMap<>();
-        for (Ani ani : subscriptions) {
-            result.put(ani.getId(), GsonStatic.toJson(ani));
-        }
-        return Map.copyOf(result);
-    }
-
-    private static void verifySubscriptionsUnchanged(
-            List<Ani> current,
-            Map<String, String> fingerprints) {
-        Map<String, Ani> currentById = subscriptionsById(current);
-        for (Map.Entry<String, String> entry : fingerprints.entrySet()) {
-            Ani ani = currentById.get(entry.getKey());
-            if (ani == null || !entry.getValue().equals(GsonStatic.toJson(ani))) {
-                throw new IllegalStateException("subscription changed after deletion plan was created: " + entry.getKey());
-            }
-        }
-    }
-
     private static List<TorrentsInfo> matchOwnedTasks(
             List<TorrentsInfo> tasks,
             List<DownloadOwnership> ownerships) {
@@ -307,11 +164,16 @@ public final class SubscriptionDeletionService {
     private static boolean matches(DownloadOwnership ownership, TorrentsInfo task) {
         String remoteId = normalize(ownership.remoteTaskId());
         String taskId = normalize(task.getId());
-        if (remoteId != null && remoteId.equals(taskId)) {
-            return true;
-        }
         String infoHash = normalize(ownership.infoHash());
         String taskHash = normalize(task.getHash());
+        if (remoteId != null) {
+            // A known remote ID is the primary identity. A hash-only match
+            // could otherwise remove another client's task for the same torrent.
+            if (!remoteId.equals(taskId)) {
+                return false;
+            }
+            return infoHash == null || infoHash.equals(taskHash);
+        }
         return infoHash != null && infoHash.equals(taskHash);
     }
 
@@ -324,36 +186,13 @@ public final class SubscriptionDeletionService {
                 ownership.state() == OwnershipState.LEGACY_ADOPTED;
     }
 
-    public record DeletionPlan(
-            String operationId,
-            long createdAt,
-            long expiresAt,
-            boolean deleteFiles,
-            List<SubscriptionSummary> subscriptions,
-            List<String> ownershipIds,
-            List<QuarantineService.PlannedFile> files) {
-        public DeletionPlan {
-            subscriptions = subscriptions == null ? List.of() : List.copyOf(subscriptions);
-            ownershipIds = ownershipIds == null ? List.of() : List.copyOf(ownershipIds);
-            files = files == null ? List.of() : List.copyOf(files);
-        }
-    }
-
     public record SubscriptionSummary(String id, String title, Integer season) {
     }
 
     public record DeletionResult(
-            String operationId,
-            String quarantineOperationId,
             int deletedSubscriptions,
-            int deletedRemoteTasks) {
-    }
-
-    private record PlanState(
-            DeletionPlan view,
-            Map<String, String> subscriptionFingerprints,
-            List<DownloadOwnership> ownerships,
-            String quarantinePlanId) {
+            int deletedRemoteTasks,
+            int deletedFiles) {
     }
 
     interface SubscriptionStore {

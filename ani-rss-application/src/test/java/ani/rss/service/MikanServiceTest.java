@@ -143,7 +143,7 @@ class MikanServiceTest {
             Mikan result = service.list("single-pass-" + mikanId, new Mikan.Season());
 
             assertEquals(1, scores.combinedLookupCalls.get());
-            assertEquals(PublicScoreService.MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH,
+            assertEquals(MikanService.MAX_BACKGROUND_SCORE_WARMUPS_PER_LIST,
                     scores.lastColdWarmupLimit.get());
             assertEquals(0, scores.legacyCachedLookupCalls.get());
             assertEquals(0, scores.legacyWarmupCalls.get());

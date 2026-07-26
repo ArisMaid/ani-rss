@@ -303,9 +303,14 @@ let preload = () => {
   if (preloadingDefaultList) {
     return preloadingDefaultList
   }
-  const request = http.mikan('', {}, {silent: true})
-      .then(res => {
-        const payload = res?.data || null
+  const sharedPreload = http.preloadDefaultMikanList
+  const request = Promise.resolve(
+      typeof sharedPreload === 'function'
+          ? sharedPreload()
+          : http.mikan('', {}, {silent: true})
+  )
+      .then(result => {
+        const payload = result?.data || result || null
         rememberPreloadedDefaultList(payload)
         return payload
       })

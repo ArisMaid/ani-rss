@@ -22,6 +22,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -36,8 +37,10 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -68,6 +71,8 @@ public class PublicScoreService {
     private static final int MAX_SCORE_WARMUP_WORKERS = 4;
     private static final long WARMUP_QUEUE_TIMEOUT_MILLIS = 12_000;
     private static final long WARMUP_FAILURE_RETRY_DELAY_MILLIS = 500;
+    /** Durable score cache writes are optional and must never occupy a mapping worker. */
+    private static final int PERSISTENCE_QUEUE_CAPACITY = 256;
     static final int MAX_SCORE_LOOKUPS_PER_BATCH = 64;
     static final int MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH = 48;
     private static final long SCORE_CACHE_TTL = TimeUnit.HOURS.toMillis(6);
@@ -106,6 +111,13 @@ public class PublicScoreService {
             MAX_MAPPING_WARMUP_WORKERS, "public-score-mapping");
     private final ExecutorService scoreWarmupExecutor = newWarmupExecutor(
             MAX_SCORE_WARMUP_WORKERS, "public-score-rating");
+    /**
+     * SQLite uses a single serialized connection.  Keep cache persistence off
+     * the latency-critical mapping and score workers, otherwise every newly
+     * resolved card waits behind an individual durable-cache upsert before it
+     * can expose its score to the picker.
+     */
+    private final ExecutorService cachePersistenceExecutor = newPersistenceExecutor();
     /** Avoid restarting a failed optional lookup for every rapid client poll. */
     private final ConcurrentMap<String, Long> warmupRetryAfterNanos = new ConcurrentHashMap<>();
 
@@ -750,21 +762,38 @@ public class PublicScoreService {
         if (persistentCache == null || StrUtil.isBlank(mikanId) || ttlMillis <= 0 || !backgroundWorkAllowed()) {
             return;
         }
-        try {
-            persistentCache.saveMikanMapping(mikanId, bgmId, System.currentTimeMillis() + ttlMillis);
-        } catch (RuntimeException e) {
-            log.debug("Unable to save durable Mikan score mapping cache");
-        }
+        scheduleCachePersistence("Mikan score mapping", () ->
+                persistentCache.saveMikanMapping(mikanId, bgmId, System.currentTimeMillis() + ttlMillis));
     }
 
     private void persistBgmScore(String bgmId, double score, long ttlMillis) {
         if (persistentCache == null || StrUtil.isBlank(bgmId) || ttlMillis <= 0 || !backgroundWorkAllowed()) {
             return;
         }
+        scheduleCachePersistence("Bangumi score", () ->
+                persistentCache.saveBgmScore(bgmId, score, System.currentTimeMillis() + ttlMillis));
+    }
+
+    private void scheduleCachePersistence(String description, Runnable operation) {
         try {
-            persistentCache.saveBgmScore(bgmId, score, System.currentTimeMillis() + ttlMillis);
-        } catch (RuntimeException e) {
-            log.debug("Unable to save durable Bangumi score cache");
+            cachePersistenceExecutor.execute(() -> {
+                // A restore or maintenance operation must not race a cache write.
+                if (!backgroundWorkAllowed()) {
+                    return;
+                }
+                try {
+                    operation.run();
+                } catch (RuntimeException e) {
+                    // The in-memory cache already contains the result. Losing
+                    // an optional durable acceleration must not affect the
+                    // currently visible score.
+                    log.debug("Unable to save durable {} cache", description);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            // The bounded queue is deliberately allowed to drop optional cache
+            // work under a pathological burst instead of slowing the picker.
+            log.debug("Durable {} cache write queue is full", description);
         }
     }
 
@@ -904,19 +933,35 @@ public class PublicScoreService {
     }
 
     private static ExecutorService newWarmupExecutor(int threads, String namePrefix) {
+        return Executors.newFixedThreadPool(threads, newDaemonThreadFactory(namePrefix));
+    }
+
+    private static ExecutorService newPersistenceExecutor() {
+        return new ThreadPoolExecutor(
+                1,
+                1,
+                0,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(PERSISTENCE_QUEUE_CAPACITY),
+                newDaemonThreadFactory("public-score-cache"),
+                new ThreadPoolExecutor.AbortPolicy()
+        );
+    }
+
+    private static ThreadFactory newDaemonThreadFactory(String namePrefix) {
         AtomicInteger sequence = new AtomicInteger();
-        ThreadFactory factory = runnable -> {
+        return runnable -> {
             Thread thread = new Thread(runnable, namePrefix + "-" + sequence.incrementAndGet());
             thread.setDaemon(true);
             return thread;
         };
-        return Executors.newFixedThreadPool(threads, factory);
     }
 
     @PreDestroy
     void stopWarmupExecutors() {
         mappingWarmupExecutor.shutdownNow();
         scoreWarmupExecutor.shutdownNow();
+        cachePersistenceExecutor.shutdownNow();
     }
 
     private <K, V> List<LookupResult<K, V>> invokeBounded(

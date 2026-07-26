@@ -14,7 +14,8 @@ const dialogShows = vi.hoisted(() => ({
 
 vi.mock('@/js/http.js', () => ({
   about: vi.fn(),
-  refreshAll: vi.fn()
+  refreshAll: vi.fn(),
+  preloadDefaultMikanList: vi.fn()
 }))
 
 vi.mock('@/js/global.js', () => ({
@@ -57,6 +58,7 @@ describe('home toolbar lazy dialogs', () => {
       data: {version: '3.1.75.15', latest: '3.1.75', update: true, markdownBody: ''}
     })
     vi.mocked(http.refreshAll).mockResolvedValue({message: 'ok'})
+    vi.mocked(http.preloadDefaultMikanList).mockResolvedValue(null)
   })
 
   it('opens every dialog on its first toolbar action', async () => {
@@ -83,6 +85,8 @@ describe('home toolbar lazy dialogs', () => {
     })
 
     await flushPromises()
+
+    expect(http.preloadDefaultMikanList).toHaveBeenCalledOnce()
 
     for (const [action, show] of [
       ['add', dialogShows.add],

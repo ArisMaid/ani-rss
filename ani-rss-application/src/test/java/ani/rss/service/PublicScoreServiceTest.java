@@ -3,6 +3,7 @@ package ani.rss.service;
 import ani.rss.entity.BgmInfo;
 import ani.rss.entity.MikanBgm;
 import ani.rss.entity.MikanInfo;
+import ani.rss.persistence.PublicScoreCacheRepository;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 
@@ -10,8 +11,10 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -370,6 +373,36 @@ class PublicScoreServiceTest {
         }
     }
 
+    @Test
+    void startsScoreWarmupBeforeAnOptionalDurableMappingWriteFinishes() throws Exception {
+        String mikanId = uniqueNumericId();
+        String bgmId = uniqueNumericId();
+        CountDownLatch scoreStarted = new CountDownLatch(1);
+        BlockingPersistenceRepository persistence = new BlockingPersistenceRepository();
+        PublicScoreService service = new PublicScoreService(
+                id -> {
+                    scoreStarted.countDown();
+                    return rated(id, 8.9);
+                },
+                url -> bgmId,
+                persistence
+        );
+        MikanInfo entry = new MikanInfo().setUrl(
+                "https://mikanani.me/Home/Bangumi/" + mikanId);
+
+        try {
+            service.getCachedMikanScoreLookupAndWarm(List.of(entry));
+
+            assertTrue(persistence.mappingWriteStarted.await(1, TimeUnit.SECONDS),
+                    "the durability task should have been scheduled");
+            assertTrue(scoreStarted.await(1, TimeUnit.SECONDS),
+                    "a slow optional SQLite write must not delay the score request");
+        } finally {
+            persistence.releaseMappingWrite.countDown();
+            service.stopWarmupExecutors();
+        }
+    }
+
     private static PublicScoreService.MikanScoreLookup awaitCachedScore(
             PublicScoreService service, MikanInfo entry, String mikanId) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
@@ -392,6 +425,41 @@ class PublicScoreServiceTest {
 
     private static String failMapping() {
         throw new IllegalStateException("Mikan temporarily unavailable");
+    }
+
+    private static final class BlockingPersistenceRepository extends PublicScoreCacheRepository {
+        private final CountDownLatch mappingWriteStarted = new CountDownLatch(1);
+        private final CountDownLatch releaseMappingWrite = new CountDownLatch(1);
+
+        @Override
+        public Map<String, MikanMapping> findMikanMappings(Collection<String> mikanIds, long now) {
+            return Map.of();
+        }
+
+        @Override
+        public Map<String, BgmScore> findBgmScores(Collection<String> bgmIds, long now) {
+            return Map.of();
+        }
+
+        @Override
+        public Optional<BgmScore> findBgmScore(String bgmId, long now) {
+            return Optional.empty();
+        }
+
+        @Override
+        public void saveMikanMapping(String mikanId, String bgmId, long expiresAt) {
+            mappingWriteStarted.countDown();
+            try {
+                releaseMappingWrite.await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        @Override
+        public void saveBgmScore(String bgmId, double score, long expiresAt) {
+            // No-op: only the mapping persistence is deliberately slow here.
+        }
     }
 
     private static String uniqueNumericId() {

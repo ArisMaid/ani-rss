@@ -6,6 +6,7 @@ import {ElMessage} from 'element-plus'
 
 vi.mock('@/js/http.js', () => ({
   mikan: vi.fn(),
+  preloadDefaultMikanList: vi.fn(),
   mikanScores: vi.fn(),
   mikanGroup: vi.fn(),
   rssToAni: vi.fn(),
@@ -75,6 +76,7 @@ const stubs = {
 describe('Mikan season changes', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(http.preloadDefaultMikanList).mockResolvedValue(null)
     vi.mocked(http.mikanScores).mockResolvedValue({
       data: {scores: {}, subscribedBgmIds: []}
     })
@@ -170,6 +172,25 @@ describe('Mikan season changes', () => {
 
     expect(wrapper.text()).toContain('preloaded season')
     expect(http.mikan).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses the home-screen Mikan prefetch without a second list request', async () => {
+    const preloaded = response('2026 summer', 'home preloaded season', 0).data
+    vi.mocked(http.preloadDefaultMikanList).mockResolvedValue(preloaded)
+
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    wrapper.vm.show()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('home preloaded season')
+    expect(http.preloadDefaultMikanList).toHaveBeenCalledOnce()
+    expect(http.mikan).not.toHaveBeenCalled()
   })
 
   it('retries only score ids the backend marks as temporarily unresolved', async () => {

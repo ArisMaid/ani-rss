@@ -42,6 +42,14 @@ import java.util.stream.Collectors;
 public class MikanService {
     private static final int MIKAN_REQUEST_TIMEOUT_MILLIS = 10_000;
     private static final int MAX_SCORE_LOOKUP_IDS = 48;
+    /**
+     * A current Mikan season commonly contains around 80 cards.  Queue the
+     * whole normal season during the already-background score warmup so the
+     * cards opened after the first two score batches do not start cold.
+     * PublicScoreService still caps actual upstream concurrency at 12 mapping
+     * and 4 score requests.
+     */
+    static final int MAX_BACKGROUND_SCORE_WARMUPS_PER_LIST = 96;
     /** A seasonal schedule changes slowly enough to safely reuse it across a short service restart. */
     private static final long SEASON_LIST_CACHE_TTL = TimeUnit.MINUTES.toMillis(10);
     private static final long SEARCH_LIST_CACHE_TTL = TimeUnit.SECONDS.toMillis(45);
@@ -108,7 +116,7 @@ public class MikanService {
         // number of cards in a season.
         PublicScoreService.MikanScoreLookup cachedScores =
                 publicScoreService.getCachedMikanScoreLookupAndWarm(
-                        mikanInfos, PublicScoreService.MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH);
+                        mikanInfos, MAX_BACKGROUND_SCORE_WARMUPS_PER_LIST);
         applyScores(
                 mikan,
                 cachedScores.scores(),

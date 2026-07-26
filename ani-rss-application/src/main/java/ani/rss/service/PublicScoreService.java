@@ -297,7 +297,11 @@ public class PublicScoreService {
             }
             retryableMikanIds.add(mikanId);
             if (remainingColdWarmups > 0) {
-                warmBgmScore(bgmId);
+                // cachedBgmScores already checked both memory and SQLite for
+                // this complete batch. Rechecking the same durable key once
+                // per card would serialize a cold season behind the SQLite
+                // connection before any score worker can start.
+                warmBgmScore(bgmId, true);
                 remainingColdWarmups--;
             }
         }
@@ -834,7 +838,21 @@ public class PublicScoreService {
     }
 
     private void warmBgmScore(String bgmId) {
-        if (StrUtil.isBlank(bgmId) || cachedBgmScore(bgmId) != null) {
+        warmBgmScore(bgmId, false);
+    }
+
+    /**
+     * Queues a missing score without repeating a durable-cache lookup when a
+     * preceding batch read already established that this exact id is cold.
+     */
+    private void warmBgmScore(String bgmId, boolean scoreAlreadyRead) {
+        if (StrUtil.isBlank(bgmId)) {
+            return;
+        }
+        Double cached = scoreAlreadyRead
+                ? CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId)
+                : cachedBgmScore(bgmId);
+        if (cached != null) {
             return;
         }
         String flightKey = BGM_SCORE_CACHE_PREFIX + "flight:" + bgmId;

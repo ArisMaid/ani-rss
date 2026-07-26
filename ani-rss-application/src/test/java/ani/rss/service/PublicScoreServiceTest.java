@@ -12,6 +12,7 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -403,6 +404,52 @@ class PublicScoreServiceTest {
         }
     }
 
+    @Test
+    void doesNotRepeatDurableScoreReadsAfterBatchCacheMisses() throws Exception {
+        String firstMikanId = uniqueNumericId();
+        String secondMikanId = uniqueNumericId();
+        String thirdMikanId = uniqueNumericId();
+        String firstBgmId = uniqueNumericId();
+        String secondBgmId = uniqueNumericId();
+        String thirdBgmId = uniqueNumericId();
+        BatchReadCountingRepository persistence = new BatchReadCountingRepository(Map.of(
+                firstMikanId, firstBgmId,
+                secondMikanId, secondBgmId,
+                thirdMikanId, thirdBgmId
+        ));
+        CountDownLatch warmedScores = new CountDownLatch(3);
+        AtomicInteger scoreRequests = new AtomicInteger();
+        PublicScoreService service = new PublicScoreService(
+                id -> {
+                    scoreRequests.incrementAndGet();
+                    warmedScores.countDown();
+                    return rated(id, 8.3);
+                },
+                url -> {
+                    throw new AssertionError("the durable mapping cache should satisfy this lookup");
+                },
+                persistence
+        );
+        List<MikanInfo> entries = List.of(firstMikanId, secondMikanId, thirdMikanId).stream()
+                .map(id -> new MikanInfo().setUrl("https://mikanani.me/Home/Bangumi/" + id))
+                .toList();
+        try {
+            PublicScoreService.MikanScoreLookup initial =
+                    service.getCachedMikanScoreLookupAndWarm(entries);
+
+            assertTrue(initial.scores().isEmpty());
+            assertEquals(3, initial.retryableMikanIds().size());
+            assertTrue(warmedScores.await(1, TimeUnit.SECONDS));
+            assertEquals(3, scoreRequests.get());
+            assertEquals(1, persistence.mappingBatchReads.get());
+            assertEquals(1, persistence.scoreBatchReads.get());
+            assertEquals(0, persistence.singleScoreReads.get(),
+                    "a batch miss must not trigger one durable read per card before warmup");
+        } finally {
+            service.stopWarmupExecutors();
+        }
+    }
+
     private static PublicScoreService.MikanScoreLookup awaitCachedScore(
             PublicScoreService service, MikanInfo entry, String mikanId) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
@@ -459,6 +506,53 @@ class PublicScoreServiceTest {
         @Override
         public void saveBgmScore(String bgmId, double score, long expiresAt) {
             // No-op: only the mapping persistence is deliberately slow here.
+        }
+    }
+
+    private static final class BatchReadCountingRepository extends PublicScoreCacheRepository {
+        private final Map<String, String> mappings;
+        private final AtomicInteger mappingBatchReads = new AtomicInteger();
+        private final AtomicInteger scoreBatchReads = new AtomicInteger();
+        private final AtomicInteger singleScoreReads = new AtomicInteger();
+
+        private BatchReadCountingRepository(Map<String, String> mappings) {
+            this.mappings = Map.copyOf(mappings);
+        }
+
+        @Override
+        public Map<String, MikanMapping> findMikanMappings(Collection<String> mikanIds, long now) {
+            mappingBatchReads.incrementAndGet();
+            Map<String, MikanMapping> result = new LinkedHashMap<>();
+            long expiresAt = now + TimeUnit.MINUTES.toMillis(1);
+            for (String mikanId : mikanIds) {
+                String bgmId = mappings.get(mikanId);
+                if (bgmId != null) {
+                    result.put(mikanId, new MikanMapping(bgmId, expiresAt));
+                }
+            }
+            return result;
+        }
+
+        @Override
+        public Map<String, BgmScore> findBgmScores(Collection<String> bgmIds, long now) {
+            scoreBatchReads.incrementAndGet();
+            return Map.of();
+        }
+
+        @Override
+        public Optional<BgmScore> findBgmScore(String bgmId, long now) {
+            singleScoreReads.incrementAndGet();
+            return Optional.empty();
+        }
+
+        @Override
+        public void saveMikanMapping(String mikanId, String bgmId, long expiresAt) {
+            // No-op: this test only checks read coalescing.
+        }
+
+        @Override
+        public void saveBgmScore(String bgmId, double score, long expiresAt) {
+            // No-op: this test only checks read coalescing.
         }
     }
 

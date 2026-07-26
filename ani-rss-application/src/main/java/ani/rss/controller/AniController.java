@@ -96,11 +96,7 @@ public class AniController extends BaseController {
         AniUtil.sync();
         Boolean enable = ani.getEnable();
         if (enable) {
-            ThreadUtil.execute(() -> {
-                if (TorrentUtil.login()) {
-                    downloadService.downloadAni(ani);
-                }
-            });
+            RssTask.submitDownload(List.of(ani));
         } else {
             // 如果未开启订阅则只获取一下集数
             ThreadUtil.execute(() -> {
@@ -337,7 +333,7 @@ public class AniController extends BaseController {
     @Operation(summary = "刷新全部订阅")
     @PostMapping("/refreshAll")
     public Result<Void> refreshAll() {
-        RssTask.submitDownload(RssTask.ANI_LIST);
+        RssTask.submitDownload(AniUtil.snapshot());
         return Result.success("已开始刷新RSS");
     }
 

@@ -14,6 +14,7 @@ import java.nio.file.Path;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class SubscriptionRepositoryTest {
@@ -49,6 +50,22 @@ class SubscriptionRepositoryTest {
 
         assertThrows(IllegalStateException.class, repository::commitRuntimeCandidate);
         assertEquals("old", runtime.get(0).getTitle());
+    }
+
+    @Test
+    void persistingLegacyRuntimeMutationsKeepsTheCanonicalRuntimeRecord() {
+        CopyOnWriteArrayList<Ani> runtime = new CopyOnWriteArrayList<>();
+        runtime.add(new Ani().setId("one").setTitle("old"));
+        SubscriptionRepository repository = new SubscriptionRepository(runtime,
+                () -> tempDir.resolve("ani.json"));
+        repository.markCommitted(runtime);
+
+        Ani canonical = runtime.get(0);
+        canonical.setTitle("new");
+        repository.commitRuntimeCandidate();
+
+        assertSame(canonical, runtime.get(0));
+        assertEquals("new", repository.snapshot().get(0).getTitle());
     }
 
     @Test

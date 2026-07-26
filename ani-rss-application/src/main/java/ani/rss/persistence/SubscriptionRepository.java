@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -57,6 +58,22 @@ public final class SubscriptionRepository {
         lock.readLock().lock();
         try {
             return copyList(lastCommitted);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /** Returns the canonical runtime record for internal background work. */
+    public Optional<Ani> findRuntimeById(String id) {
+        if (id == null || id.isBlank()) {
+            return Optional.empty();
+        }
+        lock.readLock().lock();
+        try {
+            return runtime.stream()
+                    .filter(Objects::nonNull)
+                    .filter(ani -> id.equals(ani.getId()))
+                    .findFirst();
         } finally {
             lock.readLock().unlock();
         }
@@ -118,7 +135,6 @@ public final class SubscriptionRepository {
             JsonArray document = documentFor(path, next);
             try {
                 write(path, document);
-                replaceRuntime(next);
                 lastCommitted = copyList(next);
                 preservedDocument = document;
             } catch (Exception e) {

@@ -142,6 +142,10 @@ public class AniUtil {
         return REPOSITORY.snapshot();
     }
 
+    public static Optional<Ani> findRuntimeById(String id) {
+        return REPOSITORY.findRuntimeById(id);
+    }
+
     public static List<Ani> validateCandidate(List<Ani> candidate) {
         return REPOSITORY.validateCandidate(candidate);
     }

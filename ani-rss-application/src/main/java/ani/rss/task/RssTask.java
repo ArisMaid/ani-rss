@@ -14,6 +14,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -23,63 +25,57 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 @Component
 public class RssTask implements BaseTask {
-    public static final List<Ani> ANI_LIST = AniUtil.ANI_LIST;
-    public static final AtomicBoolean DOWNLOAD_LOCK = new AtomicBoolean(false);
+    private static final SubscriptionDownloadQueue DOWNLOAD_QUEUE = new SubscriptionDownloadQueue();
 
     public static void syncDownload() {
-        syncDownload(ANI_LIST);
+        syncDownload(AniUtil.snapshot());
     }
 
     public static void syncDownload(List<Ani> aniList) {
-        acquireDownloadLock();
-        syncDownloadWithLock(aniList);
+        enqueue(aniList, Runnable::run);
     }
 
     public static void submitDownload(List<Ani> aniList) {
-        acquireDownloadLock();
-        ThreadUtil.execute(() -> syncDownloadWithLock(aniList));
+        enqueue(aniList, command -> ThreadUtil.execute(command));
     }
 
-    static void acquireDownloadLock() {
-        if (!DOWNLOAD_LOCK.compareAndSet(false, true)) {
-            throw new IllegalStateException("存在未完成任务，请等待...");
-        }
+    private static void enqueue(List<Ani> aniList, Executor executor) {
+        List<String> subscriptionIds = aniList == null ? List.of() : aniList.stream()
+                .filter(Objects::nonNull)
+                .map(Ani::getId)
+                .filter(Objects::nonNull)
+                .filter(id -> !id.isBlank())
+                .distinct()
+                .toList();
+        DOWNLOAD_QUEUE.submit(subscriptionIds, executor, RssTask::downloadByIds);
     }
 
-    static void releaseDownloadLock() {
-        DOWNLOAD_LOCK.set(false);
-    }
-
-    private static void syncDownloadWithLock(List<Ani> aniList) {
-        try {
-            download(aniList);
-        } catch (Exception e) {
-            String message = ExceptionUtils.getMessage(e);
-            log.error(message, e);
-        } finally {
-            releaseDownloadLock();
-        }
-    }
-
-    public static void download(List<Ani> aniList) {
+    private static void downloadByIds(List<String> subscriptionIds) {
         DownloadService downloadService = SpringUtil.getBean(DownloadService.class);
-        if (!TorrentUtil.login()) {
+        try {
+            if (!TorrentUtil.login()) {
+                log.error("downloader login failed");
+                return;
+            }
+        } catch (Exception e) {
+            log.error("downloader login failed type:{}", e.getClass().getSimpleName());
             return;
         }
-        for (Ani ani : aniList) {
+        for (String subscriptionId : subscriptionIds) {
             if (!TaskService.LOOP.get()) {
                 // 停止循环
                 return;
             }
 
-            if (!ANI_LIST.contains(ani)) {
+            Ani ani = AniUtil.findRuntimeById(subscriptionId).orElse(null);
+            if (ani == null) {
                 // 订阅可能已经被删除
                 continue;
             }
 
             String title = ani.getTitle();
             Boolean enable = ani.getEnable();
-            if (!enable) {
+            if (!Boolean.TRUE.equals(enable)) {
                 log.debug("{} 未启用", title);
                 continue;
             }
@@ -108,7 +104,7 @@ public class RssTask implements BaseTask {
         }
 
         try {
-            syncDownload(ANI_LIST);
+            syncDownload(AniUtil.snapshot());
         } catch (Exception e) {
             String message = ExceptionUtils.getMessage(e);
             log.error(message, e);

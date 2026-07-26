@@ -65,6 +65,9 @@ public class DownloadService {
      */
     @Synchronized("LOCK")
     public void downloadAni(Ani ani) {
+        if (!isCurrentRuntimeSubscription(ani)) {
+            return;
+        }
         Config config = ConfigUtil.CONFIG;
         Boolean delete = config.getDelete();
         Boolean autoDisabled = config.getAutoDisabled();
@@ -146,6 +149,10 @@ public class DownloadService {
                     }
                     continue;
                 }
+            }
+
+            if (!isCurrentRuntimeSubscription(ani)) {
+                return;
             }
 
             Date pubDate = item.getPubDate();
@@ -266,11 +273,10 @@ public class DownloadService {
                 continue;
             }
 
-            deleteStandbyRss(ani, item);
-
-            if (!AniUtil.ANI_LIST.contains(ani)) {
+            if (!isCurrentRuntimeSubscription(ani)) {
                 return;
             }
+            deleteStandbyRss(ani, item);
 
             if (!download(ani, item, savePath, saveTorrent)) {
                 missingEpisodeRecoveryService.markSubmissionResult(ani, item, false,
@@ -318,6 +324,16 @@ public class DownloadService {
             // every owned file has been moved and revalidated.
             AniUtil.completed(ani);
         }
+    }
+
+    private boolean isCurrentRuntimeSubscription(Ani ani) {
+        if (ani == null || StrUtil.isBlank(ani.getId())) {
+            return false;
+        }
+        return AniUtil.findRuntimeById(ani.getId())
+                .filter(current -> current == ani)
+                .filter(current -> Boolean.TRUE.equals(current.getEnable()))
+                .isPresent();
     }
 
     /**

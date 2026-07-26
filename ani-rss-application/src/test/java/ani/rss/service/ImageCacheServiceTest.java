@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ImageCacheServiceTest {
+    private static final String PRIVATE_ALLOWLIST = "ANI_RSS_IMAGE_PRIVATE_ALLOWLIST";
     @TempDir
     Path tempDir;
     private Config original;
@@ -40,8 +41,8 @@ class ImageCacheServiceTest {
         Config config = ConfigUtil.copy(original)
                 .setLogin(new Login().setUsername("image-user")
                         .setPassword(AuthService.encodePassword("image-password")))
-                .setImagePrivateAllowlist("127.0.0.1")
                 .setMultiLoginForbidden(false);
+        System.setProperty(PRIVATE_ALLOWLIST, "127.0.0.1");
         ConfigUtil.sync(config);
         AuthService.reload();
     }
@@ -50,6 +51,7 @@ class ImageCacheServiceTest {
     void tearDown() {
         AuthService.invalidateSessions();
         ConfigUtil.sync(original);
+        System.clearProperty(PRIVATE_ALLOWLIST);
         System.clearProperty("CONFIG");
     }
 

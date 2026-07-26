@@ -15,7 +15,7 @@
     </div>
     <div class="flex about-buttons">
       <div id="button-list">
-        <el-button :icon="Github" bg text type="info" @click="openUrl('https://github.com/wushuo894/ani-rss')">GitHub
+        <el-button :icon="Github" bg text type="info" @click="openUrl(PROJECT_GITHUB_URL)">GitHub
         </el-button>
         <el-button :icon="Book" bg text type="info" @click="openUrl('https://docs.wushuo.top')">使用文档</el-button>
         <el-button :icon="Telegram" bg text type="info" @click="openUrl('https://t.me/ani_rss')">TG群</el-button>
@@ -54,7 +54,7 @@
     <div v-if="about.update">
       <el-form @submit.prevent label-width="auto">
         <el-form-item label="版本号">
-          <el-link type="default" :href="`https://github.com/wushuo894/ani-rss/releases/tag/v${about.latest}`"
+          <el-link type="default" :href="`${PROJECT_RELEASES_URL}/tag/v${about.latest}`"
                    target="_blank">
             {{ about.latest }}
           </el-link>
@@ -120,6 +120,7 @@ import 'markdown-it-github-alerts/styles/github-base.css'
 import {clearAuthentication} from "@/js/global.js";
 import {renderSafeMarkdown} from "@/js/markdown.js";
 import * as http from "@/js/http.js";
+import {PROJECT_GITHUB_URL, PROJECT_RELEASES_URL} from "@/config/project.js";
 
 const actionLoading = ref(false)
 

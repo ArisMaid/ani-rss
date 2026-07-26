@@ -36,11 +36,6 @@
           v-model="props.config.proxyList"
           :disabled="!props.config.proxy"/>
     </el-form-item>
-    <el-form-item label="图片私网白名单">
-      <el-input v-model="props.config.imagePrivateAllowlist" type="textarea"
-                :autosize="{ minRows: 2, maxRows: 4 }"
-                placeholder="media.example.local&#10;192.168.1.0/24&#10;fd00::/8"/>
-    </el-form-item>
     <el-form-item label="启用">
       <el-switch v-model:model-value="props.config.proxy"/>
     </el-form-item>

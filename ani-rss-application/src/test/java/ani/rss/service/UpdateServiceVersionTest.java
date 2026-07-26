@@ -1,6 +1,7 @@
 package ani.rss.service;
 
 import ani.rss.commons.CacheUtils;
+import ani.rss.commons.ProjectMetadata;
 import ani.rss.entity.About;
 import ani.rss.util.basic.HttpReq;
 import org.junit.jupiter.api.Test;
@@ -34,7 +35,7 @@ class UpdateServiceVersionTest {
     void offlineReleaseCheckFallsBackToLocalMetadataButCannotStartAnUpdate() {
         CacheUtils.remove("github#releases-latest");
         try (MockedStatic<HttpReq> http = mockStatic(HttpReq.class)) {
-            http.when(() -> HttpReq.get("https://api.github.com/repos/wushuo894/ani-rss/releases/latest"))
+            http.when(() -> HttpReq.get(ProjectMetadata.LATEST_RELEASE_API))
                     .thenThrow(new IllegalStateException("offline"));
 
             About about = new UpdateService().about();

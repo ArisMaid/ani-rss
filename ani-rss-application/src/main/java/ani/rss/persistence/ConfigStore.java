@@ -2,20 +2,24 @@ package ani.rss.persistence;
 
 import ani.rss.commons.AtomicFileWriter;
 import ani.rss.commons.GsonStatic;
+import ani.rss.commons.JsonCompatibility;
 import ani.rss.entity.Config;
 import ani.rss.entity.NotificationConfig;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.bean.copier.CopyOptions;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
-import java.util.HashSet;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.regex.Pattern;
 
 /**
  * Owns the durable configuration boundary. Callers never receive the mutable
@@ -23,6 +27,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  */
 public final class ConfigStore {
     private static final Set<String> DOWNLOADERS = Set.of("qBittorrent", "Transmission", "Aria2", "OpenList", "Alist");
+    private static final Pattern LEGACY_NOTIFICATION_ID = Pattern.compile(
+            "(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
 
     private final Config runtime;
     private final Supplier<Path> pathSupplier;
@@ -30,6 +36,8 @@ public final class ConfigStore {
     private final FileWriter writer;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private Config lastCommitted;
+    private JsonObject preservedDocument = new JsonObject();
+    private Path preservedPath;
 
     public ConfigStore(Config runtime, Supplier<Path> pathSupplier, Consumer<Config> normalizer) {
         this(runtime, pathSupplier, normalizer, AtomicFileWriter::writeUtf8);
@@ -83,26 +91,39 @@ public final class ConfigStore {
 
     /** Loads a file over the supplied defaults without exposing a mutable parse result. */
     public void load(Config defaults) {
-        Config candidate = copy(defaults);
-        Path path = path();
+        lock.writeLock().lock();
         try {
-            if (Files.exists(path)) {
-                String json = Files.readString(path);
-                Config loaded = GsonStatic.GSON.fromJson(json, Config.class);
-                if (loaded == null) {
-                    throw new IllegalArgumentException("configuration document is empty");
+            Config candidate = copy(defaults);
+            Path path = path();
+            try {
+                JsonObject document = null;
+                boolean retiredFieldsRemoved = false;
+                if (Files.exists(path)) {
+                    document = readDocument(path);
+                    retiredFieldsRemoved = removeRetiredLocalFields(document);
+                    Config loaded = GsonStatic.GSON.fromJson(document, Config.class);
+                    if (loaded == null) {
+                        throw new IllegalArgumentException("configuration document is empty");
+                    }
+                    BeanUtil.copyProperties(loaded, candidate,
+                            CopyOptions.create().setIgnoreNullValue(true));
                 }
-                BeanUtil.copyProperties(loaded, candidate,
-                        CopyOptions.create().setIgnoreNullValue(true));
+                prepare(candidate);
+                if (!Files.exists(path)) {
+                    document = documentFor(path, candidate);
+                    write(path, document);
+                } else if (retiredFieldsRemoved) {
+                    write(path, document);
+                }
+                replaceRuntime(candidate);
+                lastCommitted = copy(candidate);
+                preservedDocument = document == null ? new JsonObject() : document.deepCopy();
+                preservedPath = path;
+            } catch (Exception e) {
+                throw failure("load configuration", e);
             }
-            prepare(candidate);
-            if (!Files.exists(path)) {
-                write(path, candidate);
-            }
-            replaceRuntime(candidate);
-            lastCommitted = copy(candidate);
-        } catch (Exception e) {
-            throw failure("load configuration", e);
+        } finally {
+            lock.writeLock().unlock();
         }
     }
 
@@ -114,10 +135,12 @@ public final class ConfigStore {
             prepare(next);
             Config previous = copy(lastCommitted);
             Path path = path();
+            JsonObject document = documentFor(path, next);
             try {
-                write(path, next);
+                write(path, document);
                 replaceRuntime(next);
                 lastCommitted = copy(next);
+                preservedDocument = document;
             } catch (Exception e) {
                 replaceRuntime(previous);
                 throw e;
@@ -137,9 +160,12 @@ public final class ConfigStore {
             Config previous = copy(lastCommitted);
             try {
                 prepare(candidate);
-                write(path(), candidate);
+                Path path = path();
+                JsonObject document = documentFor(path, candidate);
+                write(path, document);
                 replaceRuntime(candidate);
                 lastCommitted = copy(candidate);
+                preservedDocument = document;
             } catch (Exception e) {
                 replaceRuntime(previous);
                 throw e;
@@ -157,6 +183,7 @@ public final class ConfigStore {
         try {
             lastCommitted = copy(value);
             replaceRuntime(value);
+            preservedDocument = documentFor(path(), value);
         } finally {
             lock.writeLock().unlock();
         }
@@ -182,11 +209,9 @@ public final class ConfigStore {
                 value.getNotificationConfigList() == null) {
             throw new IllegalArgumentException("notification configuration is incomplete");
         }
-        Set<String> notificationIds = new HashSet<>();
         for (NotificationConfig notification : value.getNotificationConfigList()) {
-            if (notification == null || notification.getId() == null || notification.getId().isBlank() ||
-                    !notificationIds.add(notification.getId())) {
-                throw new IllegalArgumentException("notification identifiers must be unique");
+            if (notification == null) {
+                throw new IllegalArgumentException("notification configuration must not contain null entries");
             }
         }
         if (value.getDownloadToolType() == null ||
@@ -227,7 +252,59 @@ public final class ConfigStore {
                 CopyOptions.create().setIgnoreNullValue(false));
     }
 
-    private void write(Path path, Config value) throws IOException {
+    private JsonObject documentFor(Path path, Config value) {
+        ensurePreservedDocument(path);
+        JsonObject current = GsonStatic.GSON.toJsonTree(value).getAsJsonObject();
+        return JsonCompatibility.mergeObject(preservedDocument, current, Config.class);
+    }
+
+    private void ensurePreservedDocument(Path path) {
+        if (path.equals(preservedPath)) {
+            return;
+        }
+        try {
+            preservedDocument = Files.exists(path) ? readDocument(path) : new JsonObject();
+            preservedPath = path;
+        } catch (IOException e) {
+            throw failure("read configuration", e);
+        }
+    }
+
+    private static JsonObject readDocument(Path path) throws IOException {
+        JsonElement parsed = JsonParser.parseString(Files.readString(path));
+        if (!parsed.isJsonObject()) {
+            throw new IllegalArgumentException("configuration document is not an object");
+        }
+        return parsed.getAsJsonObject().deepCopy();
+    }
+
+    /** Removes only values emitted by earlier local builds, not future fields. */
+    private static boolean removeRetiredLocalFields(JsonObject document) {
+        boolean legacyLocalDocument = document.remove("imagePrivateAllowlist") != null;
+        boolean changed = legacyLocalDocument;
+        if (!legacyLocalDocument) {
+            return false;
+        }
+        JsonElement notifications = document.get("notificationConfigList");
+        if (notifications == null || !notifications.isJsonArray()) {
+            return changed;
+        }
+        for (JsonElement notification : notifications.getAsJsonArray()) {
+            if (!notification.isJsonObject()) {
+                continue;
+            }
+            JsonObject value = notification.getAsJsonObject();
+            JsonElement id = value.get("id");
+            if (id != null && id.isJsonPrimitive() &&
+                    LEGACY_NOTIFICATION_ID.matcher(id.getAsString()).matches()) {
+                value.remove("id");
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    private void write(Path path, JsonObject value) throws IOException {
         writer.write(path, GsonStatic.toJson(value));
     }
 

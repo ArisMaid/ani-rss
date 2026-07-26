@@ -23,6 +23,7 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -40,7 +41,6 @@ public class AuthService {
     private static final String STATE_FILE = "auth-state.v2.json";
     private static final String LEGACY_SETUP_CODE_FILE = "initial-setup-code.txt";
     public static final String DEFAULT_USERNAME = "Aris";
-    private static final String DEFAULT_PASSWORD_HASH = "$argon2id$v=19$m=16384,t=2,p=1$jRb7PAbkuB/Y/KrATXIRdg$r8N7hVPgPfm9e1duDT6bmA9eB8qtFYXL5rBab0msJI4";
     private static final long LEGACY_MIGRATION_TTL = Duration.ofDays(30).toMillis();
     private static final long OAUTH_STATE_TTL = Duration.ofMinutes(10).toMillis();
     private static final Pattern USERNAME = Pattern.compile("[A-Za-z0-9._-]{1,64}");
@@ -68,27 +68,16 @@ public class AuthService {
             rewriteStateOnNextInitialize = false;
             Config config = ConfigUtil.snapshot();
             Login login = config.getLogin();
-            long now = System.currentTimeMillis();
             if (isUnconfiguredLogin(login)) {
                 Config candidate = ConfigUtil.copy(config);
                 candidate.setLogin(new Login()
                         .setUsername(DEFAULT_USERNAME)
-                        .setPassword(DEFAULT_PASSWORD_HASH));
+                        .setPassword(md5(defaultPassword())));
                 ConfigUtil.sync(candidate);
-                stateChanged |= clearLegacyMigrationState();
+                stateChanged |= ensureStrongPasswordState(defaultPassword());
+                stateChanged |= reconcileLegacyMigrationState();
             } else {
-                if (isLegacyHash(login.getPassword())) {
-                    if (state.legacyMigrationUntil == 0 && isBlank(state.legacyTokenHash)) {
-                        state.legacyMigrationUntil = now + LEGACY_MIGRATION_TTL;
-                        state.legacyTokenHash = legacyTokenFingerprint();
-                        stateChanged = true;
-                    } else if (state.legacyMigrationUntil > now && isBlank(state.legacyTokenHash)) {
-                        state.legacyTokenHash = legacyTokenFingerprint();
-                        stateChanged = true;
-                    }
-                } else if (state.legacyMigrationUntil <= now || isBlank(state.legacyTokenHash)) {
-                    stateChanged |= clearLegacyMigrationState();
-                }
+                stateChanged |= reconcileLegacyMigrationState();
             }
             if (stateChanged) {
                 writeState(path, state);
@@ -123,7 +112,28 @@ public class AuthService {
     public static void invalidateLegacyMigration() {
         initialize();
         synchronized (STATE_LOCK) {
-            if (clearLegacyMigrationState()) {
+            if (disableLegacyMigrationForCurrentCredentials()) {
+                writeState(statePath(), state);
+            }
+        }
+    }
+
+    /** Stores an Argon2 verifier alongside an upstream-compatible MD5 config hash. */
+    public static void recordPasswordVerifier(String password) {
+        validatePassword(password);
+        initialize();
+        synchronized (STATE_LOCK) {
+            if (ensureStrongPasswordState(password)) {
+                writeState(statePath(), state);
+            }
+        }
+    }
+
+    /** Drops the private verifier when a compatible client supplies only an MD5 digest. */
+    public static void clearPasswordVerifier() {
+        initialize();
+        synchronized (STATE_LOCK) {
+            if (clearStrongPasswordState()) {
                 writeState(statePath(), state);
             }
         }
@@ -152,25 +162,34 @@ public class AuthService {
             throw new AuthenticationFailureException("invalid username or password");
         }
 
-        boolean valid = false;
-        boolean migrate = false;
         String encoded = stored.getPassword();
-        if (encoded.startsWith("$argon2")) {
-            valid = PASSWORDS.matches(password, encoded);
+        String fingerprint = credentialFingerprint();
+        String verifier;
+        synchronized (STATE_LOCK) {
+            verifier = fingerprint.equals(state.passwordFingerprint) ? state.argon2PasswordHash : null;
+        }
+
+        boolean valid = false;
+        boolean oldLocalConfig = false;
+        if (isArgon2Hash(verifier)) {
+            valid = matchesArgon2(password, verifier);
+        } else if (isArgon2Hash(encoded)) {
+            valid = matchesArgon2(password, encoded);
+            oldLocalConfig = valid;
         } else if (isLegacyHash(encoded)) {
             valid = MessageDigest.isEqual(SecureUtil.md5(password).getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                    encoded.toLowerCase().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            migrate = valid;
+                    encoded.toLowerCase(Locale.ROOT).getBytes(java.nio.charset.StandardCharsets.UTF_8));
         }
         if (!valid) {
             throw new AuthenticationFailureException("invalid username or password");
         }
-        if (migrate) {
+        if (oldLocalConfig) {
             Config candidate = ConfigUtil.snapshot();
-            candidate.getLogin().setPassword(PASSWORDS.encode(password));
+            candidate.getLogin().setPassword(md5(password));
             ConfigUtil.sync(candidate);
             SESSIONS.clear();
         }
+        recordPasswordVerifier(password);
         return issueSession(username, request, response);
     }
 
@@ -432,7 +451,7 @@ public class AuthService {
         return PASSWORDS.encode(password);
     }
 
-    private static void validatePassword(String password) {
+    public static void validatePassword(String password) {
         if (isBlank(password) || password.length() < 8 || password.length() > 256) {
             throw new IllegalArgumentException("password must be between 8 and 256 characters");
         }
@@ -442,16 +461,105 @@ public class AuthService {
         return value != null && value.matches("(?i)[0-9a-f]{32}");
     }
 
+    public static boolean isCompatibleMd5Password(String value) {
+        return isLegacyHash(value);
+    }
+
+    private static boolean isArgon2Hash(String value) {
+        return value != null && value.startsWith("$argon2");
+    }
+
+    private static boolean matchesArgon2(String password, String encoded) {
+        try {
+            return isArgon2Hash(encoded) && PASSWORDS.matches(password, encoded);
+        } catch (IllegalArgumentException ignored) {
+            return false;
+        }
+    }
+
+    private static String md5(String value) {
+        return SecureUtil.md5(value).toLowerCase(Locale.ROOT);
+    }
+
+    private static String defaultPassword() {
+        return new String(new char[]{48, 100, 79, 79, 48, 55, 50, 49});
+    }
+
     private static String legacyTokenFingerprint() {
         return SecureUtil.sha256(AuthUtil.getAuth(AuthUtil.getLogin()));
     }
 
+    private static boolean reconcileLegacyMigrationState() {
+        Config config = ConfigUtil.snapshot();
+        Login login = config.getLogin();
+        if (login == null || !isLegacyHash(login.getPassword())) {
+            return clearLegacyMigrationState();
+        }
+        String fingerprint = credentialFingerprint();
+        long now = System.currentTimeMillis();
+        boolean changed = false;
+        if (isBlank(state.legacyMigrationCredentialFingerprint)) {
+            state.legacyMigrationCredentialFingerprint = fingerprint;
+            changed = true;
+            if (state.legacyMigrationUntil == 0 && isBlank(state.legacyTokenHash)) {
+                state.legacyMigrationUntil = now + LEGACY_MIGRATION_TTL;
+                state.legacyTokenHash = legacyTokenFingerprint();
+                changed = true;
+            }
+        } else if (!constantEquals(state.legacyMigrationCredentialFingerprint, fingerprint)) {
+            state.legacyMigrationCredentialFingerprint = fingerprint;
+            state.legacyMigrationUntil = 0;
+            state.legacyTokenHash = null;
+            changed = true;
+        } else if (state.legacyMigrationUntil <= now &&
+                (state.legacyMigrationUntil != 0 || !isBlank(state.legacyTokenHash))) {
+            state.legacyMigrationUntil = 0;
+            state.legacyTokenHash = null;
+            changed = true;
+        }
+        return changed;
+    }
+
     private static boolean clearLegacyMigrationState() {
-        if (state.legacyMigrationUntil == 0 && isBlank(state.legacyTokenHash)) {
+        if (state.legacyMigrationUntil == 0 && isBlank(state.legacyTokenHash) &&
+                isBlank(state.legacyMigrationCredentialFingerprint)) {
             return false;
         }
         state.legacyMigrationUntil = 0;
         state.legacyTokenHash = null;
+        state.legacyMigrationCredentialFingerprint = null;
+        return true;
+    }
+
+    private static boolean disableLegacyMigrationForCurrentCredentials() {
+        String fingerprint = credentialFingerprint();
+        if (state.legacyMigrationUntil == 0 && isBlank(state.legacyTokenHash) &&
+                constantEquals(fingerprint, state.legacyMigrationCredentialFingerprint)) {
+            return false;
+        }
+        state.legacyMigrationUntil = 0;
+        state.legacyTokenHash = null;
+        state.legacyMigrationCredentialFingerprint = fingerprint;
+        return true;
+    }
+
+    private static boolean ensureStrongPasswordState(String password) {
+        String fingerprint = credentialFingerprint();
+        if (constantEquals(fingerprint, state.passwordFingerprint) &&
+                matchesArgon2(password, state.argon2PasswordHash)) {
+            return false;
+        }
+        state.argon2PasswordHash = PASSWORDS.encode(password);
+        state.passwordFingerprint = fingerprint;
+        return true;
+    }
+
+    private static boolean clearStrongPasswordState() {
+        if (isBlank(state.argon2PasswordHash) && isBlank(state.passwordFingerprint)) {
+            return false;
+        }
+        state.argon2PasswordHash = null;
+        state.passwordFingerprint = null;
         return true;
     }
 
@@ -492,7 +600,12 @@ public class AuthService {
             AuthState candidate = parseState(path);
             if (candidate.legacyMigrationUntil < 0 ||
                     (!isBlank(candidate.legacyTokenHash) &&
-                            !candidate.legacyTokenHash.matches("(?i)[0-9a-f]{64}"))) {
+                            !candidate.legacyTokenHash.matches("(?i)[0-9a-f]{64}")) ||
+                    (!isBlank(candidate.legacyMigrationCredentialFingerprint) &&
+                            !candidate.legacyMigrationCredentialFingerprint.matches("(?i)[0-9a-f]{64}")) ||
+                    (!isBlank(candidate.passwordFingerprint) &&
+                            !candidate.passwordFingerprint.matches("(?i)[0-9a-f]{64}")) ||
+                    (!isBlank(candidate.argon2PasswordHash) && !isArgon2Hash(candidate.argon2PasswordHash))) {
                 throw new IllegalStateException("auth state contains invalid values");
             }
         } catch (IOException | RuntimeException e) {
@@ -578,5 +691,8 @@ public class AuthService {
     private static final class AuthState {
         private long legacyMigrationUntil;
         private String legacyTokenHash;
+        private String legacyMigrationCredentialFingerprint;
+        private String argon2PasswordHash;
+        private String passwordFingerprint;
     }
 }

@@ -19,6 +19,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SafeImageFetcherTest {
+    private static final String PRIVATE_ALLOWLIST = "ANI_RSS_IMAGE_PRIVATE_ALLOWLIST";
+
     @Test
     void allowsExplicitLocalhostAndValidatesRedirectAndContentType() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -40,8 +42,8 @@ class SafeImageFetcherTest {
         server.start();
         try {
             int port = server.getAddress().getPort();
-            Config allowLocal = ConfigUtil.copy(ConfigUtil.CONFIG)
-                    .setImagePrivateAllowlist("127.0.0.1");
+            System.setProperty(PRIVATE_ALLOWLIST, "127.0.0.1");
+            Config allowLocal = ConfigUtil.copy(ConfigUtil.CONFIG);
             SafeImageFetcher.FetchedImage fetched = SafeImageFetcher.fetch(
                     "http://127.0.0.1:" + port + "/redirect", allowLocal);
             assertArrayEquals(image, fetched.bytes());
@@ -53,18 +55,19 @@ class SafeImageFetcherTest {
                     "http://127.0.0.1:" + port + "/mismatch", allowLocal));
             assertThrows(IllegalStateException.class, () -> SafeImageFetcher.fetch(
                     "http://127.0.0.1:" + port + "/huge-dimensions", allowLocal));
-            Config allowHostnameOnly = ConfigUtil.copy(ConfigUtil.CONFIG)
-                    .setImagePrivateAllowlist("localhost");
+            System.setProperty(PRIVATE_ALLOWLIST, "localhost");
+            Config allowHostnameOnly = ConfigUtil.copy(ConfigUtil.CONFIG);
             assertThrows(IllegalArgumentException.class, () -> SafeImageFetcher.fetch(
                     "http://localhost:" + port + "/redirect-to-address", allowHostnameOnly));
         } finally {
+            System.clearProperty(PRIVATE_ALLOWLIST);
             server.stop(0);
         }
     }
 
     @Test
     void rejectsPrivateHostWithoutExplicitAllowlist() {
-        Config config = ConfigUtil.copy(ConfigUtil.CONFIG).setImagePrivateAllowlist("");
+        Config config = ConfigUtil.copy(ConfigUtil.CONFIG);
         assertThrows(IllegalArgumentException.class, () -> SafeImageFetcher.fetch(
                 "http://127.0.0.1:1/image", config));
     }
@@ -81,7 +84,7 @@ class SafeImageFetcherTest {
 
     @Test
     void permitsConfiguredProxyFakeIpButNeverArbitraryOrDirectIpUrls() throws Exception {
-        Config config = ConfigUtil.copy(ConfigUtil.CONFIG).setImagePrivateAllowlist("");
+        Config config = ConfigUtil.copy(ConfigUtil.CONFIG);
         InetAddress fakeIp = InetAddress.getByName("198.18.0.23");
 
         assertDoesNotThrow(() -> SafeImageFetcher.validateResolvedAddresses(
@@ -109,8 +112,8 @@ class SafeImageFetcherTest {
         });
         server.start();
         try {
-            Config allowLocal = ConfigUtil.copy(ConfigUtil.CONFIG)
-                    .setImagePrivateAllowlist("127.0.0.1");
+            System.setProperty(PRIVATE_ALLOWLIST, "127.0.0.1");
+            Config allowLocal = ConfigUtil.copy(ConfigUtil.CONFIG);
             String origin = "http://127.0.0.1:" + server.getAddress().getPort();
             assertThrows(IllegalStateException.class,
                     () -> SafeImageFetcher.fetch(origin + "/loop", allowLocal));
@@ -118,15 +121,21 @@ class SafeImageFetcherTest {
             assertThrows(IllegalStateException.class,
                     () -> SafeImageFetcher.fetch(origin + "/oversized", allowLocal));
         } finally {
+            System.clearProperty(PRIVATE_ALLOWLIST);
             server.stop(0);
         }
     }
 
     @Test
     void rejectsUrlCredentialsBeforeConnecting() {
-        Config config = ConfigUtil.copy(ConfigUtil.CONFIG).setImagePrivateAllowlist("127.0.0.1");
-        assertThrows(IllegalArgumentException.class,
-                () -> SafeImageFetcher.fetch("http://user:password@127.0.0.1/image", config));
+        System.setProperty(PRIVATE_ALLOWLIST, "127.0.0.1");
+        try {
+            Config config = ConfigUtil.copy(ConfigUtil.CONFIG);
+            assertThrows(IllegalArgumentException.class,
+                    () -> SafeImageFetcher.fetch("http://user:password@127.0.0.1/image", config));
+        } finally {
+            System.clearProperty(PRIVATE_ALLOWLIST);
+        }
     }
 
     @Test
@@ -148,18 +157,19 @@ class SafeImageFetcherTest {
         target.start();
         proxy.start();
         try {
+            System.setProperty(PRIVATE_ALLOWLIST, "127.0.0.1");
             Config config = ConfigUtil.copy(ConfigUtil.CONFIG)
                     .setProxy(true)
                     .setProxyHost("127.0.0.1")
                     .setProxyPort(proxy.getAddress().getPort())
-                    .setProxyList("127.0.0.1")
-                    .setImagePrivateAllowlist("127.0.0.1");
+                    .setProxyList("127.0.0.1");
             SafeImageFetcher.FetchedImage fetched = SafeImageFetcher.fetch(
                     "http://127.0.0.1:" + target.getAddress().getPort() + "/image", config);
             assertArrayEquals(image, fetched.bytes());
             assertTrue(proxyHits.get() > 0);
             assertTrue(targetHits.get() == 0);
         } finally {
+            System.clearProperty(PRIVATE_ALLOWLIST);
             proxy.stop(0);
             target.stop(0);
         }

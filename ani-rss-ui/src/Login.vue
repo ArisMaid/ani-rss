@@ -46,7 +46,7 @@
       </el-link>
       &nbsp;
       <el-link type="default"
-               href="https://github.com/wushuo894/ani-rss"
+                href="https://github.com/ArisMaid/ani-rss"
                target="_blank">
         github
       </el-link>

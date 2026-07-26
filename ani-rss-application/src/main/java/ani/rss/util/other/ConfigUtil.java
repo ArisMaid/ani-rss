@@ -170,7 +170,6 @@ public class ConfigUtil {
                 .setApiKey("")
                 .setDownloadNew(false)
                 .setInnerIP(false)
-                .setImagePrivateAllowlist("")
                 .setRenameTemplate("[${subgroup}] ${title} S${seasonFormat}E${episodeFormat}")
                 .setRenameDelYear(false)
                 .setRenameDelTmdbId(false)
@@ -346,11 +345,7 @@ public class ConfigUtil {
                 .setOverride(false);
 
         for (NotificationConfig notificationConfig : notificationConfigList) {
-            boolean missingId = StrUtil.isBlank(notificationConfig.getId());
             BeanUtil.copyProperties(newNotificationConfig, notificationConfig, copyOptions);
-            if (missingId) {
-                notificationConfig.setId(UUID.randomUUID().toString());
-            }
         }
     }
 

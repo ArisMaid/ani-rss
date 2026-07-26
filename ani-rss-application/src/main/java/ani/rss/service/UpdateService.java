@@ -91,7 +91,7 @@ public class UpdateService {
                 .setLatest("")
                 .setMarkdownBody("");
         try {
-            HttpRequest request = HttpReq.get("https://api.github.com/repos/wushuo894/ani-rss/releases/latest")
+            HttpRequest request = HttpReq.get(ProjectMetadata.LATEST_RELEASE_API)
                     .timeout(3000);
 
             String githubToken = config.getGithubToken();

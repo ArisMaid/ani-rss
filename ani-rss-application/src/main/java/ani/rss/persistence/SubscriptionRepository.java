@@ -2,7 +2,11 @@ package ani.rss.persistence;
 
 import ani.rss.commons.AtomicFileWriter;
 import ani.rss.commons.GsonStatic;
+import ani.rss.commons.JsonCompatibility;
 import ani.rss.entity.Ani;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonParser;
 import com.google.gson.reflect.TypeToken;
 
 import java.io.IOException;
@@ -26,6 +30,8 @@ public final class SubscriptionRepository {
     private final FileWriter writer;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private List<Ani> lastCommitted = List.of();
+    private JsonArray preservedDocument = new JsonArray();
+    private Path preservedPath;
 
     public SubscriptionRepository(List<Ani> runtime, Supplier<Path> pathSupplier) {
         this(runtime, pathSupplier, AtomicFileWriter::writeUtf8);
@@ -62,12 +68,19 @@ public final class SubscriptionRepository {
     }
 
     public List<Ani> readFromDisk() throws IOException {
-        Path path = path();
-        if (!Files.exists(path)) {
-            return snapshot();
+        lock.writeLock().lock();
+        try {
+            Path path = path();
+            if (!Files.exists(path)) {
+                return copyList(runtime);
+            }
+            preservedDocument = readDocument(path);
+            preservedPath = path;
+            List<Ani> value = GsonStatic.GSON.fromJson(preservedDocument, LIST_TYPE);
+            return validate(value == null ? List.of() : value);
+        } finally {
+            lock.writeLock().unlock();
         }
-        List<Ani> value = GsonStatic.GSON.fromJson(Files.readString(path), LIST_TYPE);
-        return validate(value == null ? List.of() : value);
     }
 
     public void commit(List<Ani> candidate) {
@@ -75,10 +88,13 @@ public final class SubscriptionRepository {
         try {
             List<Ani> next = validate(candidate);
             List<Ani> previous = copyList(lastCommitted);
+            Path path = path();
+            JsonArray document = documentFor(path, next);
             try {
-                write(path(), next);
+                write(path, document);
                 replaceRuntime(next);
                 lastCommitted = copyList(next);
+                preservedDocument = document;
             } catch (Exception e) {
                 replaceRuntime(previous);
                 throw e;
@@ -98,10 +114,13 @@ public final class SubscriptionRepository {
         try {
             List<Ani> next = validate(runtime);
             List<Ani> previous = copyList(lastCommitted);
+            Path path = path();
+            JsonArray document = documentFor(path, next);
             try {
-                write(path(), next);
+                write(path, document);
                 replaceRuntime(next);
                 lastCommitted = copyList(next);
+                preservedDocument = document;
             } catch (Exception e) {
                 replaceRuntime(previous);
                 throw e;
@@ -119,6 +138,7 @@ public final class SubscriptionRepository {
             List<Ani> next = validate(value);
             replaceRuntime(next);
             lastCommitted = copyList(next);
+            preservedDocument = documentFor(path(), next);
         } finally {
             lock.writeLock().unlock();
         }
@@ -154,7 +174,33 @@ public final class SubscriptionRepository {
         runtime.addAll(copyList(value));
     }
 
-    private void write(Path path, List<Ani> value) throws IOException {
+    private JsonArray documentFor(Path path, List<Ani> value) {
+        ensurePreservedDocument(path);
+        JsonArray current = GsonStatic.GSON.toJsonTree(value, LIST_TYPE).getAsJsonArray();
+        return JsonCompatibility.mergeArray(preservedDocument, current, Ani.class);
+    }
+
+    private void ensurePreservedDocument(Path path) {
+        if (path.equals(preservedPath)) {
+            return;
+        }
+        try {
+            preservedDocument = Files.exists(path) ? readDocument(path) : new JsonArray();
+            preservedPath = path;
+        } catch (IOException e) {
+            throw new IllegalStateException("read subscriptions failed", e);
+        }
+    }
+
+    private static JsonArray readDocument(Path path) throws IOException {
+        JsonElement parsed = JsonParser.parseString(Files.readString(path));
+        if (!parsed.isJsonArray()) {
+            throw new IllegalArgumentException("subscription document is not an array");
+        }
+        return parsed.getAsJsonArray().deepCopy();
+    }
+
+    private void write(Path path, JsonArray value) throws IOException {
         writer.write(path, GsonStatic.toJson(value));
     }
 

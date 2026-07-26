@@ -42,7 +42,7 @@ class ConfigServiceSecretTest {
     }
 
     @Test
-    void preservesNotificationSecretsByStableIdAfterDeletion() {
+    void preservesNotificationSecretsByUniquePublicIdentityAfterDeletion() {
         NotificationConfig first = NotificationConfig.createNotificationConfig()
                 .setComment("first")
                 .setTelegramBotToken("first-secret");
@@ -74,7 +74,7 @@ class ConfigServiceSecretTest {
     }
 
     @Test
-    void notificationOperationsHydrateMaskedSecretByStableId() {
+    void notificationOperationsHydrateMaskedSecretByUniquePublicIdentity() {
         NotificationConfig configuredNotification = NotificationConfig.createNotificationConfig()
                 .setTelegramBotToken("operation-secret");
         Config configured = ConfigUtil.copy(original)
@@ -87,6 +87,23 @@ class ConfigServiceSecretTest {
         NotificationConfig hydrated = new ConfigService().notificationForOperation(masked);
 
         assertEquals("operation-secret", hydrated.getTelegramBotToken());
+    }
+
+    @Test
+    void doesNotCopyOneNotificationSecretToTwoIdenticalCandidates() {
+        NotificationConfig configuredNotification = NotificationConfig.createNotificationConfig()
+                .setTelegramBotToken("operation-secret");
+        ConfigUtil.sync(ConfigUtil.copy(original).setNotificationConfigList(List.of(configuredNotification)));
+        NotificationConfig first = GsonStatic.fromJson(GsonStatic.toJson(configuredNotification), NotificationConfig.class)
+                .setTelegramBotToken("");
+        NotificationConfig second = GsonStatic.fromJson(GsonStatic.toJson(configuredNotification), NotificationConfig.class)
+                .setTelegramBotToken("");
+
+        new ConfigService().setConfig(ConfigUtil.snapshot().setNotificationConfigList(List.of(first, second)));
+
+        List<NotificationConfig> stored = ConfigUtil.snapshot().getNotificationConfigList();
+        assertEquals("operation-secret", stored.get(0).getTelegramBotToken());
+        assertEquals("", stored.get(1).getTelegramBotToken());
     }
 
     @Test

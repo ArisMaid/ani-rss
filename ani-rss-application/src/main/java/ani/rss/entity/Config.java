@@ -424,9 +424,6 @@ public class Config implements Serializable {
     @Schema(description = "仅允许内网 IP 访问")
     private Boolean innerIP;
 
-    /** Explicit host/CIDR exceptions for the image fetcher. */
-    private String imagePrivateAllowlist;
-
     /**
      * 重命名模版
      */

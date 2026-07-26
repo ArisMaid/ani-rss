@@ -21,6 +21,7 @@ import cn.hutool.core.bean.copier.CopyOptions;
 import cn.hutool.core.codec.Base64;
 import cn.hutool.core.date.LocalDateTimeUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.crypto.SecureUtil;
 import cn.hutool.http.HttpRequest;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -30,12 +31,10 @@ import org.springframework.stereotype.Service;
 import java.io.File;
 import java.net.URI;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -101,10 +100,17 @@ public class ConfigService {
         preserveSecrets(previousConfig, candidate);
 
         String loginPassword = candidate.getLogin().getPassword();
+        String rawPassword = null;
         if (StrUtil.isBlank(loginPassword)) {
             candidate.getLogin().setPassword(password);
         } else if (!Objects.equals(loginPassword, password)) {
-            candidate.getLogin().setPassword(AuthService.encodePassword(loginPassword));
+            if (AuthService.isCompatibleMd5Password(loginPassword)) {
+                candidate.getLogin().setPassword(loginPassword.toLowerCase(java.util.Locale.ROOT));
+            } else {
+                AuthService.validatePassword(loginPassword);
+                rawPassword = loginPassword;
+                candidate.getLogin().setPassword(SecureUtil.md5(loginPassword));
+            }
         }
         String loginUsername = candidate.getLogin().getUsername();
         if (StrUtil.isBlank(loginUsername)) {
@@ -137,6 +143,11 @@ public class ConfigService {
         try {
             if (credentialsChanged) {
                 AuthService.invalidateSessions();
+                if (rawPassword != null) {
+                    AuthService.recordPasswordVerifier(rawPassword);
+                } else {
+                    AuthService.clearPasswordVerifier();
+                }
                 AuthService.invalidateLegacyMigration();
             }
             LogUtil.loadLogback();
@@ -252,13 +263,10 @@ public class ConfigService {
         }
         NotificationConfig result = GsonStatic.fromJson(GsonStatic.toJson(candidate), NotificationConfig.class);
         Config active = ConfigUtil.snapshot();
-        if (active.getNotificationConfigList() == null || StrUtil.isBlank(result.getId())) {
+        if (active.getNotificationConfigList() == null) {
             return result;
         }
-        active.getNotificationConfigList().stream()
-                .filter(Objects::nonNull)
-                .filter(value -> Objects.equals(value.getId(), result.getId()))
-                .findFirst()
+        findMatchingNotification(active.getNotificationConfigList(), result)
                 .ifPresent(previous -> preserveNotificationSecrets(previous, result));
         return result;
     }
@@ -343,20 +351,37 @@ public class ConfigService {
         if (oldNotifications == null || newNotifications == null) {
             return;
         }
-        Map<String, NotificationConfig> oldById = oldNotifications.stream()
-                .filter(Objects::nonNull)
-                .filter(value -> StrUtil.isNotBlank(value.getId()))
-                .collect(Collectors.toMap(NotificationConfig::getId, Function.identity(), (left, right) -> left));
+        List<NotificationConfig> unmatched = new ArrayList<>(oldNotifications);
         for (NotificationConfig newValue : newNotifications) {
             if (newValue == null) {
                 continue;
             }
-            NotificationConfig oldValue = oldById.get(newValue.getId());
-            if (oldValue == null) {
-                continue;
-            }
-            preserveNotificationSecrets(oldValue, newValue);
+            findMatchingNotification(unmatched, newValue).ifPresent(oldValue -> {
+                preserveNotificationSecrets(oldValue, newValue);
+                unmatched.remove(oldValue);
+            });
         }
+    }
+
+    /**
+     * The upstream document has no notification identifier. Match only when
+     * the public identity is unique, so masked secrets are never copied to an
+     * ambiguous new notification.
+     */
+    private static java.util.Optional<NotificationConfig> findMatchingNotification(
+            List<NotificationConfig> candidates, NotificationConfig target) {
+        List<NotificationConfig> matches = candidates.stream()
+                .filter(Objects::nonNull)
+                .filter(value -> sameNotificationIdentity(value, target))
+                .limit(2)
+                .toList();
+        return matches.size() == 1 ? java.util.Optional.of(matches.get(0)) : java.util.Optional.empty();
+    }
+
+    private static boolean sameNotificationIdentity(NotificationConfig left, NotificationConfig right) {
+        return Objects.equals(left.getNotificationType(), right.getNotificationType()) &&
+                Objects.equals(left.getComment(), right.getComment()) &&
+                Objects.equals(left.getSort(), right.getSort());
     }
 
     private static void preserveNotificationSecrets(NotificationConfig previous, NotificationConfig candidate) {

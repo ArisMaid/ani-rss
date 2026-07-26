@@ -15,10 +15,10 @@
 |
 [参与开发](https://docs.wushuo.top/dev/basic)
 
-[![GitHub](https://img.shields.io/badge/-GitHub-181717?logo=github)](https://github.com/wushuo894/ani-rss)
-![GitHub License](https://img.shields.io/github/license/wushuo894/ani-rss)
-[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/wushuo894/ani-rss?color=blue&label=download&sort=semver)](https://github.com/wushuo894/ani-rss/releases/latest)
-[![GitHub all releases](https://img.shields.io/github/downloads/wushuo894/ani-rss/total?color=blue&label=github%20downloads)](https://docs.wushuo.top/history)
+[![GitHub](https://img.shields.io/badge/-GitHub-181717?logo=github)](https://github.com/ArisMaid/ani-rss)
+![GitHub License](https://img.shields.io/github/license/ArisMaid/ani-rss)
+[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/ArisMaid/ani-rss?color=blue&label=download&sort=semver)](https://github.com/ArisMaid/ani-rss/releases/latest)
+[![GitHub all releases](https://img.shields.io/github/downloads/ArisMaid/ani-rss/total?color=blue&label=github%20downloads)](https://github.com/ArisMaid/ani-rss/releases)
 [![telegram](https://img.shields.io/static/v1?label=telegram&amp;message=ani-rss&amp;color=blue)](https://t.me/ani_rss)
 
 </div>
@@ -50,8 +50,8 @@
 
 ### 贡献者
 
-<a href="https://github.com/wushuo894/ani-rss/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=wushuo894/ani-rss" alt="contributors" />
+<a href="https://github.com/ArisMaid/ani-rss/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=ArisMaid/ani-rss" alt="contributors" />
 </a>
 
 ## 爱发电

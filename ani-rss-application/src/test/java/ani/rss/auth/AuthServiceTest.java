@@ -55,7 +55,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void blankLoginUsesDefaultArgonCredentialsAndRemovesLegacySetupArtifacts() throws Exception {
+    void blankLoginUsesUpstreamCompatibleCredentialsAndStoresPrivateVerifier() throws Exception {
         Files.writeString(tempDir.resolve("initial-setup-code.txt"), "obsolete");
         Files.writeString(tempDir.resolve("auth-state.v2.json"), """
                 {"setupCodeHash":"obsolete","setupExpiresAt":1,"setupUsed":false}
@@ -64,9 +64,10 @@ class AuthServiceTest {
 
         Login stored = ConfigUtil.snapshot().getLogin();
         assertEquals(AuthService.DEFAULT_USERNAME, stored.getUsername());
-        assertTrue(stored.getPassword().startsWith("$argon2"));
+        assertTrue(stored.getPassword().matches("(?i)[0-9a-f]{32}"));
         assertFalse(Files.exists(tempDir.resolve("initial-setup-code.txt")));
         assertFalse(Files.readString(tempDir.resolve("auth-state.v2.json")).contains("setupCodeHash"));
+        assertTrue(Files.readString(tempDir.resolve("auth-state.v2.json")).contains("argon2PasswordHash"));
 
         MockHttpServletResponse response = new MockHttpServletResponse();
         AuthService.LoginResult result = AuthService.login(
@@ -105,7 +106,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void legacyMd5PasswordMigratesOnRawPasswordLogin() throws Exception {
+    void upstreamMd5PasswordRemainsCompatibleAndGainsPrivateVerifierOnLogin() throws Exception {
         Config legacy = ConfigUtil.copy(ConfigUtil.snapshot())
                 .setLogin(new Login().setUsername("legacy").setPassword(SecureUtil.md5("secret-pass")));
         ConfigUtil.sync(legacy);
@@ -116,7 +117,8 @@ class AuthServiceTest {
                 () -> AuthService.login("legacy", SecureUtil.md5("secret-pass"), null, null));
         AuthService.login("legacy", "secret-pass", null, null);
 
-        assertTrue(ConfigUtil.snapshot().getLogin().getPassword().startsWith("$argon2"));
+        assertEquals(SecureUtil.md5("secret-pass"), ConfigUtil.snapshot().getLogin().getPassword());
+        assertTrue(Files.readString(tempDir.resolve("auth-state.v2.json")).contains("argon2PasswordHash"));
     }
 
     @Test
@@ -154,7 +156,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void legacyTokenSurvivesArgonMigrationAndAuthStateReload() throws Exception {
+    void legacyTokenSurvivesCompatibleMd5LoginAndAuthStateReload() throws Exception {
         Config legacy = ConfigUtil.copy(ConfigUtil.snapshot())
                 .setLogin(new Login().setUsername("legacy").setPassword(SecureUtil.md5("secret-pass")))
                 .setMultiLoginForbidden(false);
@@ -163,7 +165,7 @@ class AuthServiceTest {
         String legacyToken = AuthUtil.getAuth(AuthUtil.getLogin());
 
         AuthService.login("legacy", "secret-pass", null, new MockHttpServletResponse());
-        assertTrue(ConfigUtil.snapshot().getLogin().getPassword().startsWith("$argon2"));
+        assertTrue(ConfigUtil.snapshot().getLogin().getPassword().matches("(?i)[0-9a-f]{32}"));
         AuthService.reload();
 
         MockHttpServletRequest migration = new MockHttpServletRequest();
@@ -176,7 +178,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void configUpdateEncodesRawPasswordBeforePersistence() {
+    void configUpdateKeepsAnUpstreamCompatibleDigestAndPrivateVerifier() throws Exception {
         Config configured = ConfigUtil.copy(ConfigUtil.snapshot())
                 .setLogin(new Login().setUsername("operator")
                         .setPassword(AuthService.encodePassword("old-password")));
@@ -190,12 +192,47 @@ class AuthServiceTest {
 
         String stored = ConfigUtil.snapshot().getLogin().getPassword();
         assertNotEquals("replacement-password", stored);
-        assertTrue(stored.startsWith("$argon2"));
+        assertTrue(stored.matches("(?i)[0-9a-f]{32}"));
+        assertTrue(Files.readString(tempDir.resolve("auth-state.v2.json")).contains("argon2PasswordHash"));
         MockHttpServletRequest oldSession = new MockHttpServletRequest();
         oldSession.setMethod("GET");
         oldSession.setCookies(sessionCookie(oldLogin));
         assertFalse(AuthService.validateRequest(oldSession));
         AuthService.login("operator", "replacement-password", null, null);
+    }
+
+    @Test
+    void oldLocalArgonConfigMigratesToAnUpstreamCompatibleDigestAfterLogin() throws Exception {
+        String oldLocalHash = AuthService.encodePassword("old-local-password");
+        Config configured = ConfigUtil.copy(ConfigUtil.snapshot())
+                .setLogin(new Login().setUsername("operator").setPassword(oldLocalHash));
+        ConfigUtil.sync(configured);
+        Files.deleteIfExists(tempDir.resolve("auth-state.v2.json"));
+        AuthService.reload();
+
+        AuthService.login("operator", "old-local-password", null, null);
+
+        assertEquals(SecureUtil.md5("old-local-password"), ConfigUtil.snapshot().getLogin().getPassword());
+        assertTrue(Files.readString(tempDir.resolve("auth-state.v2.json")).contains("argon2PasswordHash"));
+    }
+
+    @Test
+    void configUpdatePreservesMd5SubmittedByAnUpstreamCompatibleClient() throws Exception {
+        String oldHash = SecureUtil.md5("old-compatible-password");
+        String replacementHash = SecureUtil.md5("replacement-compatible-password");
+        Config configured = ConfigUtil.copy(ConfigUtil.snapshot())
+                .setLogin(new Login().setUsername("operator").setPassword(oldHash));
+        ConfigUtil.sync(configured);
+        AuthService.reload();
+        AuthService.login("operator", "old-compatible-password", null, null);
+
+        Config candidate = ConfigUtil.snapshot();
+        candidate.getLogin().setPassword(replacementHash);
+        new ConfigService().setConfig(candidate);
+
+        assertEquals(replacementHash, ConfigUtil.snapshot().getLogin().getPassword());
+        String state = Files.readString(tempDir.resolve("auth-state.v2.json"));
+        assertFalse(state.contains("argon2PasswordHash"));
     }
 
     @Test

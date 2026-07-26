@@ -1,6 +1,7 @@
 package ani.rss.config;
 
 import ani.rss.commons.MavenUtils;
+import ani.rss.commons.ProjectMetadata;
 import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.ExternalDocumentation;
 import io.swagger.v3.oas.models.OpenAPI;
@@ -20,7 +21,7 @@ public class SwaggerConfig {
 
         License license = new License()
                 .name("GPL-2.0")
-                .url("https://github.com/wushuo894/ani-rss/blob/master/LICENSE");
+                .url(ProjectMetadata.GITHUB_URL + "/blob/master/LICENSE");
 
         String version = MavenUtils.getVersion();
 

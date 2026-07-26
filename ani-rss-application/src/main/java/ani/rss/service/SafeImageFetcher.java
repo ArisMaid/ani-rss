@@ -42,6 +42,7 @@ public final class SafeImageFetcher {
     public static final int MAX_DIMENSION = 16_384;
     public static final long MAX_PIXELS = 100_000_000L;
     private static final Timeout TIMEOUT = Timeout.ofSeconds(10);
+    private static final String IMAGE_PRIVATE_ALLOWLIST = "ANI_RSS_IMAGE_PRIVATE_ALLOWLIST";
 
     private SafeImageFetcher() {
     }
@@ -332,11 +333,15 @@ public final class SafeImageFetcher {
     }
 
     private static Set<String> allowlist(Config config) {
-        if (config == null || StrUtil.isBlank(config.getImagePrivateAllowlist())) {
+        String configured = System.getProperty(IMAGE_PRIVATE_ALLOWLIST);
+        if (StrUtil.isBlank(configured)) {
+            configured = System.getenv(IMAGE_PRIVATE_ALLOWLIST);
+        }
+        if (StrUtil.isBlank(configured)) {
             return Set.of();
         }
         Set<String> result = new HashSet<>();
-        for (String value : config.getImagePrivateAllowlist().split("[,\\n]")) {
+        for (String value : configured.split("[,\\n]")) {
             if (StrUtil.isNotBlank(value)) {
                 result.add(normalizeHost(value.trim()));
             }

@@ -2,6 +2,11 @@ name: build
 
 on:
   workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,7 +22,7 @@ jobs:
         run: |
           bash ./package.sh
           version=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout -f pom.xml)
-          echo "version=v$version" >> $GITHUB_ENV
+          echo "version=v$version" >> "$GITHUB_ENV"
       - name: Release
         uses: softprops/action-gh-release@v3
         with:

@@ -211,9 +211,11 @@ public class AniController extends BaseController {
     @Auth
     @Operation(summary = "删除订阅")
     @PostMapping("/deleteAni")
-    public Result<Void> deleteAni(@RequestBody List<String> ids) {
+    public Result<Void> deleteAni(
+            @RequestParam(value = "deleteFiles", defaultValue = "true") Boolean deleteFiles,
+            @RequestBody List<String> ids) {
         Assert.notEmpty(ids, "未选择订阅");
-        subscriptionDeletionService.delete(ids, true);
+        subscriptionDeletionService.delete(ids, deleteFiles);
         return Result.success("删除订阅成功");
     }
 

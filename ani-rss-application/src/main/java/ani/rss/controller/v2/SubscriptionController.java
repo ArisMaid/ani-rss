@@ -35,12 +35,18 @@ public class SubscriptionController {
         if (request == null) {
             throw new IllegalArgumentException("subscription deletion request is required");
         }
-        return deletionService.delete(request.subscriptionIds(), true);
+        return deletionService.delete(request.subscriptionIds(), request.deleteFilesOrDefault());
     }
 
-    public record DeletionRequest(List<String> subscriptionIds) {
+    public record DeletionRequest(List<String> subscriptionIds, Boolean deleteFiles) {
         public DeletionRequest {
             subscriptionIds = subscriptionIds == null ? List.of() : List.copyOf(subscriptionIds);
+        }
+
+        public boolean deleteFilesOrDefault() {
+            // Preserve the direct-delete behavior for older clients that do
+            // not yet send the new explicit checkbox value.
+            return !Boolean.FALSE.equals(deleteFiles);
         }
     }
 }

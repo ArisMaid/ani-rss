@@ -49,8 +49,8 @@ export let setAni = (move, ani) => api.post(withQuery('api/setAni', {move}), ani
  */
 export let deleteAni = (deleteFiles, ids) => api.post(withQuery('api/deleteAni', {deleteFiles}), ids)
 
-export let deleteSubscriptions = (subscriptionIds) =>
-    api.post('api/v2/subscriptions/delete', {subscriptionIds})
+export let deleteSubscriptions = (subscriptionIds, deleteFiles = true) =>
+    api.post('api/v2/subscriptions/delete', {subscriptionIds, deleteFiles})
 
 export let listSubscriptionsV2 = () => api.get('api/v2/subscriptions')
 

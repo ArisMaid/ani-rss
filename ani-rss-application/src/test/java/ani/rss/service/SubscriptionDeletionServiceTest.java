@@ -109,14 +109,94 @@ class SubscriptionDeletionServiceTest {
     }
 
     @Test
-    void deletingSubscriptionOnlyDoesNotTouchFilesOrDownloader() {
+    void deletingSubscriptionWithoutFilesKeepsMediaButRemovesOwnedRemoteTasks() {
         SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), false);
+
+        assertTrue(Files.exists(ownedFile));
+        assertEquals(List.of("remote-task"), remoteTasks.deletedIds);
+        assertTrue(store.snapshot().isEmpty());
+        assertEquals(1, result.deletedRemoteTasks());
+        assertEquals(0, result.deletedFiles());
+    }
+
+    @Test
+    void completionStyleDeletionKeepsMediaAndRemoteTasks() {
+        SubscriptionDeletionService.DeletionResult result = service.deleteWithoutFiles(List.of("subscription"));
 
         assertTrue(Files.exists(ownedFile));
         assertTrue(remoteTasks.deletedIds.isEmpty());
         assertTrue(store.snapshot().isEmpty());
         assertEquals(0, result.deletedRemoteTasks());
         assertEquals(0, result.deletedFiles());
+    }
+
+    @Test
+    void staleOwnedFileDoesNotBlockSubscriptionDeletion() throws Exception {
+        Files.delete(ownedFile);
+
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), true);
+
+        assertTrue(store.snapshot().isEmpty());
+        assertEquals(List.of("remote-task"), remoteTasks.deletedIds);
+        assertEquals(0, result.deletedFiles());
+        assertEquals(1, result.skippedFiles());
+        assertEquals(OwnershipState.DELETED,
+                repository.find("ownership").orElseThrow().state());
+    }
+
+    @Test
+    void sharedOwnedFileIsRetainedWhenAnotherSubscriptionStillOwnsIt() {
+        store.add(subscription("other-subscription", "Other"));
+        long now = System.currentTimeMillis();
+        repository.createPending(new DownloadOwnership(
+                "other-ownership", "qBittorrent", "other-task", "other-hash", "other-subscription",
+                1, "1.0", ownedFile.getParent().toString(), OwnershipState.ACTIVE, now, now));
+        repository.replaceFiles("other-ownership", List.of(
+                new OwnedFile("other-ownership", "episode.mkv", "FILE", 7L)));
+        remoteTasks.tasks.add(task("other-task", "other-hash"));
+
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), true);
+
+        assertTrue(Files.exists(ownedFile));
+        assertEquals(List.of("remote-task"), remoteTasks.deletedIds);
+        assertEquals(List.of("other-subscription"), store.snapshot().stream().map(Ani::getId).toList());
+        assertEquals(0, result.deletedFiles());
+        assertEquals(1, result.skippedFiles());
+        assertEquals(OwnershipState.DELETED,
+                repository.find("ownership").orElseThrow().state());
+        assertEquals(OwnershipState.ACTIVE,
+                repository.find("other-ownership").orElseThrow().state());
+    }
+
+    @Test
+    void pathTraversalInManifestDoesNotEscapeTheOwnedRoot() throws Exception {
+        Path outside = tempDir.resolve("outside.mkv");
+        Files.writeString(outside, "outside");
+        repository.replaceFiles("ownership", List.of(
+                new OwnedFile("ownership", "../outside.mkv", "FILE", 7L)));
+
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), true);
+
+        assertTrue(Files.exists(outside));
+        assertTrue(Files.exists(ownedFile));
+        assertTrue(store.snapshot().isEmpty());
+        assertEquals(List.of("remote-task"), remoteTasks.deletedIds);
+        assertEquals(0, result.deletedFiles());
+        assertEquals(1, result.skippedFiles());
+    }
+
+    @Test
+    void changedOwnedFileSizeIsRetainedInsteadOfDeleted() throws Exception {
+        Files.writeString(ownedFile, "changed-content");
+
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), true);
+
+        assertTrue(Files.exists(ownedFile));
+        assertEquals("changed-content", read(ownedFile));
+        assertTrue(store.snapshot().isEmpty());
+        assertEquals(List.of("remote-task"), remoteTasks.deletedIds);
+        assertEquals(0, result.deletedFiles());
+        assertEquals(1, result.skippedFiles());
     }
 
     private static Ani subscription(String id, String title) {
@@ -146,6 +226,10 @@ class SubscriptionDeletionServiceTest {
 
         private FakeSubscriptionStore(List<Ani> initial) {
             initial.forEach(ani -> values.add(copy(ani)));
+        }
+
+        private void add(Ani ani) {
+            values.add(copy(ani));
         }
 
         @Override

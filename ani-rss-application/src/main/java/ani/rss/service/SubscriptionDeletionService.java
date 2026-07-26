@@ -24,7 +24,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-/** Deletes subscriptions and their verified owned content in one confirmed operation. */
+/** Deletes subscriptions and only the content whose ownership can be proved. */
 @Service
 public final class SubscriptionDeletionService {
     private final OwnershipService ownershipService;
@@ -60,10 +60,17 @@ public final class SubscriptionDeletionService {
 
     /** Removes subscription metadata only; owned media and remote tasks stay intact. */
     public DeletionResult deleteWithoutFiles(Collection<String> subscriptionIds) {
-        return delete(subscriptionIds, false);
+        return delete(subscriptionIds, false, false);
     }
 
     public DeletionResult delete(Collection<String> subscriptionIds, boolean deleteFiles) {
+        return delete(subscriptionIds, deleteFiles, true);
+    }
+
+    private DeletionResult delete(
+            Collection<String> subscriptionIds,
+            boolean deleteFiles,
+            boolean deleteRemoteTasks) {
         synchronized (deletionLock) {
             LinkedHashSet<String> ids = normalizedIds(subscriptionIds);
             List<Ani> current = subscriptionStore.snapshot();
@@ -78,23 +85,28 @@ public final class SubscriptionDeletionService {
                     .flatMap(id -> ownershipService.listBySubscription(id).stream())
                     .filter(SubscriptionDeletionService::isActive)
                     .toList();
-            List<OwnershipService.VerifiedOwnedFile> files = List.of();
+            OwnershipService.FileDeletionPreparation fileDeletion =
+                    new OwnershipService.FileDeletionPreparation(List.of(), 0);
             List<TorrentsInfo> ownedTasks = List.of();
-            if (deleteFiles) {
+            if (deleteRemoteTasks) {
                 for (DownloadOwnership ownership : ownerships) {
                     if (!remoteTasks.supports(ownership.downloaderType())) {
                         throw new IllegalStateException(
                                 "active downloader cannot safely remove ownership " + ownership.ownershipId());
                     }
                 }
-                files = ownershipService.prepareSubscriptionFileDeletion(ids);
                 ownedTasks = matchOwnedTasks(remoteTasks.list(), ownerships);
+            }
+            if (deleteFiles) {
+                fileDeletion = ownershipService.prepareSubscriptionFileDeletionBestEffort(ids);
             }
 
             for (TorrentsInfo task : ownedTasks) {
                 remoteTasks.deleteTaskOnly(task);
             }
-            int deletedFiles = deleteFiles ? ownershipService.deletePreparedFiles(files) : 0;
+            OwnershipService.FileDeletionOutcome fileOutcome = deleteFiles
+                    ? ownershipService.deletePreparedFilesBestEffort(fileDeletion.files())
+                    : new OwnershipService.FileDeletionOutcome(0, 0);
             // From this point onward the owned content is gone. Mark it before
             // persisting the subscription list so a persistence failure cannot
             // make the recovery worker requeue deliberately deleted media.
@@ -108,7 +120,11 @@ public final class SubscriptionDeletionService {
                     .filter(ani -> !ids.contains(ani.getId()))
                     .toList();
             subscriptionStore.commit(candidate);
-            return new DeletionResult(ids.size(), ownedTasks.size(), deletedFiles);
+            return new DeletionResult(
+                    ids.size(),
+                    ownedTasks.size(),
+                    fileOutcome.deletedFiles(),
+                    fileDeletion.skippedFiles() + fileOutcome.skippedFiles());
         }
     }
 
@@ -192,7 +208,8 @@ public final class SubscriptionDeletionService {
     public record DeletionResult(
             int deletedSubscriptions,
             int deletedRemoteTasks,
-            int deletedFiles) {
+            int deletedFiles,
+            int skippedFiles) {
     }
 
     interface SubscriptionStore {

@@ -469,6 +469,58 @@ public class OwnershipService {
         return List.copyOf(files.values());
     }
 
+    /**
+     * Prepares only the files that can still be proved safe to delete. A stale
+     * ownership manifest must not keep a user from deleting its subscription,
+     * and it must never authorize deletion of an unverified path.
+     */
+    public FileDeletionPreparation prepareSubscriptionFileDeletionBestEffort(
+            Collection<String> subscriptionIds) {
+        LinkedHashSet<String> ids = normalizedSubscriptionIds(subscriptionIds);
+        List<VerifiedOwnedFile> candidates = new ArrayList<>();
+        int skippedFiles = 0;
+
+        for (String subscriptionId : ids) {
+            for (DownloadOwnership ownership : activeOwnerships(subscriptionId)) {
+                List<OwnedFile> manifest = repository.listFiles(ownership.ownershipId());
+                if (manifest.isEmpty()) {
+                    skippedFiles++;
+                    continue;
+                }
+
+                Path root;
+                try {
+                    root = ownershipRoot(ownership);
+                } catch (Exception ignored) {
+                    skippedFiles += manifest.size();
+                    continue;
+                }
+
+                for (OwnedFile ownedFile : manifest) {
+                    try {
+                        candidates.add(verifiedOwnedFile(ownership, root, ownedFile));
+                    } catch (Exception ignored) {
+                        skippedFiles++;
+                    }
+                }
+            }
+        }
+
+        Set<Path> conflictedPaths = conflictingOwnershipPaths(candidates);
+        Map<Path, VerifiedOwnedFile> selected = new LinkedHashMap<>();
+        for (VerifiedOwnedFile candidate : candidates) {
+            if (conflictedPaths.contains(candidate.path())) {
+                skippedFiles++;
+                continue;
+            }
+            if (selected.putIfAbsent(candidate.path(), candidate) != null) {
+                // Repeated manifest entries do not grant a second deletion.
+                skippedFiles++;
+            }
+        }
+        return new FileDeletionPreparation(List.copyOf(selected.values()), skippedFiles);
+    }
+
     /** Deletes only file paths produced by {@link #prepareSubscriptionFileDeletion(Collection)}. */
     public int deletePreparedFiles(Collection<VerifiedOwnedFile> files) {
         if (files == null || files.isEmpty()) {
@@ -487,6 +539,37 @@ public class OwnershipService {
         } catch (Exception failure) {
             throw new IllegalStateException("delete verified owned files failed", failure);
         }
+    }
+
+    /**
+     * Deletes each prevalidated file independently. If a file changes between
+     * preparation and deletion, that file is retained and the caller receives
+     * an explicit skipped count instead of losing the whole subscription
+     * deletion to a stale manifest entry.
+     */
+    public FileDeletionOutcome deletePreparedFilesBestEffort(Collection<VerifiedOwnedFile> files) {
+        if (files == null || files.isEmpty()) {
+            return new FileDeletionOutcome(0, 0);
+        }
+
+        List<VerifiedOwnedFile> selected = List.copyOf(files);
+        Set<Path> conflictedPaths = conflictingOwnershipPaths(selected);
+        int deletedFiles = 0;
+        int skippedFiles = 0;
+        for (VerifiedOwnedFile file : selected) {
+            if (conflictedPaths.contains(file.path())) {
+                skippedFiles++;
+                continue;
+            }
+            try {
+                validatePreparedFile(file);
+                Files.delete(file.path());
+                deletedFiles++;
+            } catch (Exception ignored) {
+                skippedFiles++;
+            }
+        }
+        return new FileDeletionOutcome(deletedFiles, skippedFiles);
     }
 
     public void markDeleted(Collection<DownloadOwnership> ownerships) {
@@ -571,6 +654,69 @@ public class OwnershipService {
                 .filter(ownership -> ownership.state() == OwnershipState.ACTIVE ||
                         ownership.state() == OwnershipState.LEGACY_ADOPTED)
                 .toList();
+    }
+
+    private static LinkedHashSet<String> normalizedSubscriptionIds(Collection<String> subscriptionIds) {
+        LinkedHashSet<String> ids = new LinkedHashSet<>();
+        if (subscriptionIds != null) {
+            subscriptionIds.stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(id -> !id.isEmpty())
+                    .forEach(ids::add);
+        }
+        if (ids.isEmpty()) {
+            throw new IllegalArgumentException("at least one subscription id is required");
+        }
+        return ids;
+    }
+
+    private static VerifiedOwnedFile verifiedOwnedFile(
+            DownloadOwnership ownership,
+            Path root,
+            OwnedFile ownedFile) throws java.io.IOException {
+        if (ownedFile.size() == null) {
+            throw new IllegalStateException("owned file has no verified size");
+        }
+        Path path = safeOwnedPath(root, ownedFile);
+        PathPolicy.requireNoSymbolicLinks(root, path);
+        Path real = PathPolicy.realPathWithin(root, path);
+        BasicFileAttributes attributes = readRegularFile(real);
+        if (attributes.size() != ownedFile.size()) {
+            throw new IllegalStateException("owned file size does not match manifest");
+        }
+        return new VerifiedOwnedFile(ownership, ownedFile, real,
+                attributes.size(), attributes.lastModifiedTime().toMillis());
+    }
+
+    private Set<Path> conflictingOwnershipPaths(Collection<VerifiedOwnedFile> candidates) {
+        Map<Path, Set<String>> owners = new HashMap<>();
+        for (DownloadOwnership ownership : repository.listAll()) {
+            if (ownership.state() != OwnershipState.ACTIVE && ownership.state() != OwnershipState.LEGACY_ADOPTED) {
+                continue;
+            }
+            try {
+                Path root = Path.of(ownership.saveRoot()).toAbsolutePath().normalize();
+                for (OwnedFile file : repository.listFiles(ownership.ownershipId())) {
+                    Path path = PathPolicy.resolveWithin(root, file.relativePath());
+                    owners.computeIfAbsent(path, ignored -> new LinkedHashSet<>())
+                            .add(ownership.ownershipId());
+                }
+            } catch (Exception ignored) {
+                // Invalid unrelated ownership cannot authorize deletion.
+            }
+        }
+        for (VerifiedOwnedFile candidate : candidates) {
+            owners.computeIfAbsent(candidate.path(), ignored -> new LinkedHashSet<>())
+                    .add(candidate.ownership().ownershipId());
+        }
+        Set<Path> result = new HashSet<>();
+        for (Map.Entry<Path, Set<String>> entry : owners.entrySet()) {
+            if (entry.getValue().size() > 1) {
+                result.add(entry.getKey());
+            }
+        }
+        return result;
     }
 
     private List<OwnedFile> requireManifest(DownloadOwnership ownership) {
@@ -772,6 +918,15 @@ public class OwnershipService {
             Path path,
             long size,
             long lastModified) {
+    }
+
+    public record FileDeletionPreparation(List<VerifiedOwnedFile> files, int skippedFiles) {
+        public FileDeletionPreparation {
+            files = List.copyOf(files == null ? List.of() : files);
+        }
+    }
+
+    public record FileDeletionOutcome(int deletedFiles, int skippedFiles) {
     }
 
     public record MediaVerification(boolean manifestAvailable, List<OwnedFile> missingFiles) {

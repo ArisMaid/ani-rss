@@ -9,6 +9,7 @@ import ani.rss.persistence.PublicScoreCacheRepository;
 import ani.rss.util.basic.HttpReq;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.SecureUtil;
+import cn.hutool.http.HttpResponse;
 import jakarta.annotation.PreDestroy;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -17,6 +18,9 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.springframework.stereotype.Service;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -49,6 +53,9 @@ import java.util.regex.Pattern;
 @Service
 public class PublicScoreService {
     private static final int REQUEST_TIMEOUT_MILLIS = 4_000;
+    /** Mikan emits its canonical Bangumi link near the page header. */
+    static final int MIKAN_MAPPING_EARLY_SCAN_BYTES = 32 * 1024;
+    private static final int MIKAN_MAPPING_SCAN_BUFFER_BYTES = 4 * 1024;
     static final long BGM_BATCH_TIMEOUT_MILLIS = 12_000;
     static final long MIKAN_MAPPING_BATCH_TIMEOUT_MILLIS = 12_000;
     static final int MAX_CONCURRENT_REQUESTS = 12;
@@ -995,14 +1002,42 @@ public class PublicScoreService {
         throw new IllegalStateException("Unable to load public Bangumi subject", firstFailure);
     }
 
-    private static String loadMikanBgmId(String mikanUrl) throws Exception {
-        Document document = HttpReq.get(mikanUrl)
+    /**
+     * Extracts the authoritative Bangumi link from a Mikan detail page.
+     *
+     * <p>Episode tables can make these pages hundreds of KiB, while the
+     * canonical subject link is normally emitted in the page header. Reading
+     * only the leading document avoids holding a mapper worker until every
+     * episode row has arrived. A page that puts the link later still falls
+     * back to parsing the complete response, preserving the old behaviour.</p>
+     */
+    static String loadMikanBgmId(String mikanUrl) throws Exception {
+        try (HttpResponse response = HttpReq.get(mikanUrl)
                 .timeout(REQUEST_TIMEOUT_MILLIS)
-                .thenFunction(res -> {
-                    HttpReq.assertStatus(res);
-                    return Jsoup.parse(res.body(), mikanUrl);
-                });
+                .executeAsync();
+             InputStream input = response.bodyStream()) {
+            HttpReq.assertStatus(response);
+            ByteArrayOutputStream document = new ByteArrayOutputStream(MIKAN_MAPPING_EARLY_SCAN_BYTES);
+            byte[] buffer = new byte[MIKAN_MAPPING_SCAN_BUFFER_BYTES];
+            while (document.size() < MIKAN_MAPPING_EARLY_SCAN_BYTES) {
+                int limit = Math.min(buffer.length, MIKAN_MAPPING_EARLY_SCAN_BYTES - document.size());
+                int read = input.read(buffer, 0, limit);
+                if (read < 0) {
+                    break;
+                }
+                document.write(buffer, 0, read);
+                String bgmId = extractMikanBgmId(document.toString(StandardCharsets.UTF_8), mikanUrl);
+                if (StrUtil.isNotBlank(bgmId)) {
+                    return bgmId;
+                }
+            }
+            input.transferTo(document);
+            return extractMikanBgmId(document.toString(StandardCharsets.UTF_8), mikanUrl);
+        }
+    }
 
+    private static String extractMikanBgmId(String html, String mikanUrl) {
+        Document document = Jsoup.parse(html, mikanUrl);
         for (Element link : document.select("a[href]")) {
             String subjectId = extractBgmSubjectId(link.absUrl("href"));
             if (StrUtil.isNotBlank(subjectId)) {

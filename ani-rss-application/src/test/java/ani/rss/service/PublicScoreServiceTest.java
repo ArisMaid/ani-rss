@@ -3,8 +3,13 @@ package ani.rss.service;
 import ani.rss.entity.BgmInfo;
 import ani.rss.entity.MikanBgm;
 import ani.rss.entity.MikanInfo;
+import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
@@ -167,6 +172,67 @@ class PublicScoreServiceTest {
         assertEquals("", PublicScoreService.extractMikanId("https://mikanani.me/Home/Other/3901"));
         assertEquals("", PublicScoreService.extractBgmSubjectId("https://example.com/subject/123"));
         assertTrue(PublicScoreService.extractBgmSubjectId("123").equals("123"));
+    }
+
+    @Test
+    void resolvesLeadingMikanBangumiLinkWithoutWaitingForTheEpisodeTable() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        CountDownLatch leadingDocumentWritten = new CountDownLatch(1);
+        server.createContext("/detail", exchange -> {
+            byte[] leading = ("<html><body><p>header</p>"
+                    + "<a href=\"https://bgm.tv/subject/123456\">Bangumi</a>")
+                    .getBytes(StandardCharsets.UTF_8);
+            try (OutputStream output = exchange.getResponseBody()) {
+                exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+                exchange.sendResponseHeaders(200, 0);
+                output.write(leading);
+                output.flush();
+                leadingDocumentWritten.countDown();
+                Thread.sleep(1_500);
+                output.write("<div>large episode table</div></body></html>".getBytes(StandardCharsets.UTF_8));
+            } catch (IOException ignored) {
+                // The optimized reader intentionally closes the body once it
+                // has found the canonical mapping.
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        server.start();
+        try {
+            long startedAt = System.nanoTime();
+
+            String bgmId = PublicScoreService.loadMikanBgmId(
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/detail");
+
+            assertEquals("123456", bgmId);
+            assertTrue(leadingDocumentWritten.await(1, TimeUnit.SECONDS));
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAt) < 1_000,
+                    "the mapping must not wait for a slow episode table");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void fallsBackToTheFullMikanDocumentWhenTheBangumiLinkIsNotNearTheHeader() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/detail", exchange -> {
+            String html = "<html><body>" + "x".repeat(PublicScoreService.MIKAN_MAPPING_EARLY_SCAN_BYTES)
+                    + "<a href=\"https://bgm.tv/subject/654321\">Bangumi</a></body></html>";
+            byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write(bytes);
+            }
+        });
+        server.start();
+        try {
+            assertEquals("654321", PublicScoreService.loadMikanBgmId(
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/detail"));
+        } finally {
+            server.stop(0);
+        }
     }
 
     @Test

@@ -28,11 +28,11 @@ class MavenUtilsTest {
                   </parent>
                   <groupId>ani.rss</groupId>
                   <artifactId>ani-rss</artifactId>
-                  <version>3.2.1.48</version>
+                  <version>3.2.2.49</version>
                 </project>
                 """, StandardCharsets.UTF_8);
 
-        assertEquals(Optional.of("3.2.1.48"), MavenUtils.readProjectVersion(pom.toFile()));
+        assertEquals(Optional.of("3.2.2.49"), MavenUtils.readProjectVersion(pom.toFile()));
     }
 
     @Test

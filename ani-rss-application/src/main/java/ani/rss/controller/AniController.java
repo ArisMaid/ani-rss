@@ -354,16 +354,7 @@ public class AniController extends BaseController {
     @Operation(summary = "刷新全部订阅")
     @PostMapping("/refreshAll")
     public Result<Void> refreshAll() {
-        RssTask.syncLock();
-        // 未传Body, 刷新所有订阅
-        ThreadUtil.execute(() -> {
-            try {
-                RssTask.syncDownload();
-            } catch (Exception e) {
-                String message = ExceptionUtils.getMessage(e);
-                log.error(message, e);
-            }
-        });
+        RssTask.submitDownload(RssTask.ANI_LIST);
         return Result.success("已开始刷新RSS");
     }
 
@@ -378,15 +369,7 @@ public class AniController extends BaseController {
             return Result.error("修改失败");
         }
         Ani downloadAni = first.get();
-        RssTask.syncLock();
-        ThreadUtil.execute(() -> {
-            try {
-                RssTask.syncDownload(List.of(downloadAni));
-            } catch (Exception e) {
-                String message = ExceptionUtils.getMessage(e);
-                log.error(message, e);
-            }
-        });
+        RssTask.submitDownload(List.of(downloadAni));
         return Result.success("已开始刷新RSS {}", downloadAni.getTitle());
     }
 

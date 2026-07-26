@@ -117,7 +117,7 @@ public class ConfigController extends BaseController {
         customJs = StrUtil.blankToDefault(customJs, "// empty js");
 
         response.setContentType(ContentType.JAVASCRIPT);
-        response.setContentLength(customJs.length());
+        response.setContentLength(customJs.getBytes(StandardCharsets.UTF_8).length);
         @Cleanup
         OutputStream outputStream = response.getOutputStream();
         IoUtil.writeUtf8(outputStream, true, customJs);
@@ -133,7 +133,7 @@ public class ConfigController extends BaseController {
         customCss = StrUtil.blankToDefault(customCss, "/* empty css */");
 
         response.setContentType(ContentType.TEXT_CSS);
-        response.setContentLength(customCss.length());
+        response.setContentLength(customCss.getBytes(StandardCharsets.UTF_8).length);
         @Cleanup
         OutputStream outputStream = response.getOutputStream();
         IoUtil.writeUtf8(outputStream, true, customCss);

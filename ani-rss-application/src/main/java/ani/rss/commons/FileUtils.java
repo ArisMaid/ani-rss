@@ -120,12 +120,7 @@ public class FileUtils {
     }
 
     public static String normalize(String path) {
-        path = path.trim();
-        String s = FileUtil.normalize(path);
-        while (s.endsWith("/")) {
-            s = s.substring(0, s.length() - 1);
-        }
-        return s;
+        return PathPolicy.normalize(path);
     }
 
     /**

@@ -12,6 +12,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.Cleanup;
 
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 public class BaseController {
@@ -68,7 +69,7 @@ public class BaseController {
 
             response.setStatus(status);
             response.setContentType(ContentType.TEXT_HTML);
-            response.setContentLength(html.length());
+            response.setContentLength(html.getBytes(StandardCharsets.UTF_8).length);
 
             @Cleanup
             OutputStream outputStream = response.getOutputStream();

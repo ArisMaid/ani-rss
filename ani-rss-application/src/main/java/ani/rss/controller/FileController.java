@@ -2,6 +2,7 @@ package ani.rss.controller;
 
 import ani.rss.annotation.Auth;
 import ani.rss.commons.ExceptionUtils;
+import ani.rss.commons.ByteRange;
 import ani.rss.commons.FileUtils;
 import ani.rss.entity.Global;
 import ani.rss.entity.web.Header;
@@ -81,10 +82,7 @@ public class FileController extends BaseController {
             }
         }
 
-        boolean hasRange = false;
         long fileLength = file.length();
-        long start = 0;
-        long end = fileLength - 1;
 
         String contentType = getContentType(file.getName());
 
@@ -93,17 +91,10 @@ public class FileController extends BaseController {
             response.setContentType(contentType);
             response.setHeader(Header.ACCEPT_RANGES, "bytes");
             String rangeHeader = request.getHeader("Range");
-            if (StrUtil.isNotBlank(rangeHeader) && rangeHeader.startsWith("bytes=")) {
-                String[] range = rangeHeader.substring(6).split("-");
-                if (range.length > 0) {
-                    start = Long.parseLong(range[0]);
-                }
-                if (range.length > 1) {
-                    end = Long.parseLong(range[1]);
-                }
+            if (StrUtil.isNotBlank(rangeHeader)) {
+                writeRange(file, rangeHeader, response);
+                return;
             }
-            response.setHeader(Header.CONTENT_RANGE, "bytes " + start + "-" + end + "/" + fileLength);
-            hasRange = true;
         } else {
             long maxAge = 0;
 
@@ -118,28 +109,42 @@ public class FileController extends BaseController {
         }
 
         try {
-            if (hasRange) {
-                long length = end - start;
-                response.setStatus(206);
-                @Cleanup
-                OutputStream out = response.getOutputStream();
-                @Cleanup
-                RandomAccessFile randomAccessFile = new RandomAccessFile(file, "r");
-                randomAccessFile.seek(start);
-                @Cleanup
-                FileChannel channel = randomAccessFile.getChannel();
-                @Cleanup
-                InputStream inputStream = Channels.newInputStream(channel);
-                IoUtil.copy(inputStream, out, 40960, length, null);
-            } else {
-                response.setContentLengthLong(file.length());
+            response.setStatus(HttpServletResponse.SC_OK);
+            response.setContentLengthLong(file.length());
 
-                @Cleanup
-                InputStream inputStream = FileUtil.getInputStream(file);
-                @Cleanup
-                OutputStream outputStream = response.getOutputStream();
-                IoUtil.copy(inputStream, outputStream);
-            }
+            @Cleanup
+            InputStream inputStream = FileUtil.getInputStream(file);
+            @Cleanup
+            OutputStream outputStream = response.getOutputStream();
+            IoUtil.copy(inputStream, outputStream);
+        } catch (Exception e) {
+            String message = ExceptionUtils.getMessage(e);
+            log.debug(message, e);
+        }
+    }
+
+    private void writeRange(File file, String rangeHeader, HttpServletResponse response) {
+        try {
+            ByteRange range = ByteRange.parseSingle(rangeHeader, file.length());
+            response.setStatus(HttpServletResponse.SC_PARTIAL_CONTENT);
+            response.setHeader(Header.CONTENT_RANGE, range.contentRange());
+            response.setContentLengthLong(range.length());
+
+            @Cleanup
+            RandomAccessFile randomAccessFile = new RandomAccessFile(file, "r");
+            randomAccessFile.seek(range.start());
+            @Cleanup
+            FileChannel channel = randomAccessFile.getChannel();
+            @Cleanup
+            InputStream inputStream = Channels.newInputStream(channel);
+            @Cleanup
+            OutputStream outputStream = response.getOutputStream();
+            IoUtil.copy(inputStream, outputStream, 40960, range.length(), null);
+        } catch (ByteRange.MalformedRangeException | ByteRange.UnsatisfiedRangeException e) {
+            response.resetBuffer();
+            response.setStatus(HttpServletResponse.SC_REQUESTED_RANGE_NOT_SATISFIABLE);
+            response.setHeader(Header.CONTENT_RANGE, "bytes */" + file.length());
+            response.setContentLengthLong(0);
         } catch (Exception e) {
             String message = ExceptionUtils.getMessage(e);
             log.debug(message, e);

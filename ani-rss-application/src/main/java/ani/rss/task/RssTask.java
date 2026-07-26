@@ -13,10 +13,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Consumer;
 
 /**
  * RSS
@@ -33,29 +31,33 @@ public class RssTask implements BaseTask {
     }
 
     public static void syncDownload(List<Ani> aniList) {
-        syncLock(lock -> lock.set(true));
+        acquireDownloadLock();
+        syncDownloadWithLock(aniList);
+    }
+
+    public static void submitDownload(List<Ani> aniList) {
+        acquireDownloadLock();
+        ThreadUtil.execute(() -> syncDownloadWithLock(aniList));
+    }
+
+    static void acquireDownloadLock() {
+        if (!DOWNLOAD_LOCK.compareAndSet(false, true)) {
+            throw new IllegalStateException("存在未完成任务，请等待...");
+        }
+    }
+
+    static void releaseDownloadLock() {
+        DOWNLOAD_LOCK.set(false);
+    }
+
+    private static void syncDownloadWithLock(List<Ani> aniList) {
         try {
             download(aniList);
         } catch (Exception e) {
             String message = ExceptionUtils.getMessage(e);
             log.error(message, e);
         } finally {
-            DOWNLOAD_LOCK.set(false);
-        }
-    }
-
-    public static void syncLock() {
-        syncLock(null);
-    }
-
-    public static void syncLock(Consumer<AtomicBoolean> consumer) {
-        synchronized (DOWNLOAD_LOCK) {
-            if (DOWNLOAD_LOCK.get()) {
-                throw new IllegalStateException("存在未完成任务，请等待...");
-            }
-            if (Objects.nonNull(consumer)) {
-                consumer.accept(DOWNLOAD_LOCK);
-            }
+            releaseDownloadLock();
         }
     }
 

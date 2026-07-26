@@ -1,6 +1,7 @@
 package ani.rss.util.other;
 
 import ani.rss.commons.FileUtils;
+import ani.rss.commons.AtomicFileWriter;
 import ani.rss.commons.GsonStatic;
 import ani.rss.entity.*;
 import ani.rss.entity.dto.RssToAniDTO;
@@ -105,14 +106,12 @@ public class AniUtil {
         log.debug("保存订阅 {}", configFile);
         try {
             String json = GsonStatic.toJson(ANI_LIST);
-            File temp = new File(configFile + ".temp");
-            FileUtil.del(temp);
-            FileUtil.writeUtf8String(json, temp);
-            FileUtils.move(temp.toPath(), configFile.toPath());
+            AtomicFileWriter.writeUtf8(configFile.toPath(), json);
             log.debug("保存成功 {}", configFile);
         } catch (Exception e) {
             log.error("保存失败 {}", configFile);
             log.error(e.getMessage(), e);
+            throw new IllegalStateException("保存订阅失败", e);
         }
     }
 

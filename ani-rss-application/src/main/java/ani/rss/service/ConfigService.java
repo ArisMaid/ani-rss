@@ -11,6 +11,7 @@ import ani.rss.entity.web.Result;
 import ani.rss.entity.web.ResultCode;
 import ani.rss.start.BaseStart;
 import ani.rss.util.basic.HttpReq;
+import ani.rss.util.basic.LogUtil;
 import ani.rss.util.other.ConfigUtil;
 import ani.rss.util.other.TorrentUtil;
 import cn.hutool.core.bean.BeanUtil;
@@ -68,7 +69,9 @@ public class ConfigService {
 
     public void setConfig(Config newConfig) {
         Config config = ConfigUtil.CONFIG;
-        Login login = config.getLogin();
+        Config previousConfig = ConfigUtil.copy(config);
+        Config candidate = ConfigUtil.copy(config);
+        Login login = previousConfig.getLogin();
         String username = login.getUsername();
         String password = login.getPassword();
         Integer renameSleepSeconds = config.getRenameSleepSeconds();
@@ -84,53 +87,54 @@ public class ConfigService {
                 .create()
                 .setIgnoreNullValue(true);
 
-        BeanUtil.copyProperties(
-                newConfig,
-                config,
-                copyOptions
-        );
+        BeanUtil.copyProperties(newConfig, candidate, copyOptions);
 
-        String loginPassword = config.getLogin().getPassword();
+        String loginPassword = candidate.getLogin().getPassword();
         // 密码未发生修改
         if (StrUtil.isBlank(loginPassword)) {
-            config.getLogin().setPassword(password);
+            candidate.getLogin().setPassword(password);
         }
-        String loginUsername = config.getLogin().getUsername();
+        String loginUsername = candidate.getLogin().getUsername();
         if (StrUtil.isBlank(loginUsername)) {
-            config.getLogin().setUsername(username);
+            candidate.getLogin().setUsername(username);
         }
 
-        Boolean proxy = config.getProxy();
+        Boolean proxy = candidate.getProxy();
         if (proxy) {
-            String proxyHost = config.getProxyHost();
-            Integer proxyPort = config.getProxyPort();
+            String proxyHost = candidate.getProxyHost();
+            Integer proxyPort = candidate.getProxyPort();
             if (StrUtil.isBlank(proxyHost) || Objects.isNull(proxyPort)) {
                 throw new IllegalArgumentException("代理参数不完整");
             }
         }
 
-        ConfigUtil.sync();
-        Integer newRenameSleepSeconds = config.getRenameSleepSeconds();
-        Integer newSleep = config.getRssSleepMinutes();
-        Boolean newAutoStart = config.getAutoStart();
+        ConfigUtil.sync(candidate);
+        BeanUtil.copyProperties(candidate, config);
+        LogUtil.loadLogback();
+        Integer newRenameSleepSeconds = candidate.getRenameSleepSeconds();
+        Integer newSleep = candidate.getRssSleepMinutes();
+        Boolean newAutoStart = candidate.getAutoStart();
 
-        // 时间间隔发生改变，重启任务
-        if (
-                !Objects.equals(newSleep, sleep) ||
-                        !Objects.equals(newRenameSleepSeconds, renameSleepSeconds)
-        ) {
-            taskService.restart();
-        }
-        // 下载工具发生改变
-        if (!download.equals(config.getDownloadToolType())) {
-            TorrentUtil.loadDownloadTool();
-        }
-        // 开机自启发生改变
-        if (!newAutoStart.equals(autoStart)) {
-            if (BaseStart.isSupported()) {
+        try {
+            // 时间间隔发生改变，重启任务
+            if (!Objects.equals(newSleep, sleep) ||
+                    !Objects.equals(newRenameSleepSeconds, renameSleepSeconds)) {
+                taskService.restart();
+            }
+            // 下载工具发生改变
+            if (!download.equals(candidate.getDownloadToolType())) {
+                TorrentUtil.loadDownloadTool();
+            }
+            // 开机自启发生改变
+            if (!newAutoStart.equals(autoStart) && BaseStart.isSupported()) {
                 BaseStart instance = BaseStart.getInstance();
                 instance.sync();
             }
+        } catch (Exception e) {
+            BeanUtil.copyProperties(previousConfig, config);
+            ConfigUtil.sync(previousConfig);
+            LogUtil.loadLogback();
+            throw e;
         }
     }
 

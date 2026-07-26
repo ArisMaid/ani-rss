@@ -1,6 +1,7 @@
 package ani.rss.util.other;
 
 import ani.rss.commons.FileUtils;
+import ani.rss.commons.AtomicFileWriter;
 import ani.rss.commons.GsonStatic;
 import ani.rss.commons.URLUtils;
 import ani.rss.entity.Config;
@@ -288,21 +289,27 @@ public class ConfigUtil {
      * 将设置保存到磁盘
      */
     public static synchronized void sync() {
+        sync(CONFIG);
+        LogUtil.loadLogback();
+    }
+
+    public static synchronized void sync(Config config) {
         File configFile = getConfigFile();
         log.debug("保存配置 {}", configFile);
         try {
-            ConfigUtil.format(CONFIG);
-            String json = GsonStatic.toJson(CONFIG);
-            File temp = new File(configFile + ".temp");
-            FileUtil.del(temp);
-            FileUtil.writeUtf8String(json, temp);
-            FileUtils.move(temp.toPath(), configFile.toPath());
-            LogUtil.loadLogback();
+            ConfigUtil.format(config);
+            String json = GsonStatic.toJson(config);
+            AtomicFileWriter.writeUtf8(configFile.toPath(), json);
             log.debug("保存成功 {}", configFile);
         } catch (Exception e) {
             log.error("保存失败 {}", configFile);
             log.error(e.getMessage(), e);
+            throw new IllegalStateException("保存配置失败", e);
         }
+    }
+
+    public static Config copy(Config config) {
+        return GsonStatic.fromJson(GsonStatic.toJson(config), Config.class);
     }
 
     /**

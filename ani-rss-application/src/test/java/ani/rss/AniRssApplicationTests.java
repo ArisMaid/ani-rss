@@ -1,8 +1,5 @@
 package ani.rss;
 
-import ani.rss.entity.BgmInfo;
-import ani.rss.util.other.BgmUtil;
-import ani.rss.util.other.ConfigUtil;
 import ani.rss.util.other.TemplateUtil;
 import org.commonmark.node.Node;
 import org.commonmark.parser.Parser;
@@ -12,11 +9,13 @@ import org.springframework.boot.test.context.SpringBootTest;
 
 import java.util.Map;
 
-@SpringBootTest
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+@SpringBootTest(properties = "ani-rss.startup.enabled=false")
 class AniRssApplicationTests {
 
     @Test
-    void mailTest() {
+    void mailTemplateRendersMarkdown() {
         Parser parser = Parser.builder().build();
         Node document = parser.parse("""
                 # 测试
@@ -36,14 +35,8 @@ class AniRssApplicationTests {
 
         String html = TemplateUtil.render("mail.html", map);
 
-        System.out.println(html);
-    }
-
-    @Test
-    void bgmTest() {
-        ConfigUtil.load();
-        BgmInfo bgmInfo = BgmUtil.getBgmInfo("510710");
-        System.out.println(bgmInfo);
+        assertTrue(html.contains("<h1>"));
+        assertTrue(html.contains("测试"));
     }
 
 }

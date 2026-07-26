@@ -1,6 +1,7 @@
 package ani.rss.controller;
 
 import ani.rss.annotation.Auth;
+import ani.rss.auth.enums.AuthType;
 import ani.rss.entity.web.ContentType;
 import ani.rss.service.IcsService;
 import cn.hutool.core.io.IoUtil;
@@ -22,7 +23,7 @@ public class IcsController extends BaseController {
     @Resource
     private IcsService icsService;
 
-    @Auth
+    @Auth(type = AuthType.API_KEY)
     @Operation(summary = "获取ICS日历")
     @GetMapping("/calendar.ics")
     public void getIcs(HttpServletResponse response) throws IOException {

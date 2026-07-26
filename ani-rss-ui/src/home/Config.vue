@@ -51,7 +51,6 @@
 <script setup>
 import {ref} from "vue";
 import {ElMessage} from "element-plus";
-import CryptoJS from "crypto-js";
 import Exclude from "@/config/Exclude.vue";
 import Notification from "@/config/Notification.vue";
 import Proxy from "@/config/Proxy.vue";
@@ -89,12 +88,10 @@ const saveConfig = () => {
   let my_config = JSON.parse(JSON.stringify(config.value))
 
   let username = my_config.login.username.trim()
-  let password = my_config.login.password.trim()
+  let password = String(my_config.login.password || '')
 
   my_config.login.username = username
-  if (password) {
-    my_config.login.password = CryptoJS['MD5'](password).toString();
-  }
+  my_config.login.password = password
 
   http.setConfig(my_config)
       .then(res => {

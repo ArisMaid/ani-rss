@@ -1,6 +1,7 @@
 package ani.rss.service;
 
 import ani.rss.backup.BackupArchive;
+import ani.rss.auth.AuthService;
 import ani.rss.backup.BackupManifest;
 import ani.rss.backup.BackupValidation;
 import ani.rss.commons.AtomicFileWriter;
@@ -40,7 +41,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class RestoreService {
     private static final Duration MAINTENANCE_TIMEOUT = Duration.ofSeconds(30);
     private static final List<String> SWITCH_NAMES = List.of(
-            "config.v2.json", "ani.v2.json", "database.db", "files", "torrents");
+            "config.v2.json", "ani.v2.json", "database.db", "auth-state.v2.json", "files", "torrents");
 
     private final TaskService taskService;
     private final TaskCoordinator taskCoordinator;
@@ -110,10 +111,12 @@ public class RestoreService {
     private void execute(Context context) {
         boolean tasksWereRunning = TaskService.LOOP.get() &&
                 TaskService.THREADS.stream().anyMatch(Thread::isAlive);
+        String authFingerprint = null;
         TaskCoordinator.MaintenanceLease lease = null;
         List<String> currentMoved = new ArrayList<>();
         List<String> installed = new ArrayList<>();
         try {
+            authFingerprint = AuthService.credentialFingerprint();
             lease = taskCoordinator.enterMaintenance(MAINTENANCE_TIMEOUT);
             context.tasksWereRunning = tasksWereRunning;
             context.status = RestoreStatus.STOPPING;
@@ -146,7 +149,7 @@ public class RestoreService {
                 }
             }
 
-            reopenAndLoad();
+            reopenAndLoad(authFingerprint);
             if (tasksWereRunning) {
                 taskService.start();
             }
@@ -159,7 +162,7 @@ public class RestoreService {
             if (lease != null) {
                 try {
                     rollback(context, currentMoved, installed);
-                    reopenAndLoad();
+                    reopenAndLoad(authFingerprint);
                     if (tasksWereRunning) {
                         taskService.start();
                     }
@@ -207,12 +210,13 @@ public class RestoreService {
         }
     }
 
-    private void reopenAndLoad() {
+    private void reopenAndLoad(String previousAuthFingerprint) {
         DatabaseManager.reopen();
         if (!DatabaseManager.integrityCheck()) {
             throw new IllegalStateException("database integrity check failed after restore");
         }
         ConfigUtil.load();
+        AuthService.reload(AuthService.credentialFingerprint().equals(previousAuthFingerprint));
         AniUtil.load();
     }
 

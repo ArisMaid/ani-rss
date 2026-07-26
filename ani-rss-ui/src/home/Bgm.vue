@@ -14,8 +14,8 @@
         <el-table-column prop="id" label="id" width="80"/>
         <el-table-column label="封面" width="120">
           <template #default="it">
-            <img :alt="list[it.$index]['name']" :src="proxyImage(list[it.$index]['images']['large'])" height="100px"
-                 width="78px">
+            <SafeImage :alt="list[it.$index]['name']" :src-url="list[it.$index]['images']['large']" height="100px"
+                 width="78px"/>
           </template>
         </el-table-column>
         <el-table-column label="名称" width="200">
@@ -37,7 +37,7 @@
 </template>
 <script setup>
 import {ref} from "vue";
-import {proxyImage} from "@/js/global.js";
+import SafeImage from '@/other/SafeImage.vue'
 import * as http from "@/js/http.js";
 
 let dialogVisible = ref(false)

@@ -6,7 +6,7 @@
         <el-button bg text icon="MoreFilled"/>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item @click="openUrl(`potplayer://${playItem.src}`)">
+            <el-dropdown-item @click="openExternal(src => `potplayer://${src}`)">
               <el-text>
                 <el-icon>
                   <img alt="PotPlayer" class="el-icon--left icon" src="../icon/icon-PotPlayer.webp"/>
@@ -14,7 +14,7 @@
                 Pot
               </el-text>
             </el-dropdown-item>
-            <el-dropdown-item @click="openUrl(`vlc://${playItem.src}`)">
+            <el-dropdown-item @click="openExternal(src => `vlc://${src}`)">
               <el-text>
                 <el-icon>
                   <img alt="VLC" class="el-icon--left icon" src="../icon/icon-VLC.webp"/>
@@ -23,7 +23,7 @@
               </el-text>
             </el-dropdown-item>
             <el-dropdown-item
-                @click="openUrl(`iina://weblink?url=${encodeUrl(playItem.src)}&mpv_force-media-title=${playItem.name}`)">
+                @click="openExternal(src => withQuery('iina://weblink', {url: src, 'mpv_force-media-title': playItem.name}))">
               <el-text>
                 <el-icon>
                   <img alt="IINA" class="el-icon--left icon" src="../icon/icon-IINA.webp"/>
@@ -31,7 +31,7 @@
                 IINA
               </el-text>
             </el-dropdown-item>
-            <el-dropdown-item @click="openUrl(`mpvplay://${playItem.src}&mpv_force-media-title=${playItem.name}`)">
+            <el-dropdown-item @click="openExternal(src => withQuery(`mpvplay://${src}`, {'mpv_force-media-title': playItem.name}))">
               <el-text>
                 <el-icon>
                   <img alt="MPV" class="el-icon--left icon" src="../icon/icon-MPV.webp"/>
@@ -40,7 +40,7 @@
               </el-text>
             </el-dropdown-item>
             <el-dropdown-item
-                @click="openUrl(`infuse://x-callback-url/play?url=${playItem.src}&filename=${playItem.name}`)">
+                @click="openExternal(src => withQuery('infuse://x-callback-url/play', {url: src, filename: playItem.name}))">
               <el-text>
                 <el-icon>
                   <img alt="Infuse" class="el-icon--left icon" src="../icon/icon-Infuse.png"/>
@@ -49,7 +49,7 @@
               </el-text>
             </el-dropdown-item>
           </el-dropdown-menu>
-          <el-dropdown-item @click="openUrl(`ddplay:${encodeUrl(playItem.src)}|filePath=${playItem.name}`)">
+          <el-dropdown-item @click="openExternal(src => `ddplay:${encodeUrl(src)}|filePath=${encodeUrl(playItem.name)}`)">
             <el-text>
               <el-icon>
                 <img alt="DandanPlay" class="el-icon--left icon" src="../icon/icon-DandanPlay.webp"/>
@@ -57,7 +57,7 @@
               弹弹Play
             </el-text>
           </el-dropdown-item>
-          <el-dropdown-item @click="openUrl(`anix://openVideo/${encodeUrl(playItem.src)}`)">
+          <el-dropdown-item @click="openExternal(src => `anix://openVideo/${encodeUrl(src)}`)">
             <el-text>
               <el-icon>
                 <img alt="AnimacX" class="el-icon--left icon" src="../icon/icon-AnimacX.webp"/>
@@ -66,7 +66,7 @@
             </el-text>
           </el-dropdown-item>
           <el-dropdown-item
-              @click="openUrl(`SenPlayer://x-callback-url/play?url=${playItem.src}&name=${playItem.name}`)">
+              @click="openExternal(src => withQuery('SenPlayer://x-callback-url/play', {url: src, name: playItem.name}))">
             <el-text>
               <el-icon>
                 <img alt="SenPlayer" class="el-icon--left icon" src="../icon/icon-SenPlayer.webp"/>
@@ -84,11 +84,28 @@
 import {onBeforeUnmount, onMounted} from 'vue'
 import Artplayer from 'artplayer';
 import artplayerPluginMultipleSubtitles from 'artplayer-plugin-multiple-subtitles';
+import * as http from '@/js/http.js'
+import {toApiMedia} from '@/js/global.js'
 
 const props = defineProps(['playItem'])
 
 let openUrl = (url) => {
   window.open(url)
+}
+
+let externalSrc = ''
+let openExternal = async (buildUrl) => {
+  if (!externalSrc) {
+    const response = await http.externalMediaHandle(props.playItem.filename)
+    externalSrc = toApiMedia(response.data.handle)
+  }
+  openUrl(buildUrl(externalSrc))
+}
+
+let withQuery = (base, params) => {
+  const url = new URL(base)
+  url.search = new URLSearchParams(params).toString()
+  return url.toString()
 }
 
 let encodeUrl = (str) => {

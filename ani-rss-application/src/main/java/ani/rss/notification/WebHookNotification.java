@@ -98,11 +98,11 @@ public class WebHookNotification implements BaseNotification {
                 .addHeaders(headerMap)
                 .method(Method.valueOf(webHookMethod));
 
-        log.debug("webhook url: {}", webHookUrl);
+        log.debug("webhook url: {}", HttpReq.sanitizeUrl(webHookUrl));
 
         if (StrUtil.isNotBlank(webHookBody)) {
             httpRequest.body(webHookBody);
-            log.debug("webhook body: {}", webHookBody);
+            log.debug("webhook body length: {}", webHookBody.length());
         }
         return httpRequest.thenFunction(res -> {
             boolean ok = res.isOk();

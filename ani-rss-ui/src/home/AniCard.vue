@@ -104,7 +104,9 @@ let openBgmUrl = (it) => {
   if (it.title.length) {
     let title = it.title.replace(/ ?\((19|20)\d{2}\)/g, "").trim()
     title = title.replace(/ ?\[tmdbid=(\d+)]/g, "").trim()
-    window.open(`https://bgm.tv/subject_search/${title}?cat=2`)
+    const url = new URL(`https://bgm.tv/subject_search/${encodeURIComponent(title)}`)
+    url.search = new URLSearchParams({cat: '2'}).toString()
+    window.open(url.toString())
   }
 }
 

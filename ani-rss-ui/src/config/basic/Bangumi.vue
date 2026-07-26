@@ -101,7 +101,7 @@
 import {ElText} from "element-plus";
 import BangumiMe from "@/config/basic/BangumiMe.vue";
 import {onMounted, ref} from "vue";
-import {setConfig} from "@/js/http.js";
+import {bgmOAuthState, setConfig} from "@/js/http.js";
 import {getBaseUrl} from "@/js/global.js";
 
 let bangumiMeRef = ref()
@@ -125,9 +125,15 @@ let start = () => {
   loading.value = true;
   setConfig(props.config)
       .then(async res => {
-        let redirect = window.encodeURI(props.config['bgmRedirectUri'])
-        let url = `https://bgm.tv/oauth/authorize?client_id=${props.config['bgmAppID']}&response_type=code&redirect_uri=${redirect}`
-        window.open(url)
+        const state = (await bgmOAuthState()).data.state
+        const url = new URL('https://bgm.tv/oauth/authorize')
+        url.search = new URLSearchParams({
+          client_id: props.config['bgmAppID'],
+          response_type: 'code',
+          redirect_uri: props.config['bgmRedirectUri'],
+          state
+        }).toString()
+        window.open(url.toString())
         location.reload()
       })
       .finally(() => {

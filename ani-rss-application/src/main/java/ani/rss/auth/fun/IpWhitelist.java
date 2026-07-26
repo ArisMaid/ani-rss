@@ -17,7 +17,7 @@ import java.util.function.Function;
 public class IpWhitelist implements Function<HttpServletRequest, Boolean> {
     @Override
     public Boolean apply(HttpServletRequest request) {
-        String ip = AuthUtil.getIp();
+        String ip = AuthUtil.getIp(request);
         Config config = ConfigUtil.CONFIG;
         String ipWhitelistStr = config.getIpWhitelistStr();
         Boolean ipWhitelist = config.getIpWhitelist();
@@ -58,8 +58,7 @@ public class IpWhitelist implements Function<HttpServletRequest, Boolean> {
                 }
             }
         } catch (Exception e) {
-            log.error("ip白名单存在问题");
-            log.error(e.getMessage(), e);
+            log.error("ip白名单存在问题 type:{}", e.getClass().getSimpleName());
         }
         return false;
     }

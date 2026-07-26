@@ -6,9 +6,17 @@
         <div style="text-align: center;">
           <img src="../public/icon.svg" height="80" width="80" alt="icon.svg"/>
         </div>
-        <h2 class="title-h2">ANI-RSS</h2>
+        <h2 class="title-h2">{{ setupMode ? '首次设置' : 'ANI-RSS' }}</h2>
         <el-form @submit.prevent
-                 @keyup.enter="login">
+                 @keyup.enter="submit">
+          <el-form-item v-if="setupMode">
+            <div>
+              <el-input v-model.trim="setupCode" placeholder="一次性设置码" autocomplete="one-time-code">
+                <template #prefix><el-icon><Key/></el-icon></template>
+              </el-input>
+              <el-text size="small">设置码位于配置目录的 initial-setup-code.txt</el-text>
+            </div>
+          </el-form-item>
           <el-form-item>
             <el-input v-model.trim="user.username"
                       placeholder="用户名" autocomplete="username">
@@ -20,7 +28,7 @@
             </el-input>
           </el-form-item>
           <el-form-item>
-            <el-input v-model.trim="user.password" show-password
+            <el-input v-model="user.password" show-password
                       placeholder="密码" autocomplete="current-password">
               <template #prefix>
                 <el-icon class="el-input__icon">
@@ -30,8 +38,10 @@
             </el-input>
           </el-form-item>
           <div class="flex-center action">
-            <el-checkbox v-model:model-value="rememberThePassword.remember">记住密码</el-checkbox>
-            <el-button @click="login" :loading="loading" text bg icon="Right">登录</el-button>
+            <el-checkbox v-model:model-value="rememberThePassword.remember">记住用户名</el-checkbox>
+            <el-button @click="submit" :loading="loading" text bg icon="Right">
+              {{ setupMode ? '创建账号' : '登录' }}
+            </el-button>
           </div>
         </el-form>
       </div>
@@ -57,9 +67,11 @@ import {onMounted, ref} from "vue";
 import * as http from "./js/http.js";
 import {Key} from "@element-plus/icons-vue";
 import {ElMessage} from "element-plus";
-import {authorization, rememberThePassword} from "@/js/global.js";
+import {authorization, initAuth, rememberThePassword} from "@/js/global.js";
 
 let loading = ref(false)
+let setupMode = ref(false)
+let setupCode = ref('')
 
 let user = ref({
   username: '',
@@ -69,28 +81,29 @@ let user = ref({
 /**
  * 登录
  */
-let login = () => {
+let submit = () => {
   let {username, password} = user.value;
 
   if (!password || !username) {
     ElMessage.error('请输入账号与密码')
     return
   }
+  if (setupMode.value && !setupCode.value) {
+    ElMessage.error('请输入一次性设置码')
+    return
+  }
 
   loading.value = true
-
-  http.login(user.value)
+  const action = setupMode.value
+      ? http.setup({code: setupCode.value, ...user.value})
+      : http.login(user.value)
+  action
       .then(res => {
-        // 记住密码
         if (rememberThePassword.value.remember) {
           rememberThePassword.value.username = username
-          rememberThePassword.value.password = password
         } else {
           rememberThePassword.value.username = ''
-          rememberThePassword.value.password = ''
         }
-
-        authorization.value = res.data
       })
       .finally(() => {
         loading.value = false
@@ -100,26 +113,14 @@ let login = () => {
 /**
  * 测试是否处于白名单
  */
-let test = () => {
-  if (authorization.value) {
-    return
+onMounted(async () => {
+  await initAuth()
+  if (!authorization.value) {
+    http.setupStatus().then(res => setupMode.value = Boolean(res.data.required))
   }
-  http.testIpWhitelist()
-      .then(res => {
-        if (res.code === 200) {
-          authorization.value = new Date().getTime() + '';
-          return
-        }
-        authorization.value = ''
-      })
-}
-
-onMounted(() => {
-  test()
-  let {remember, username, password} = rememberThePassword.value;
-  if (remember && username && password) {
+  let {remember, username} = rememberThePassword.value;
+  if (remember && username) {
     user.value.username = username
-    user.value.password = password
   }
 })
 

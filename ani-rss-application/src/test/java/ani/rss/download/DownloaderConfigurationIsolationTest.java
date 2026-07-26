@@ -53,6 +53,47 @@ class DownloaderConfigurationIsolationTest {
         }
     }
 
+    @Test
+    void qbittorrentTestClientCannotReplaceActiveClientSessionCookie() throws Exception {
+        List<String> loginBodies = java.util.Collections.synchronizedList(new ArrayList<>());
+        List<String> versionCookies = java.util.Collections.synchronizedList(new ArrayList<>());
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            if (path.equals("/api/v2/auth/login")) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                loginBodies.add(body);
+                String sid = body.contains("active-password") ? "active" : "test";
+                exchange.getResponseHeaders().add("Set-Cookie", "SID=" + sid + "; Path=/; HttpOnly");
+                respond(exchange, "Ok.");
+                return;
+            }
+            if (path.equals("/api/v2/app/version")) {
+                versionCookies.add(exchange.getRequestHeaders().getFirst("Cookie"));
+                respond(exchange, "5.2.0");
+                return;
+            }
+            respond(exchange, "Not Found");
+        });
+        server.start();
+        servers.add(server);
+
+        Config activeConfig = config("qBittorrent", server.getAddress().getPort(), "active-password");
+        Config testConfig = config("qBittorrent", server.getAddress().getPort(), "test-password");
+        DownloaderClient active = DownloaderClientFactory.createClient(activeConfig);
+        DownloaderClient temporary = DownloaderClientFactory.createTestClient(testConfig);
+
+        assertTrue(active.connect(true).isSuccess());
+        assertTrue(temporary.connect(true).isSuccess());
+        assertTrue(active.connect(false).isSuccess());
+        assertTrue(temporary.connect(false).isSuccess());
+
+        assertEquals(2, loginBodies.size());
+        assertEquals(2, versionCookies.size());
+        assertTrue(versionCookies.get(0).contains("active"));
+        assertTrue(versionCookies.get(1).contains("test"));
+    }
+
     private FakeEndpoint endpoint() throws IOException {
         AtomicInteger requests = new AtomicInteger();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);

@@ -18,9 +18,7 @@ import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.lang.func.Func1;
 import cn.hutool.core.lang.func.LambdaUtil;
 import cn.hutool.core.text.StrFormatter;
-import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.crypto.SecureUtil;
 import cn.hutool.system.OsInfo;
 import cn.hutool.system.SystemUtil;
 import lombok.extern.slf4j.Slf4j;
@@ -59,8 +57,6 @@ public class ConfigUtil {
         String ovaDownloadPathTemplate = StrFormatter.format("{}/${title}", ovaDownloadPath);
         String completedPathTemplate = StrFormatter.format("{}/${title}/Season ${season}", completedPath);
 
-        String password = SecureUtil.md5("admin");
-
         String notificationTemplate = """
                 ${emoji}${emoji}${emoji}
                 事件类型: ${action}
@@ -79,8 +75,6 @@ public class ConfigUtil {
                 TMDB集标题: ${episodeTitle}
                 ${emoji}${emoji}${emoji}
                 """;
-
-        String apiKey = RandomUtil.randomString(64).toLowerCase();
 
         String downloadToolType = SystemUtil.get("DOWNLOAD_TOOL_TYPE", "qBittorrent");
         String downloadToolHost = SystemUtil.get("DOWNLOAD_TOOL_HOST", "");
@@ -150,8 +144,8 @@ public class ConfigUtil {
                 .setProxyPassword("")
                 .setDownloadCount(0)
                 .setLogin(new Login()
-                        .setUsername("admin")
-                        .setPassword(password)
+                        .setUsername("")
+                        .setPassword("")
                 )
                 .setMultiLoginForbidden(true)
                 .setLoginEffectiveHours(3)
@@ -175,6 +169,7 @@ public class ConfigUtil {
                 .setApiKey("")
                 .setDownloadNew(false)
                 .setInnerIP(false)
+                .setImagePrivateAllowlist("")
                 .setRenameTemplate("[${subgroup}] ${title} S${seasonFormat}E${episodeFormat}")
                 .setRenameDelYear(false)
                 .setRenameDelTmdbId(false)
@@ -212,7 +207,7 @@ public class ConfigUtil {
                 .setCompletedPathTemplate(completedPathTemplate)
                 .setNotificationTemplate(notificationTemplate)
                 .setNotificationConfigList(new ArrayList<>())
-                .setApiKey(apiKey)
+                .setApiKey("")
                 .setCopyMasterToStandby(false)
                 .setSortType(AniSortTypeEnum.SCORE)
                 .setTmdbIdPlexMode(false)
@@ -324,7 +319,11 @@ public class ConfigUtil {
                 .setOverride(false);
 
         for (NotificationConfig notificationConfig : notificationConfigList) {
+            boolean missingId = StrUtil.isBlank(notificationConfig.getId());
             BeanUtil.copyProperties(newNotificationConfig, notificationConfig, copyOptions);
+            if (missingId) {
+                notificationConfig.setId(UUID.randomUUID().toString());
+            }
         }
     }
 

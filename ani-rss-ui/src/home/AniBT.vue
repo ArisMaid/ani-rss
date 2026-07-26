@@ -74,8 +74,8 @@
                     <el-collapse-item v-for="anime in item.animes" :name="anime['bgmId']">
                       <template #title>
                         <div class="flex collapse-title">
-                          <img :src="proxyImage(anime['cover'])" class="cover" v-if="anime.cover"
-                               @click.stop="open(`https://anibt.net/anime/${anime['bgmId']}`)">
+                          <SafeImage :src-url="anime['cover']" class="cover" v-if="anime.cover"
+                               @click.stop="open(`https://anibt.net/anime/${anime['bgmId']}`)"/>
                           <div class="flex collapse-title">
                             <el-text :truncated="false" line-clamp="1" size="small"
                                      class="title-text">
@@ -159,7 +159,7 @@ import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy} from "@element-plus/icons-vue";
 import * as http from "@/js/http.js";
 import formatTime from "../js/format-time.js";
-import {proxyImage} from "@/js/global.js";
+import SafeImage from '@/other/SafeImage.vue'
 
 // 批量添加订阅
 let rssList = ref([]);

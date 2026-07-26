@@ -4,6 +4,7 @@ import ani.rss.commons.*;
 import ani.rss.entity.About;
 import ani.rss.entity.Config;
 import ani.rss.entity.Github;
+import ani.rss.exception.UpstreamServiceException;
 import ani.rss.update.BaseUpdate;
 import ani.rss.util.basic.HttpReq;
 import ani.rss.util.other.ConfigUtil;
@@ -60,7 +61,7 @@ public class UpdateService {
             request.then(response -> {
                 int status = response.getStatus();
                 if (status == 404) {
-                    return;
+                    throw new IllegalStateException("release metadata was not found");
                 }
                 HttpReq.assertStatus(response);
 
@@ -68,8 +69,7 @@ public class UpdateService {
 
                 String message = release.getMessage();
                 if (StrUtil.isNotBlank(message)) {
-                    log.error(message);
-                    return;
+                    throw new IllegalStateException("release API rejected the request");
                 }
 
                 String latest = release.getTagName().replace("v", "");
@@ -113,9 +113,8 @@ public class UpdateService {
                 }
             });
         } catch (Exception e) {
-            String message = ExceptionUtils.getMessage(e);
-            log.error("检测更新失败 {}", message);
-            log.error(message, e);
+            log.error("检测更新失败 type:{}", e.getClass().getSimpleName());
+            throw new UpstreamServiceException("update check failed", e);
         }
         // 缓存一分钟
         CacheUtils.put(key, about, 1000 * 60);
@@ -129,8 +128,12 @@ public class UpdateService {
      */
     public synchronized void update(About about) {
         Boolean update = about.getUpdate();
-        if (!update) {
-            return;
+        if (!Boolean.TRUE.equals(update)) {
+            throw new IllegalStateException("no update is available");
+        }
+        if (StrUtil.isBlank(about.getDownloadUrl()) || StrUtil.isBlank(about.getSha256()) ||
+                about.getSize() == null || about.getSize() <= 0) {
+            throw new IllegalStateException("update metadata is incomplete");
         }
 
         MavenUtils.CurrentFile currentFile = MavenUtils.getCurrentFile();
@@ -139,13 +142,18 @@ public class UpdateService {
 
         BaseUpdate baseUpdate = BaseUpdate.getInstance();
 
-        File updateFile = baseUpdate.downloadUpdateFile(about);
+        File updateFile;
+        try {
+            updateFile = baseUpdate.downloadUpdateFile(about);
+        } catch (RuntimeException e) {
+            throw new UpstreamServiceException("update download failed", e);
+        }
 
         ThreadUtil.execute(() -> {
             try {
                 baseUpdate.update(updateFile);
             } catch (Exception e) {
-                log.error("更新时遇到错误: {}", e.getMessage(), e);
+                log.error("更新应用失败 type:{}", e.getClass().getSimpleName());
             }
         });
     }

@@ -15,10 +15,5 @@ import java.lang.annotation.Target;
 public @interface Auth {
     boolean value() default true;
 
-    AuthType[] type() default {
-            AuthType.IP_WHITE_LIST,
-            AuthType.HEADER,
-            AuthType.FORM,
-            AuthType.API_KEY
-    };
+    AuthType[] type() default {};
 }

@@ -10,11 +10,15 @@ import lombok.experimental.Accessors;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Data
 @Accessors(chain = true)
 @Schema(description = "通知配置")
 public class NotificationConfig implements Serializable {
+    @Schema(description = "稳定标识", hidden = true)
+    private String id;
+
     /**
      * 启用
      */
@@ -299,6 +303,7 @@ public class NotificationConfig implements Serializable {
         NotificationConfig notificationConfig = new NotificationConfig();
 
         notificationConfig
+                .setId(UUID.randomUUID().toString())
                 .setEnable(true)
                 .setRetry(3)
                 .setSort(10L)

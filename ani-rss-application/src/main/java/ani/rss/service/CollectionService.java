@@ -9,7 +9,6 @@ import ani.rss.entity.Item;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.entity.torrent.qBittorrentTorrentsInfo;
 import ani.rss.enums.StringEnum;
-import ani.rss.util.basic.HttpReq;
 import ani.rss.util.other.ConfigUtil;
 import ani.rss.util.other.ItemsUtil;
 import ani.rss.util.other.RenameUtil;
@@ -24,7 +23,6 @@ import cn.hutool.core.util.CharsetUtil;
 import cn.hutool.core.util.ObjectUtil;
 import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.http.HttpResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.eclipse.bittorrent.TorrentFile;
 import org.springframework.stereotype.Service;
@@ -65,13 +63,13 @@ public class CollectionService {
         TorrentsInfo torrentsInfo = new TorrentsInfo()
                 .setHash(torrentFile.getHexHash());
 
-        Config config = ConfigUtil.CONFIG;
+        qBittorrent client = qBittorrentClient();
 
         List<qBittorrentTorrentsInfo.FileEntity> files = new ArrayList<>();
         for (int i = 0; i < 5; i++) {
             ThreadUtil.sleep(500);
             try {
-                files.addAll(qBittorrent.files(torrentsInfo, false, config));
+                files.addAll(client.files(torrentsInfo, false));
             } catch (Exception e) {
                 log.error(e.getMessage(), e);
             }
@@ -100,8 +98,6 @@ public class CollectionService {
                         Item::getReName
                 ));
 
-        String host = config.getDownloadToolHost();
-
         for (int i = 0; i < 30; i++) {
             for (qBittorrentTorrentsInfo.FileEntity file : files) {
                 String oldPath = file.getName();
@@ -109,23 +105,15 @@ public class CollectionService {
 
                 if (!reNameMap.containsKey(oldPath)) {
                     if (!reNameMap.containsValue(oldPath) && file.getPriority() > 0) {
-                        HttpReq.post(host + "/api/v2/torrents/filePrio")
-                                .form("hash", torrentFile.getHexHash())
-                                .form("id", file.getIndex())
-                                .form("priority", 0)
-                                .thenFunction(HttpResponse::isOk);
+                        client.setFilePriority(torrentFile.getHexHash(), file.getIndex(), 0);
                     }
                     continue;
                 }
                 log.info("重命名 {} ==> {}", oldPath, newPath);
-                HttpReq.post(host + "/api/v2/torrents/renameFile")
-                        .form("hash", torrentFile.getHexHash())
-                        .form("oldPath", oldPath)
-                        .form("newPath", newPath)
-                        .thenFunction(HttpResponse::isOk);
+                client.renameFile(torrentFile.getHexHash(), oldPath, newPath);
             }
             files.clear();
-            files.addAll(qBittorrent.files(torrentsInfo, false, config));
+            files.addAll(client.files(torrentsInfo, false));
 
             if (CollUtil.containsAll(files.stream()
                     .map(qBittorrentTorrentsInfo.FileEntity::getName)
@@ -137,7 +125,7 @@ public class CollectionService {
             ThreadUtil.sleep(1000);
         }
 
-        qBittorrent.start(torrentsInfo, config);
+        client.start(torrentsInfo);
     }
 
     /**
@@ -175,43 +163,13 @@ public class CollectionService {
      */
     public void download(String name, File torrentFile, String savePath, List<String> tags) {
         Config config = ConfigUtil.CONFIG;
-        String host = config.getDownloadToolHost();
         String download = config.getDownloadToolType();
         Assert.isTrue("qBittorrent".equals(download), "合集下载暂时只支持 qBittorrent");
 
         Assert.isTrue(TorrentUtil.login(), "下载器登录失败");
 
-        Integer ratioLimit = config.getRatioLimit();
-        Integer seedingTimeLimit = config.getSeedingTimeLimit();
-        Integer inactiveSeedingTimeLimit = config.getInactiveSeedingTimeLimit();
-
-        Long upLimit = config.getUpLimit() * 1024;
-        Long dlLimit = config.getDlLimit() * 1024;
-
-        Boolean qbUseDownloadPath = config.getQbUseDownloadPath();
-
-        HttpReq.post(host + "/api/v2/torrents/add")
-                .form("torrents", torrentFile)
-                .form("addToTopOfQueue", false)
-                .form("autoTMM", false)
-                .form("category", "")
-                .form("contentLayout", "Original")
-                .form("dlLimit", dlLimit)
-                .form("firstLastPiecePrio", false)
-                .form("paused", true)
-                .form("stopped", true)
-                .form("rename", name)
-                .form("savepath", savePath)
-                .form("sequentialDownload", false)
-                .form("skip_checking", false)
-                .form("stopCondition", "None")
-                .form("upLimit", upLimit)
-                .form("useDownloadPath", qbUseDownloadPath)
-                .form("tags", CollUtil.join(tags, ","))
-                .form("ratioLimit", ratioLimit)
-                .form("seedingTimeLimit", seedingTimeLimit)
-                .form("inactiveSeedingTimeLimit", inactiveSeedingTimeLimit)
-                .then(HttpReq::assertStatus);
+        Assert.isTrue(qBittorrentClient().addCollection(name, torrentFile, savePath, tags),
+                "qBittorrent 添加合集任务失败");
     }
 
     /**
@@ -323,5 +281,12 @@ public class CollectionService {
                 })
                 .filter(Objects::nonNull)
                 .toList();
+    }
+
+    private static qBittorrent qBittorrentClient() {
+        if (TorrentUtil.CLIENT == null || !(TorrentUtil.CLIENT.adapter() instanceof qBittorrent client)) {
+            throw new IllegalStateException("active downloader is not qBittorrent");
+        }
+        return client;
     }
 }

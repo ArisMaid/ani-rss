@@ -14,7 +14,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 
 @RestController
-@RequestMapping("/api/v2/restore")
+@RequestMapping("/v2/restore")
 public class RestoreController {
     private final RestoreService restoreService;
 

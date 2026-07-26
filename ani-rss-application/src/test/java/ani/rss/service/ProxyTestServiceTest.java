@@ -60,6 +60,21 @@ class ProxyTestServiceTest {
         assertNotNull(result.getFailureType());
     }
 
+    @Test
+    void enabledProxyMustActuallyCoverTheTestTarget() {
+        ConfigService service = new ConfigService();
+        Config config = new Config()
+                .setProxy(true)
+                .setProxyHost("127.0.0.1")
+                .setProxyPort(8080)
+                .setProxyList("example.com");
+
+        ProxyTest result = service.testProxyUrl("https://github.com", config);
+
+        assertFalse(result.getSuccess());
+        assertTrue("TARGET_NOT_PROXIED".equals(result.getFailureType()));
+    }
+
     private void handle(HttpExchange exchange) throws IOException {
         exchange.sendResponseHeaders(status, -1);
         exchange.close();

@@ -1,6 +1,7 @@
 package ani.rss.util.other;
 
 import ani.rss.annotation.Auth;
+import ani.rss.auth.AuthService;
 import ani.rss.auth.enums.AuthType;
 import ani.rss.commons.CacheUtils;
 import ani.rss.commons.ExceptionUtils;
@@ -95,12 +96,18 @@ public class AuthUtil {
      * @return IP地址
      */
     public static String getIp() {
+        return getIp(Global.REQUEST.get());
+    }
+
+    public static String getIp(HttpServletRequest request) {
         try {
+            if (request == null) {
+                return "未知";
+            }
             Config config = ConfigUtil.CONFIG;
             List<String> reverseProxyTrustIpList = config.getReverseProxyTrustIpList();
             Boolean reverseProxyTrustIpListEnabled = config.getReverseProxyTrustIpListEnabled();
 
-            HttpServletRequest request = Global.REQUEST.get();
             String ip = request.getRemoteAddr();
             if (!reverseProxyTrustIpListEnabled) {
                 // 未启用 受信任的反向代理IP
@@ -140,7 +147,18 @@ public class AuthUtil {
             // 不进行校验
             return true;
         }
+        if (AuthService.hasSessionCredential(request)) {
+            boolean validSession = AuthService.validateRequest(request);
+            if (!validSession) {
+                limitLoginAttempts(true);
+            }
+            return validSession;
+        }
         for (AuthType type : auth.type()) {
+            // Legacy browser tokens are accepted only by /v2/auth/migrate.
+            if (type == AuthType.HEADER || type == AuthType.FORM) {
+                continue;
+            }
             Boolean test = test(request, type);
             if (test) {
                 return true;
@@ -208,6 +226,13 @@ public class AuthUtil {
                 .setMessage(StrFormatter.format("失败次数过多, 已限制登录 {}", ip))
                 .setCode(ResultCode.HTTP_FORBIDDEN);
         throw new ResultException(result);
+    }
+
+    public static void clearLoginAttempts() {
+        String key = "LimitLoginAttempts#" + AuthUtil.getIp();
+        if (CacheUtils.containsKey(key)) {
+            CacheUtils.remove(key);
+        }
     }
 
 }

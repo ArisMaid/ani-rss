@@ -14,10 +14,10 @@ import cn.hutool.crypto.SecureUtil;
 import cn.hutool.http.HttpConnection;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
-import cn.hutool.http.cookie.GlobalCookieManager;
 import lombok.extern.slf4j.Slf4j;
 
-import java.net.*;
+import java.net.URI;
+import java.net.URL;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -25,18 +25,16 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class HttpReq {
 
-
-    public static final CookieManager COOKIE_MANAGER;
-
     static {
-        COOKIE_MANAGER = new CookieManager();
-        COOKIE_MANAGER.setCookiePolicy(CookiePolicy.ACCEPT_ALL);
+        // Hutool's default jar is static process-wide. All generic requests are
+        // deliberately cookie-free; clients that require cookies own a
+        // ScopedCookieJar and attach them explicitly.
+        HttpRequest.closeCookie();
     }
 
     private static void config(HttpRequest req) {
-        GlobalCookieManager.setCookieManager(COOKIE_MANAGER);
-
-        req.timeout(1000 * 20)
+        req.disableCookie()
+                .timeout(1000 * 20)
                 .setFollowRedirects(true);
 
         String ua = "ani-rss/{} (https://github.com/wushuo894/ani-rss)";
@@ -113,8 +111,7 @@ public class HttpReq {
         String proxyHost = config.getProxyHost();
         Integer proxyPort = config.getProxyPort();
         if (StrUtil.isBlank(proxyHost) || Objects.isNull(proxyPort)) {
-            log.debug("代理参数不全 {}", safeUrl);
-            return;
+            throw new IllegalStateException("proxy configuration is incomplete");
         }
 
         String proxyUsername = config.getProxyUsername();
@@ -127,6 +124,7 @@ public class HttpReq {
             log.debug("使用代理 {}", safeUrl);
         } catch (Exception e) {
             log.error("设置代理失败 {} type:{}", safeUrl, e.getClass().getSimpleName());
+            throw new IllegalStateException("configure proxy failed", e);
         }
     }
 
@@ -202,6 +200,19 @@ public class HttpReq {
             URI uri = URI.create(value);
             return new URI(uri.getScheme(), null, uri.getHost(), uri.getPort(),
                     uri.getPath(), null, null).toString();
+        } catch (Exception ignored) {
+            return "<invalid-url>";
+        }
+    }
+
+    public static String sanitizeOrigin(String value) {
+        try {
+            URI uri = URI.create(value);
+            if (uri.getScheme() == null || uri.getHost() == null) {
+                return "<invalid-url>";
+            }
+            return new URI(uri.getScheme(), null, uri.getHost(), uri.getPort(),
+                    null, null, null).toString();
         } catch (Exception ignored) {
             return "<invalid-url>";
         }

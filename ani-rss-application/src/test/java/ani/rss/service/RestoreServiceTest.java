@@ -1,7 +1,13 @@
 package ani.rss.service;
 
 import ani.rss.backup.BackupArchive;
+import ani.rss.auth.AuthService;
+import ani.rss.commons.GsonStatic;
+import ani.rss.entity.Config;
+import ani.rss.entity.Login;
 import ani.rss.persistence.DatabaseManager;
+import ani.rss.util.basic.LogUtil;
+import ani.rss.util.other.ConfigUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,11 +26,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RestoreServiceTest {
     @TempDir
     Path tempDir;
+    private Config original;
+    private String baselineConfig;
 
     @BeforeEach
     void setUp() throws Exception {
+        original = ConfigUtil.snapshot();
         System.setProperty("CONFIG", tempDir.toString());
-        Files.writeString(tempDir.resolve("config.v2.json"), "{}", StandardCharsets.UTF_8);
+        Config valid = ConfigUtil.copy(original)
+                .setLogin(new Login().setUsername("restore-user")
+                        .setPassword(AuthService.encodePassword("restore-password")));
+        baselineConfig = GsonStatic.toJson(valid);
+        Files.writeString(tempDir.resolve("config.v2.json"), baselineConfig, StandardCharsets.UTF_8);
         Files.writeString(tempDir.resolve("ani.v2.json"), "[]", StandardCharsets.UTF_8);
         DatabaseManager.close();
         TaskService.LOOP.set(false);
@@ -34,12 +47,14 @@ class RestoreServiceTest {
     @AfterEach
     void tearDown() {
         DatabaseManager.close();
+        ConfigUtil.sync(original);
         System.clearProperty("CONFIG");
+        LogUtil.loadLogback();
     }
 
     @Test
     void confirmedRestoreCompletesAndReloadsRuntime() throws Exception {
-        byte[] archive = archive("{}", "[]");
+        byte[] archive = archive(baselineConfig, "[]");
         RestoreService service = service();
 
         RestoreService.RestoreOperationView staged = service.stage(
@@ -55,8 +70,8 @@ class RestoreServiceTest {
 
     @Test
     void failedRuntimeLoadRollsBackOldFiles() throws Exception {
-        Files.writeString(tempDir.resolve("config.v2.json"), "{}", StandardCharsets.UTF_8);
-        byte[] archive = archive("{\"downloadRetry\":0}", "[]");
+        Config invalid = GsonStatic.fromJson(baselineConfig, Config.class).setDownloadRetry(0);
+        byte[] archive = archive(GsonStatic.toJson(invalid), "[]");
         RestoreService service = service();
 
         RestoreService.RestoreOperationView staged = service.stage(
@@ -65,7 +80,7 @@ class RestoreServiceTest {
 
         RestoreService.RestoreOperationView result = await(service, staged.operationId());
         assertEquals(RestoreService.RestoreStatus.ROLLED_BACK, result.status());
-        assertEquals("{}",
+        assertEquals(baselineConfig,
                 Files.readString(tempDir.resolve("config.v2.json")));
         service.shutdown();
     }

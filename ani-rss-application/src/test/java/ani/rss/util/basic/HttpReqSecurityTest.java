@@ -43,5 +43,7 @@ class HttpReqSecurityTest {
     void sanitizesUserInfoQueryAndFragment() {
         assertEquals("https://example.com:8443/private/path",
                 HttpReq.sanitizeUrl("https://user:secret@example.com:8443/private/path?token=value#fragment"));
+        assertEquals("https://example.com:8443",
+                HttpReq.sanitizeOrigin("https://user:secret@example.com:8443/private/path?token=value#fragment"));
     }
 }

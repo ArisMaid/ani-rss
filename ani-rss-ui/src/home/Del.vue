@@ -19,11 +19,10 @@
 
 <script setup>
 
-import {getCurrentInstance, markRaw, ref} from "vue";
+import {getCurrentInstance, ref} from "vue";
 import * as http from "@/js/http.js";
 import {deleteAni} from "@/js/http.js";
 import {ElMessage, ElMessageBox} from "element-plus";
-import {Delete} from "@element-plus/icons-vue";
 
 const dialogVisible = ref(false)
 
@@ -62,20 +61,14 @@ const delAni = async () => {
   }
 
   ElMessageBox.confirm(
-      `<strong style="color: var(--el-color-danger);">
-        将会删除整个文件夹, 是否执意继续?
-        <br>
-        ${downloadPath}
-       </strong>`,
+      `将会隔离已确认归属的文件，是否继续？${downloadPath ? `\n${downloadPath}` : ''}`,
       '警告',
       {
-        dangerouslyUseHTMLString: true,
         confirmButtonText: '执意继续删除',
         confirmButtonClass: 'is-text is-has-bg el-button--danger',
         cancelButtonText: '取消',
         cancelButtonClass: 'is-text is-has-bg',
         type: 'warning',
-        icon: markRaw(Delete),
       }
   )
       .then(action)

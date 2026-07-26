@@ -44,7 +44,7 @@ export let configData = {
     "proxyPassword": "",
     "downloadCount": 0,
     "login": {
-        "username": "admin",
+        "username": "",
         "password": ""
     },
     "multiLoginForbidden": true,
@@ -75,6 +75,7 @@ export let configData = {
     "apiKey": "",
     "downloadNew": false,
     "innerIP": false,
+    "imagePrivateAllowlist": "",
     "renameTemplate": "[${subgroup}] ${title} S${seasonFormat}E${episodeFormat}",
     "renameDelYear": false,
     "renameDelTmdbId": false,

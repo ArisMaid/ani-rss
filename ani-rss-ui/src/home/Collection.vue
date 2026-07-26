@@ -146,9 +146,12 @@
                 </el-tag>
                 <el-upload
                     v-else
-                    :action="`api/upload?type=getBase64&s=${authorization}`"
+                    :action="uploadAction"
+                    :headers="uploadHeaders()"
+                    :with-credentials="true"
                     :before-upload="beforeAvatarUpload"
                     :on-success="onSuccess"
+                    :on-error="onUploadError"
                     :show-file-list="false"
                     class="upload-demo full-width"
                     drag
@@ -200,9 +203,12 @@ import Exclude from "@/config/Exclude.vue";
 import CollectionPreview from "./CollectionPreview.vue";
 import CustomTags from "@/config/CustomTags.vue";
 import {aniData} from "@/js/ani.js";
-import {authorization} from "@/js/global.js";
+import {csrfToken} from "@/js/global.js";
 import * as http from "@/js/http.js";
 import {getBgmTitle} from "@/js/http.js";
+
+const uploadAction = new URL('api/v2/uploads/torrent', document.baseURI).toString()
+const uploadHeaders = () => csrfToken.value ? {'X-CSRF-Token': csrfToken.value} : {}
 
 let start = () => {
   startLoading.value = true
@@ -268,7 +274,7 @@ let bgmAdd = (bgm) => {
 }
 
 let onSuccess = (res) => {
-  data.value.torrent = res.data
+  data.value.torrent = res.base64
   // 获取字幕组
   http.getCollectionSubgroup(data.value)
       .then(res => {
@@ -277,6 +283,11 @@ let onSuccess = (res) => {
           ElMessage.success(`字幕组已更新为 ${res.data}`)
         }
       })
+}
+
+let onUploadError = () => {
+  data.value.torrent = ''
+  ElMessage.error('种子上传失败')
 }
 
 let data = ref({
@@ -292,8 +303,8 @@ let beforeAvatarUpload = (rawFile) => {
     ElMessage.error('Avatar picture must be .torrent format!')
     return false
   }
-  if (rawFile.size / 1024 / 1024 > 10) {
-    ElMessage.error('Avatar picture size can not exceed 10MB!')
+  if (rawFile.size / 1024 / 1024 > 5) {
+    ElMessage.error('Torrent file size can not exceed 5MB!')
     return false
   }
   return true

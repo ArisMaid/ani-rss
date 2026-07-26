@@ -48,8 +48,8 @@ public class GsonStatic {
         try {
             return GSON.fromJson(body, tClass);
         } catch (Exception e) {
-            log.error("JSON 错误: {}", body);
-            log.error(e.getMessage(), e);
+            log.error("JSON 解析失败 target:{} length:{} type:{}",
+                    tClass.getName(), body == null ? 0 : body.length(), e.getClass().getSimpleName());
             throw e;
         }
     }

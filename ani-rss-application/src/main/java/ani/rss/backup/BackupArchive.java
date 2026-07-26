@@ -44,7 +44,8 @@ public final class BackupArchive {
     public static final long MAX_ENTRY_BYTES = 256L * 1024 * 1024;
     public static final int MAX_ENTRIES = 50_000;
     private static final Pattern DRIVE_PATH = Pattern.compile("^[A-Za-z]:([/\\\\].*)?$");
-    private static final Set<String> ROOT_FILES = Set.of("config.v2.json", "ani.v2.json", "database.db");
+    private static final Set<String> ROOT_FILES = Set.of(
+            "config.v2.json", "ani.v2.json", "database.db", "auth-state.v2.json");
     private static final Set<String> ROOT_DIRECTORIES = Set.of("files", "torrents");
 
     private BackupArchive() {
@@ -56,6 +57,7 @@ public final class BackupArchive {
         Map<String, Path> sources = new LinkedHashMap<>();
         addRequired(sources, root.resolve("config.v2.json"), "config.v2.json");
         addRequired(sources, root.resolve("ani.v2.json"), "ani.v2.json");
+        addOptional(sources, root.resolve("auth-state.v2.json"), "auth-state.v2.json");
         Path database = root.resolve("database.db");
         Path databaseSnapshot = null;
         if (Files.exists(database, LinkOption.NOFOLLOW_LINKS)) {
@@ -228,6 +230,13 @@ public final class BackupArchive {
             throw new IOException("required backup file is missing: " + archiveName);
         }
         sources.put(archiveName, path);
+    }
+
+    private static void addOptional(Map<String, Path> sources, Path path, String archiveName) throws IOException {
+        if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            return;
+        }
+        addRequired(sources, path, archiveName);
     }
 
     private static void addDirectory(Map<String, Path> sources, Path root, String prefix) throws IOException {

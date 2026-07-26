@@ -2,6 +2,7 @@ package ani.rss.ownership;
 
 import ani.rss.persistence.DatabaseManager;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -72,7 +73,11 @@ class QuarantineServiceTest {
         Path outside = Files.createDirectories(tempDir.resolve("outside"));
         Path outsideFile = outside.resolve("episode.mkv");
         Files.writeString(outsideFile, "outside");
-        Files.createSymbolicLink(root.resolve("linked"), outside);
+        try {
+            Files.createSymbolicLink(root.resolve("linked"), outside);
+        } catch (UnsupportedOperationException | SecurityException | java.io.IOException e) {
+            Assumptions.abort("symbolic links are unavailable in this test environment: " + e.getMessage());
+        }
 
         String ownershipId = UUID.randomUUID().toString();
         long now = System.currentTimeMillis();

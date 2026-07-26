@@ -2,7 +2,6 @@ package ani.rss.service;
 
 import ani.rss.commons.ExceptionUtils;
 import ani.rss.commons.FileUtils;
-import ani.rss.commons.GsonStatic;
 import ani.rss.commons.PinyinUtils;
 import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
@@ -28,7 +27,6 @@ import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ObjectUtil;
 import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.json.JSONUtil;
 import jakarta.annotation.Resource;
 import lombok.Synchronized;
 import lombok.extern.slf4j.Slf4j;
@@ -105,7 +103,7 @@ public class DownloadService {
         boolean sync = false;
 
         for (Item item : items) {
-            log.debug(JSONUtil.formatJsonStr(GsonStatic.toJson(item)));
+            log.debug("RSS 条目 name:{} episode:{}", item.getReName(), item.getEpisode());
             String reName = item.getReName();
             File torrent = TorrentUtil.getTorrent(ani, item);
             Boolean master = item.getMaster();

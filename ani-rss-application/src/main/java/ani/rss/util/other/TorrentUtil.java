@@ -3,7 +3,6 @@ package ani.rss.util.other;
 import ani.rss.commons.ExceptionUtils;
 import ani.rss.commons.FileUtils;
 import ani.rss.commons.PinyinUtils;
-import ani.rss.download.BaseDownload;
 import ani.rss.download.DownloaderClientFactory;
 import ani.rss.download.DownloaderClient;
 import ani.rss.entity.Ani;
@@ -32,8 +31,7 @@ import java.util.List;
  */
 @Slf4j
 public class TorrentUtil {
-    public static BaseDownload DOWNLOAD;
-    public static DownloaderClient CLIENT;
+    public static volatile DownloaderClient CLIENT;
 
     /**
      * 获取任务列表
@@ -328,7 +326,7 @@ public class TorrentUtil {
     /**
      * 初始化下载工具
      */
-    public static void loadDownloadTool() {
+    public static synchronized void loadDownloadTool() {
         Config config = ConfigUtil.CONFIG;
         String download = config.getDownloadToolType();
 
@@ -339,7 +337,6 @@ public class TorrentUtil {
         }
 
         CLIENT = DownloaderClientFactory.createClient(config);
-        DOWNLOAD = CLIENT.adapter();
         log.info("下载工具 {}", download);
     }
 

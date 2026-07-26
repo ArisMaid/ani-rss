@@ -36,6 +36,11 @@
           v-model="props.config.proxyList"
           :disabled="!props.config.proxy"/>
     </el-form-item>
+    <el-form-item label="图片私网白名单">
+      <el-input v-model="props.config.imagePrivateAllowlist" type="textarea"
+                :autosize="{ minRows: 2, maxRows: 4 }"
+                placeholder="media.example.local&#10;192.168.1.0/24&#10;fd00::/8"/>
+    </el-form-item>
     <el-form-item label="启用">
       <el-switch v-model:model-value="props.config.proxy"/>
     </el-form-item>
@@ -63,7 +68,6 @@ import {onMounted, ref} from "vue";
 import {ElMessage} from "element-plus";
 import {Key, User} from "@element-plus/icons-vue";
 import {testProxy} from "@/js/http.js";
-import {base64Encode} from "@/js/global.js";
 
 let urls = ref([
   'https://mikanani.me',
@@ -90,11 +94,15 @@ let test = () => {
   testLoading.value = true
   status.value = ''
   time.value = ''
-  testProxy(base64Encode(url.value), props.config)
+  testProxy(url.value, props.config)
       .then(res => {
         status.value = res.data.status
         time.value = res.data.time
-        ElMessage.success(res.message)
+        if (res.data.success) {
+          ElMessage.success('代理测试成功')
+        } else {
+          ElMessage.error(`代理测试失败：${res.data.failureType}`)
+        }
       })
       .finally(() => {
         testLoading.value = false

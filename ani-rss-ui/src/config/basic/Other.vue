@@ -15,7 +15,7 @@
         </div>
         <div style="justify-content: end;margin-top: 4px;" class="flex">
           <el-button :icon="Github" bg
-                     @click="openUrl('https://github.com/login/oauth/authorize?client_id=Ov23li1dD89l7iGKhYa3&redirect_uri=https://github-app.wushuo.top/&scope=read:user')">
+                     @click="openUrl(githubOAuthUrl)">
             获取GithubToken
           </el-button>
         </div>
@@ -77,7 +77,17 @@ import {ElMessage, ElText} from "element-plus";
 import {ref} from "vue";
 import * as http from "@/js/http.js";
 import {Github} from "@vicons/fa";
-import {getBaseUrl} from "@/js/global.js";
+import {toApiUrl} from "@/js/global.js";
+
+const githubOAuthUrl = (() => {
+  const url = new URL('https://github.com/login/oauth/authorize')
+  url.search = new URLSearchParams({
+    client_id: 'Ov23li1dD89l7iGKhYa3',
+    redirect_uri: 'https://github-app.wushuo.top/',
+    scope: 'read:user'
+  }).toString()
+  return url.toString()
+})()
 
 let openUrl = (url) => window.open(url)
 
@@ -94,13 +104,20 @@ let clearCache = () => {
 }
 
 let copyEmbyApi = () => {
-  let url = `${getBaseUrl()}api/embyWebHook?api-key=${props.config.apiKey}`;
-  copy(url)
+  copyApiUrl('api/embyWebHook')
 }
 
 let copyIcs = () => {
-  let url = `${getBaseUrl()}api/calendar.ics?api-key=${props.config.apiKey}`;
-  copy(url)
+  copyApiUrl('api/calendar.ics')
+}
+
+let copyApiUrl = async (path) => {
+  const apiKey = props.config.apiKey || (await http.revealApiKey()).data.apiKey
+  if (!apiKey) {
+    ElMessage.error('请先生成 API Key')
+    return
+  }
+  copy(toApiUrl(path, {'api-key': apiKey}))
 }
 
 let copy = (v) => {

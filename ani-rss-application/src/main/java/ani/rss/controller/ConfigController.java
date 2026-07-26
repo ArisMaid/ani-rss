@@ -159,6 +159,7 @@ public class ConfigController extends BaseController {
 
         response.setContentType(contentType);
         response.setHeader(Header.CONTENT_DISPOSITION, StrFormatter.format("inline; filename=\"{}\"", filename));
+        response.setHeader("Cache-Control", "no-store");
 
         @Cleanup
         OutputStream outputStream = response.getOutputStream();
@@ -170,12 +171,8 @@ public class ConfigController extends BaseController {
     @Operation(summary = "导入设置")
     @PostMapping(value = "/importConfig", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public Result<RestoreService.RestoreOperationView> importConfig(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "confirm", defaultValue = "false") boolean confirm) throws IOException {
+            @RequestParam("file") MultipartFile file) throws IOException {
         RestoreService.RestoreOperationView staged = restoreService.stage(file.getInputStream(), file.getSize());
-        if (confirm && staged.status() == RestoreService.RestoreStatus.VALIDATED) {
-            staged = restoreService.confirm(staged.operationId());
-        }
         return Result.success(staged);
     }
 }

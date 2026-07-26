@@ -291,7 +291,7 @@ public class OpenListUploadNotification implements BaseNotification {
                     Assert.isTrue(res.isOk(), "上传失败 {} 状态码:{}", localFilePath, res.getStatus());
                     JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
                     int code = jsonObject.get("code").getAsInt();
-                    log.info(jsonObject.toString());
+                    log.debug("OpenList 上传响应 code:{}", code);
                     Assert.isTrue(code == 200, "上传失败 {} 状态码:{}", localFilePath, code);
 
                     log.info("OpenList 上传完成 {}", filename);

@@ -63,7 +63,7 @@ export default defineConfig({
                         },
                         {
                             name: 'utils',
-                            test: /node_modules[\\/](crypto-js|markdown-it|markdown-it-github-alerts)/,
+                            test: /node_modules[\\/](markdown-it|markdown-it-github-alerts)/,
                         },
                         {
                             name: 'element-icon',

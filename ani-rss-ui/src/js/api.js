@@ -1,5 +1,5 @@
 import {ElMessage} from "element-plus";
-import {authorization} from "@/js/global.js";
+import {clearAuthentication, csrfToken} from "@/js/global.js";
 
 let post = async (url, body) => {
     return await fetch_(url, 'POST', body);
@@ -19,40 +19,62 @@ let put = async (url, body) => {
 
 let fetch_ = async (url, method, body) => {
     let headers = {}
-    if (authorization.value) {
-        headers['Authorization'] = authorization.value
-    }
-    if (body) {
+    const isForm = typeof FormData !== 'undefined' && body instanceof FormData
+    if (body && !isForm) {
         headers['Content-Type'] = 'application/json'
     }
-    return await fetch(url, {
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && csrfToken.value &&
+        !url.includes('v2/auth/login') && !url.includes('v2/auth/setup')) {
+        headers['X-CSRF-Token'] = csrfToken.value
+    }
+    const response = await fetch(url, {
         method: method,
-        body: body ? JSON.stringify(body) : null,
-        headers: headers
+        body: body ? (isForm ? body : JSON.stringify(body)) : null,
+        headers: headers,
+        credentials: 'include'
     })
-        .then(res => res.json())
-        .then(res => {
-            let {code, message, t} = res
+    let result = {}
+    try {
+        result = await response.json()
+    } catch (e) {
+        result = {}
+    }
+    if (!result || typeof result !== 'object') result = {}
+    if (!response.ok) {
+        const message = result.detail || result.message || `请求失败 (${response.status})`
+        ElMessage.error(message)
+        if (response.status === 401 || response.status === 403) {
+            clearAuthentication()
+            setTimeout(() => location.reload(), 1000)
+        }
+        const error = new Error(message)
+        error.code = result.code
+        error.operationId = result.operationId
+        error.status = response.status
+        error.problem = result
+        throw error
+    }
 
-            if (!checkTimestampRange(t, true)) {
-                console.warn('与服务端时差超过30分钟')
-            }
+    // Legacy endpoints use a numeric `code`; RFC 9457 errors use a string
+    // `code`, so presence alone cannot distinguish the two response shapes.
+    const legacyResult = typeof result.code === 'number' && 'message' in result
+    if (!legacyResult) {
+        return {code: response.status, message: '', data: result, t: Date.now()}
+    }
 
-            if (code >= 200 && code < 300) {
-                return res
-            }
-
-            ElMessage.error(message)
-            if (code === 403) {
-                authorization.value = ''
-                setTimeout(() => {
-                    location.reload()
-                }, 1000)
-            }
-            return new Promise((resolve, reject) => {
-                reject(new Error(message));
-            });
-        })
+    let {code, message, t} = result
+    if (t !== undefined && !checkTimestampRange(t, true)) {
+        console.warn('与服务端时差超过30分钟')
+    }
+    if (code >= 200 && code < 300) {
+        return result
+    }
+    ElMessage.error(message)
+    if (code === 401 || code === 403) {
+        clearAuthentication()
+        setTimeout(() => location.reload(), 1000)
+    }
+    throw new Error(message)
 }
 
 export default {post, get, del, put}

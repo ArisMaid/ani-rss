@@ -1,6 +1,7 @@
 package ani.rss.controller;
 
 import ani.rss.annotation.Auth;
+import ani.rss.auth.AuthService;
 import ani.rss.commons.GsonStatic;
 import ani.rss.entity.Ani;
 import ani.rss.entity.BgmInfo;
@@ -14,6 +15,7 @@ import ani.rss.util.other.ConfigUtil;
 import cn.hutool.core.lang.Opt;
 import com.google.gson.JsonObject;
 import io.swagger.v3.oas.annotations.Operation;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -90,8 +92,11 @@ public class BgmController extends BaseController {
     @Auth
     @Operation(summary = "BGM授权回调")
     @PostMapping("/bgm/oauth/callback")
-    public Result<Void> callback(@RequestParam("code") String code) {
-        Config config = ConfigUtil.CONFIG;
+    public Result<Void> callback(@RequestParam("code") String code,
+                                 @RequestParam("state") String state,
+                                 HttpServletRequest request) {
+        AuthService.consumeOAuthState("bgm", state, request);
+        Config config = ConfigUtil.snapshot();
         String bgmAppID = config.getBgmAppID();
         String bgmAppSecret = config.getBgmAppSecret();
         String bgmRedirectUri = config.getBgmRedirectUri();
@@ -114,7 +119,7 @@ public class BgmController extends BaseController {
                     config.setBgmToken(accessToken)
                             .setBgmRefreshToken(refreshToken);
                 });
-        ConfigUtil.sync();
+        ConfigUtil.sync(config);
         return Result.success("授权成功, 现在你可以关闭此窗口");
     }
 }

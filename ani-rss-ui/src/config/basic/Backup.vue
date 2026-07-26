@@ -6,53 +6,68 @@
   </div>
 </template>
 <script setup>
-import {authorization} from "@/js/global.js";
 import * as http from "@/js/http.js"
 import {ElMessage, ElMessageBox} from "element-plus";
-import {markRaw} from "vue";
-import {WarnTriangleFilled} from "@element-plus/icons-vue";
 
 let importConfig = () => {
-  ElMessageBox.confirm(
-      `<strong style="color: var(--el-color-danger);">
-        将会覆盖掉现有的设置、订阅、下载记录, 是否执意继续?
-       </strong>`,
-      '警告',
-      {
-        dangerouslyUseHTMLString: true,
-        confirmButtonText: '继续',
-        confirmButtonClass: 'is-text is-has-bg el-button--danger',
-        cancelButtonText: '取消',
-        cancelButtonClass: 'is-text is-has-bg',
-        type: 'warning',
-        icon: markRaw(WarnTriangleFilled),
-      }
-  )
-      .then(() => {
-        let element = document.querySelector('#backup-file');
-        element.click();
-      })
+  document.querySelector('#backup-file').click()
 }
 
-let changeFile = () => {
+let changeFile = async () => {
   let element = document.querySelector('#backup-file');
-  http.importConfig(element.files[0])
-      .then(res => {
-        let {code, message} = res
-        if (code !== 200) {
-          ElMessage.error(message)
-          return
-        }
-        ElMessage.success(message)
-        setTimeout(() => {
-          location.reload();
-        }, 1000)
-      })
+  const file = element.files[0]
+  if (!file) return
+  try {
+    const staged = await http.stageRestore(file)
+    if (staged.status !== 'VALIDATED') {
+      ElMessage.error((staged.errors || []).join('; ') || '备份验证失败')
+      return
+    }
+    const legacy = staged.legacy ? '旧格式备份；' : ''
+    const warnings = (staged.warnings || []).map(value => `警告：${value}`)
+    const files = (staged.files || []).slice(0, 10)
+        .map(value => `${value.path} (${value.size} B)`)
+    const omitted = staged.files.length > files.length
+        ? `另有 ${staged.files.length - files.length} 个文件未在摘要中显示。`
+        : ''
+    const report = [
+      `${legacy}已验证 ${staged.files.length} 个文件。`,
+      ...warnings,
+      ...files,
+      omitted,
+      '确认进入维护模式并恢复？'
+    ].filter(Boolean).join('\n')
+    await ElMessageBox.confirm(
+        report,
+        '确认恢复',
+        {type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消'}
+    )
+    await http.confirmRestore(staged.operationId)
+    const deadline = Date.now() + 120000
+    while (Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 500))
+      const status = await http.restoreStatus(staged.operationId)
+      if (status.status === 'SUCCEEDED') {
+        ElMessage.success('恢复成功')
+        setTimeout(() => location.reload(), 1000)
+        return
+      }
+      if (['ROLLED_BACK', 'FAILED', 'MAINTENANCE_REQUIRED'].includes(status.status)) {
+        ElMessage.error((status.errors || []).join('; ') || `恢复失败：${status.status}`)
+        return
+      }
+    }
+    ElMessage.error('恢复状态查询超时')
+  } catch (e) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message || '恢复失败')
+  } finally {
+    element.value = ''
+  }
 }
 
 let exportConfig = () => {
   let element = document.createElement('a');
-  element.href = `api/exportConfig?s=${authorization.value}`
+  element.href = new URL('api/exportConfig', document.baseURI).toString()
 
   document.body.appendChild(element);
 

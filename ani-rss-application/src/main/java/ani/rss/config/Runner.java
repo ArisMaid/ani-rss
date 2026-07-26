@@ -2,6 +2,7 @@ package ani.rss.config;
 
 import ani.rss.commons.ExceptionUtils;
 import ani.rss.commons.MavenUtils;
+import ani.rss.auth.AuthService;
 import ani.rss.service.BackupService;
 import ani.rss.service.TaskService;
 import ani.rss.ownership.OwnershipMigrationService;
@@ -15,12 +16,14 @@ import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.net.InetSocketAddress;
 
 @Slf4j
 @Component
+@ConditionalOnProperty(name = "ani-rss.startup.enabled", matchIfMissing = true)
 public class Runner implements ApplicationRunner {
 
     @Resource
@@ -39,6 +42,10 @@ public class Runner implements ApplicationRunner {
     public void run(@NonNull ApplicationArguments args) {
         try {
             ConfigUtil.load();
+            AuthService.initialize();
+            if (AuthService.setupRequired()) {
+                log.warn("首次设置码已写入配置目录中的 initial-setup-code.txt（15 分钟内有效）");
+            }
             backupService.backup();
 
             AniUtil.load();

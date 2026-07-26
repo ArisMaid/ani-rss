@@ -2,12 +2,14 @@ package ani.rss.util.other;
 
 import ani.rss.commons.AtomicFileWriter;
 import ani.rss.commons.GsonStatic;
+import ani.rss.commons.PathPolicy;
 import ani.rss.entity.*;
 import ani.rss.entity.dto.RssToAniDTO;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.exception.ResultException;
 import ani.rss.ownership.OwnershipService;
 import ani.rss.persistence.SubscriptionRepository;
+import ani.rss.service.SafeImageFetcher;
 import ani.rss.service.DownloadService;
 import ani.rss.service.MikanService;
 import ani.rss.util.basic.HttpReq;
@@ -22,11 +24,9 @@ import cn.hutool.core.lang.Assert;
 import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ObjectUtil;
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.core.util.URLUtil;
 import cn.hutool.crypto.SecureUtil;
 import cn.hutool.extra.spring.SpringUtil;
 import cn.hutool.http.HttpUtil;
-import cn.hutool.json.JSONUtil;
 import lombok.extern.slf4j.Slf4j;
 import wushuo.tmdb.api.entity.Tmdb;
 
@@ -34,6 +34,11 @@ import java.io.File;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.Files;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.LinkOption;
+import java.nio.file.FileAlreadyExistsException;
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -243,7 +248,7 @@ public class AniUtil {
             standbyRssList.add(copyStandbyRss);
         }
 
-        log.debug("获取到动漫信息 {}", JSONUtil.formatJsonStr(GsonStatic.toJson(ani)));
+        log.debug("获取到动漫信息 title:{} id:{}", ani.getTitle(), ani.getId());
         if (ani.getOva()) {
             return ani;
         }
@@ -281,43 +286,102 @@ public class AniUtil {
      * @return 相对位置
      */
     public static String saveCover(String coverUrl, Boolean isOverride) {
-        File configDir = ConfigUtil.getConfigDir();
-        File filesDir = new File(configDir, "files");
-        FileUtil.mkdir(filesDir);
-
         // 默认空图片
         String cover = "cover.png";
-        File defaultFile = Path.of(filesDir.toString(), cover).toFile();
-        if (!defaultFile.exists()) {
-            try (InputStream inputStream = ResourceUtil.getStream("image/cover.png")) {
-                FileUtil.writeFromStream(inputStream, defaultFile);
-            } catch (Exception e) {
-                log.error(e.getMessage(), e);
+        Path configRoot = ConfigUtil.getConfigDir().toPath().toAbsolutePath().normalize();
+        Path filesRoot = configRoot.resolve("files");
+        try {
+            Files.createDirectories(configRoot);
+            if (Files.exists(filesRoot, LinkOption.NOFOLLOW_LINKS) && Files.isSymbolicLink(filesRoot)) {
+                throw new IllegalStateException("cover directory is a symbolic link");
             }
+            Files.createDirectories(filesRoot);
+            PathPolicy.requireNoSymbolicLinks(configRoot, filesRoot);
+            PathPolicy.realPathWithin(configRoot, filesRoot);
+            Path defaultFile = filesRoot.resolve(cover);
+            if (!Files.exists(defaultFile, LinkOption.NOFOLLOW_LINKS)) {
+                try (InputStream inputStream = ResourceUtil.getStream("image/cover.png")) {
+                    writeCoverAtomically(filesRoot, defaultFile, inputStream.readAllBytes(), false);
+                }
+            } else if (!Files.isRegularFile(defaultFile, LinkOption.NOFOLLOW_LINKS) ||
+                    Files.isSymbolicLink(defaultFile)) {
+                throw new IllegalStateException("default cover path is unsafe");
+            }
+        } catch (Exception e) {
+            log.error("准备封面目录失败 type:{}", e.getClass().getSimpleName());
+            return cover;
         }
         if (StrUtil.isBlank(coverUrl)) {
             return cover;
         }
 
-        String extName = FileUtil.extName(URLUtil.getPath(coverUrl));
-        // 取url的md5作为文件名, 避免重复下载
-        String filename = SecureUtil.md5(coverUrl) + "." + extName;
-
-        File dir = new File(filesDir.toString(), String.valueOf(filename.charAt(0)));
-
-        FileUtil.mkdir(dir);
-        File file = new File(dir, filename);
-        if (file.exists() && !isOverride) {
-            return filename.charAt(0) + "/" + filename;
-        }
-        FileUtil.del(file);
+        String hash = SecureUtil.sha256(coverUrl);
+        String directory = hash.substring(0, 2);
+        Path dir = filesRoot.resolve(directory);
         try {
-            HttpReq.get(coverUrl)
-                    .then(res -> FileUtil.writeFromStream(res.bodyStream(), file));
-            return filename.charAt(0) + "/" + filename;
+            Files.createDirectories(dir);
+            PathPolicy.requireNoSymbolicLinks(filesRoot, dir);
+            PathPolicy.realPathWithin(filesRoot, dir);
         } catch (Exception e) {
-            log.error(e.getMessage(), e);
+            log.error("准备封面缓存失败 type:{}", e.getClass().getSimpleName());
             return cover;
+        }
+        if (!isOverride) {
+            for (String existingExtension : List.of("jpg", "jpeg", "png", "gif", "webp", "bmp")) {
+                String existingName = hash + "." + existingExtension;
+                if (Files.isRegularFile(dir.resolve(existingName), LinkOption.NOFOLLOW_LINKS)) {
+                    return directory + "/" + existingName;
+                }
+            }
+        }
+        try {
+            SafeImageFetcher.FetchedImage fetched = SafeImageFetcher.fetch(coverUrl, ConfigUtil.snapshot());
+            String extName = switch (fetched.contentType()) {
+                case "image/jpeg" -> "jpg";
+                case "image/png" -> "png";
+                case "image/gif" -> "gif";
+                case "image/webp" -> "webp";
+                case "image/bmp" -> "bmp";
+                default -> throw new IllegalStateException("unsupported cover image type");
+            };
+            String filename = hash + "." + extName;
+            Path target = dir.resolve(filename);
+            if (Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) && !isOverride) {
+                return directory + "/" + filename;
+            }
+            writeCoverAtomically(dir, target, fetched.bytes(), isOverride);
+            return directory + "/" + filename;
+        } catch (Exception e) {
+            log.error("保存封面失败 type:{}", e.getClass().getSimpleName());
+            return cover;
+        }
+    }
+
+    private static void writeCoverAtomically(Path directory, Path target, byte[] bytes,
+                                             boolean replace) throws java.io.IOException {
+        Path temporary = Files.createTempFile(directory, ".cover-", ".part");
+        try {
+            Files.write(temporary, bytes);
+            try {
+                if (replace) {
+                    Files.move(temporary, target,
+                            StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } else {
+                    Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
+                }
+            } catch (FileAlreadyExistsException e) {
+                if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(target)) {
+                    throw e;
+                }
+            } catch (AtomicMoveNotSupportedException e) {
+                if (replace) {
+                    Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+                } else {
+                    Files.move(temporary, target);
+                }
+            }
+        } finally {
+            Files.deleteIfExists(temporary);
         }
     }
 

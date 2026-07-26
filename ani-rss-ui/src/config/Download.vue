@@ -244,7 +244,11 @@ const downloadLoginTest = () => {
   downloadLoginTestLoading.value = true
   http.downloadLoginTest(props.config)
       .then(res => {
-        ElMessage.success(res.message)
+        if (res.data.success) {
+          ElMessage.success('连接成功')
+        } else {
+          ElMessage.error('连接失败')
+        }
       })
       .finally(() => {
         downloadLoginTestLoading.value = false

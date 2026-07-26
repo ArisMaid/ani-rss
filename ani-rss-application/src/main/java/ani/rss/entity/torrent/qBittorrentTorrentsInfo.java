@@ -1,9 +1,7 @@
 package ani.rss.entity.torrent;
 
 import ani.rss.commons.FileUtils;
-import ani.rss.download.qBittorrent;
 import ani.rss.enums.TorrentsStateEnum;
-import ani.rss.util.other.ConfigUtil;
 import cn.hutool.core.util.ObjectUtil;
 import cn.hutool.core.util.StrUtil;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -13,6 +11,7 @@ import lombok.experimental.Accessors;
 
 import java.io.Serializable;
 import java.util.List;
+import java.util.function.Function;
 
 @Data
 @Accessors(chain = true)
@@ -25,14 +24,15 @@ public class qBittorrentTorrentsInfo extends TorrentsInfo implements Serializabl
     @Schema(description = "标签")
     private String tags;
 
-    public TorrentsInfo toTorrentsInfo() {
+    public TorrentsInfo toTorrentsInfo(
+            Function<TorrentsInfo, List<FileEntity>> fileLoader) {
         // 将标签转换为 List
         List<String> tagList = StrUtil.split(tags, ",", true, true);
         setTagList(tagList);
 
         // 获取文件列表
         setFilesSupplier(() ->
-                qBittorrent.files(this, true, ConfigUtil.CONFIG)
+                fileLoader.apply(this)
                         .stream()
                         .filter(fileEntity -> fileEntity.getPriority() > 0)
                         .map(qBittorrentTorrentsInfo.FileEntity::getName)

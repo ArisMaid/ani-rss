@@ -92,15 +92,16 @@ public class CronConfig {
         Set<String> trackers = new HashSet<>();
 
         for (String url : urls) {
-            log.info("获取 tracker {}", url);
+            String safeUrl = HttpReq.sanitizeUrl(url);
+            log.info("获取 tracker {}", safeUrl);
             HttpReq.get(url)
                     .then(res -> {
                         int status = res.getStatus();
                         boolean ok = res.isOk();
-                        Assert.isTrue(ok, "更新trackers失败 {} {}", status, url);
+                        Assert.isTrue(ok, "更新trackers失败 {} {}", status, safeUrl);
                         String contentType = res.header(Header.CONTENT_TYPE);
-                        Assert.notBlank(contentType, "更新trackers失败 contentType 为空 {}", url);
-                        Assert.isTrue(contentType.contains(ContentType.TEXT_PLAIN), "更新trackers失败 {} {}", contentType, url);
+                        Assert.notBlank(contentType, "更新trackers失败 contentType 为空 {}", safeUrl);
+                        Assert.isTrue(contentType.contains(ContentType.TEXT_PLAIN), "更新trackers失败 {} {}", contentType, safeUrl);
 
                         String body = res.body();
                         StrUtil.split(body, "\n")

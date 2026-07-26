@@ -5,6 +5,8 @@ import ani.rss.util.other.ConfigUtil;
 import cn.hutool.core.util.StrUtil;
 import jakarta.servlet.http.HttpServletRequest;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.List;
 import java.util.function.Function;
 
@@ -20,7 +22,7 @@ public class ApiKey implements Function<HttpServletRequest, Boolean> {
             return false;
         }
 
-        for (String key : List.of("api-key", "x-api-key", "s")) {
+        for (String key : List.of("api-key", "x-api-key")) {
             String s = request.getHeader(key);
             if (StrUtil.isBlank(s)) {
                 s = request.getParameter(key);
@@ -28,7 +30,8 @@ public class ApiKey implements Function<HttpServletRequest, Boolean> {
             if (StrUtil.isBlank(s)) {
                 continue;
             }
-            return StrUtil.equals(apiKey, s);
+            return MessageDigest.isEqual(apiKey.getBytes(StandardCharsets.UTF_8),
+                    s.getBytes(StandardCharsets.UTF_8));
         }
 
         return false;

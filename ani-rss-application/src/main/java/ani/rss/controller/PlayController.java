@@ -3,10 +3,12 @@ package ani.rss.controller;
 import ani.rss.annotation.Auth;
 import ani.rss.commons.FileUtils;
 import ani.rss.entity.Ani;
+import ani.rss.entity.Global;
 import ani.rss.entity.PlayItem;
 import ani.rss.entity.web.Result;
 import ani.rss.enums.StringEnum;
 import ani.rss.service.DownloadService;
+import ani.rss.service.MediaHandleService;
 import ani.rss.util.other.AniUtil;
 import cn.hutool.core.codec.Base64;
 import cn.hutool.core.collection.CollUtil;
@@ -18,6 +20,7 @@ import com.matthewn4444.ebml.EBMLReader;
 import com.matthewn4444.ebml.subtitles.Subtitles;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.Cleanup;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -26,6 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.*;
 
 @RestController
@@ -34,16 +38,20 @@ public class PlayController extends BaseController {
     @Resource
     private DownloadService downloadService;
 
+    @Resource
+    private MediaHandleService mediaHandleService;
+
     @Auth
     @Operation(summary = "获取内封字幕")
     @PostMapping("/getSubtitles")
     public Result<List<PlayItem.Subtitles>> getSubtitles(@RequestParam("filename") String filename) throws IOException {
         filename = filename.replace(" ", "+");
-        filename = Base64.decodeStr(filename);
+        String handle = Base64.decodeStr(filename);
+        Path mediaPath = mediaHandleService.resolve(handle, Global.REQUEST.get()).path();
 
         List<PlayItem.Subtitles> subtitlesList = new ArrayList<>();
 
-        String extName = FileUtil.extName(filename);
+        String extName = FileUtil.extName(mediaPath.getFileName().toString());
         if (StrUtil.isBlank(extName)) {
             return Result.success(subtitlesList);
         }
@@ -52,10 +60,10 @@ public class PlayController extends BaseController {
             return Result.success(subtitlesList);
         }
 
-        Assert.isTrue(FileUtil.exist(filename), "视频文件不存在");
+        Assert.isTrue(FileUtil.exist(mediaPath.toFile()), "视频文件不存在");
 
         @Cleanup
-        EBMLReader reader = new EBMLReader(filename);
+        EBMLReader reader = new EBMLReader(mediaPath.toString());
         if (!reader.readHeader()) {
             return Result.success(subtitlesList);
         }
@@ -98,7 +106,8 @@ public class PlayController extends BaseController {
         ani = first.get();
 
         String downloadPath = downloadService.getDownloadPath(ani);
-        List<PlayItem> collect = getPlayItem(new File(downloadPath));
+        Path mediaRoot = Path.of(downloadPath).toAbsolutePath().normalize();
+        List<PlayItem> collect = getPlayItem(mediaRoot.toFile(), mediaRoot, Global.REQUEST.get());
 
         // 按照集数排序
         CollUtil.sort(collect, Comparator.comparingDouble(PlayItem::getEpisode));
@@ -113,9 +122,14 @@ public class PlayController extends BaseController {
      * @return 视频列表
      */
     public List<PlayItem> getPlayItem(File file) {
+        Path root = file.toPath().toAbsolutePath().normalize();
+        return getPlayItem(file, root, Global.REQUEST.get());
+    }
+
+    private List<PlayItem> getPlayItem(File file, Path root, HttpServletRequest request) {
         List<PlayItem> playItems = new ArrayList<>();
 
-        if (!file.exists()) {
+        if (!file.exists() || java.nio.file.Files.isSymbolicLink(file.toPath())) {
             // 文件或目录不存在
             return playItems;
         }
@@ -124,7 +138,7 @@ public class PlayController extends BaseController {
             // 进行递归
             File[] files = FileUtils.listFiles(file);
             for (File itFile : files) {
-                playItems.addAll(getPlayItem(itFile));
+                playItems.addAll(getPlayItem(itFile, root, request));
             }
             return playItems;
         }
@@ -148,16 +162,16 @@ public class PlayController extends BaseController {
         }
 
         // 查找同层级的字幕文件
-        List<PlayItem.Subtitles> subtitles = getSubtitlesByVideo(file);
+        List<PlayItem.Subtitles> subtitles = getSubtitlesByVideo(file, root, request);
 
         String videoFileName = file.getName();
         long lastModified = file.lastModified();
         String formatSize = FileUtils.formatSize(file);
-        String absolutePath = FileUtils.getAbsolutePath(file);
+        String handle = mediaHandleService.issue(file.toPath(), root, request);
 
         PlayItem playItem = new PlayItem();
         playItems.add(playItem);
-        playItem.setFilename(absolutePath)
+        playItem.setFilename(handle)
                 .setName(videoFileName)
                 .setTitle(videoFileName)
                 .setLastModify(lastModified)
@@ -188,7 +202,7 @@ public class PlayController extends BaseController {
      * @param videoFile 视频文件
      * @return 字幕列表
      */
-    public List<PlayItem.Subtitles> getSubtitlesByVideo(File videoFile) {
+    private List<PlayItem.Subtitles> getSubtitlesByVideo(File videoFile, Path root, HttpServletRequest request) {
         // 查找同层级的字幕文件
         File[] files = FileUtils.listFiles(videoFile.getParentFile());
         List<PlayItem.Subtitles> subtitles = Arrays.stream(files)
@@ -212,11 +226,11 @@ public class PlayController extends BaseController {
                 .map(sub -> {
                     // 主文件名
                     String subMainName = FileUtil.mainName(sub.getName());
-                    String absolutePath = FileUtils.getAbsolutePath(sub);
+                    String handle = mediaHandleService.issue(sub.toPath(), root, request);
                     return new PlayItem.Subtitles()
                             .setName(subMainName)
                             .setHtml(subMainName.toUpperCase())
-                            .setUrl(absolutePath)
+                            .setUrl(handle)
                             .setType(FileUtil.extName(sub));
                 }).toList();
         // 去重复

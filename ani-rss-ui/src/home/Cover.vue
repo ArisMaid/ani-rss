@@ -3,7 +3,7 @@
     <div class="content">
       <div>
         <img
-            :src="`${toApiFile(ani['cover'])}&t=${time}`"
+            :src="coverSrc()"
             :alt="ani.title"
             class="cover"
         />
@@ -21,12 +21,15 @@
               </div>
               <div style="margin-top: 8px;">
                 <el-upload
-                    :action="`api/upload?s=${authorization}`"
+                    :action="new URL('api/v2/uploads/cover', document.baseURI).toString()"
+                    :headers="uploadHeaders()"
+                    :with-credentials="true"
                     :before-upload="beforeAvatarUpload"
                     :on-success="res => {
-                      ani['cover'] = res.data
+                      ani['cover'] = res.path
                       time = new Date().getTime()
                     }"
+                    :on-error="() => ElMessage.error('封面上传失败')"
                     :show-file-list="false"
                     class="upload-demo"
                     drag
@@ -59,10 +62,16 @@
 import {ref} from "vue";
 import {ElMessage} from "element-plus";
 import {UploadFilled} from "@element-plus/icons-vue";
-import {authorization, toApiFile} from "@/js/global.js";
+import {csrfToken, toApiFile} from "@/js/global.js";
 import * as http from "@/js/http.js";
 
 let reLoadIng = ref(false)
+const uploadHeaders = () => csrfToken.value ? {'X-CSRF-Token': csrfToken.value} : {}
+const coverSrc = () => {
+  const url = new URL(toApiFile(ani.value['cover']))
+  url.searchParams.set('t', time.value || '')
+  return url.toString()
+}
 let reLoad = () => {
   reLoadIng.value = true
   http.refreshCover(ani.value)

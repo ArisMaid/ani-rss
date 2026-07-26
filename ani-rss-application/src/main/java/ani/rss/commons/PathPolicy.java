@@ -72,6 +72,23 @@ public final class PathPolicy {
         return realCandidate;
     }
 
+    /** Rejects a symbolic link at the allowed root or any component below it. */
+    public static Path requireNoSymbolicLinks(Path root, Path candidate) {
+        Path normalizedRoot = absolute(root);
+        Path normalizedCandidate = requireWithin(normalizedRoot, candidate);
+        Path current = normalizedRoot;
+        if (Files.isSymbolicLink(current)) {
+            throw new IllegalArgumentException("symbolic links are not allowed");
+        }
+        for (Path part : normalizedRoot.relativize(normalizedCandidate)) {
+            current = current.resolve(part);
+            if (Files.isSymbolicLink(current)) {
+                throw new IllegalArgumentException("symbolic links are not allowed");
+            }
+        }
+        return normalizedCandidate;
+    }
+
     public static boolean isFileSystemRoot(Path path) {
         Path absolute = absolute(path);
         return absolute.getParent() == null;

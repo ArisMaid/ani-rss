@@ -36,7 +36,7 @@
         </template>
       </popconfirm>
       <div class="about-action-spacer"></div>
-      <popconfirm title="你确定关闭吗?" @confirm="stop(1)">
+      <popconfirm title="你确定关闭吗?" @confirm="stop(2)">
         <template #reference>
           <el-button bg icon="SwitchButton" text type="danger">关闭</el-button>
         </template>
@@ -67,7 +67,7 @@
         </el-form-item>
         <el-form-item label="更新内容">
           <el-scrollbar class="about-scrollbar" :always="true">
-            <div class="markdown-body about-markdown" v-html="md.render(about.markdownBody)"></div>
+            <div class="markdown-body about-markdown" v-html="renderMarkdown(about.markdownBody)"></div>
             <el-alert
                 show-icon
                 :closable="false"
@@ -106,22 +106,24 @@ import Popconfirm from "@/other/Popconfirm.vue";
 import {Book, Github, Telegram} from "@vicons/fa";
 
 import markdownit from 'markdown-it'
+import DOMPurify from 'dompurify'
 import MarkdownItGitHubAlerts from 'markdown-it-github-alerts'
 import 'markdown-it-github-alerts/styles/github-colors-light.css'
 import 'markdown-it-github-alerts/styles/github-colors-dark-media.css'
 import 'markdown-it-github-alerts/styles/github-base.css'
 
-import {authorization} from "@/js/global.js";
+import {clearAuthentication} from "@/js/global.js";
 import * as http from "@/js/http.js";
 
 let md = markdownit({
-  html: true,
+  html: false,
   linkify: true
 })
 
 md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   const token = tokens[idx]
   token.attrSet('target', '_blank') // 强制添加属性
+  token.attrSet('rel', 'noopener noreferrer')
   return self.renderToken(tokens, idx, options)
 }
 
@@ -129,13 +131,15 @@ md.use(MarkdownItGitHubAlerts)
 
 const actionLoading = ref(false)
 
+const renderMarkdown = (value) => DOMPurify.sanitize(md.render(value || ''))
+
 const stop = (status) => {
   actionLoading.value = true
   http.stop(status)
       .then(res => {
         ElMessage.success(res.message)
         setTimeout(() => {
-          authorization.value = ''
+          clearAuthentication()
           location.reload()
         }, 5000)
       })
@@ -152,13 +156,13 @@ const update = async () => {
   actionLoading.value = true
   http.update()
       .then(async res => {
-        ElMessage.success(res.message)
+        ElMessage.success(res.message || '更新已启动，正在重启...')
         for (let i = 0; i < 24; i++) {
           await sleep(5000)
           try {
             let pingRes = await http.ping()
             if (pingRes.code === 200) {
-              authorization.value = ''
+              clearAuthentication()
               location.reload()
               return
             }
@@ -187,8 +191,10 @@ onMounted(() => {
 })
 
 let logout = () => {
-  authorization.value = ''
-  location.reload()
+  http.logout().finally(() => {
+    clearAuthentication()
+    location.reload()
+  })
 }
 
 let openUrl = (url) => window.open(url)

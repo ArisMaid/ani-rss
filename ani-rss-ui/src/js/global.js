@@ -6,14 +6,27 @@ import {ref} from "vue";
  */
 let rememberThePassword = useLocalStorage('rememberThePassword', {
     remember: false,
-    username: '',
-    password: ''
+    username: ''
 })
+let legacyRememberedCredentials = null
+if (rememberThePassword.value && 'password' in rememberThePassword.value) {
+    if (rememberThePassword.value.username && rememberThePassword.value.password) {
+        legacyRememberedCredentials = {
+            username: String(rememberThePassword.value.username),
+            password: String(rememberThePassword.value.password)
+        }
+    }
+    rememberThePassword.value = {
+        remember: Boolean(rememberThePassword.value.remember),
+        username: String(rememberThePassword.value.username || '')
+    }
+}
 
 /**
- * 令牌
+ * 服务端会话状态（凭据仅保存在 HttpOnly Cookie 中）
  */
-const authorization = useLocalStorage('authorization', '')
+const authorization = ref('')
+const csrfToken = ref('')
 
 /**
  * 主题管理
@@ -123,6 +136,82 @@ const init = () => {
     initLayout()
 }
 
+const markAuthenticated = (csrf = '') => {
+    authorization.value = 'session'
+    csrfToken.value = csrf
+}
+
+const clearAuthentication = () => {
+    authorization.value = ''
+    csrfToken.value = ''
+}
+
+const initAuth = async () => {
+    try {
+        const response = await fetch(`${getBaseUrl()}api/v2/auth/csrf`, {
+            credentials: 'include'
+        })
+        if (response.ok) {
+            const body = await response.json()
+            markAuthenticated(body.csrfToken)
+            localStorage.removeItem('authorization')
+            return true
+        }
+    } catch (e) {
+    }
+    try {
+        const response = await fetch(`${getBaseUrl()}api/v2/auth/ip-login`, {
+            method: 'POST',
+            credentials: 'include'
+        })
+        if (response.ok) {
+            const body = await response.json()
+            markAuthenticated(body.csrfToken)
+            localStorage.removeItem('authorization')
+            return true
+        }
+    } catch (e) {
+    }
+    const rememberedCredentials = legacyRememberedCredentials
+    legacyRememberedCredentials = null
+    if (rememberedCredentials) {
+        try {
+            const response = await fetch(`${getBaseUrl()}api/v2/auth/login`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(rememberedCredentials)
+            })
+            if (response.ok) {
+                const body = await response.json()
+                markAuthenticated(body.csrfToken)
+                localStorage.removeItem('authorization')
+                return true
+            }
+        } catch (e) {
+        }
+    }
+    const legacyToken = localStorage.getItem('authorization') || ''
+    localStorage.removeItem('authorization')
+    if (legacyToken) {
+        try {
+            const response = await fetch(`${getBaseUrl()}api/v2/auth/migrate`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {'Authorization': legacyToken}
+            })
+            if (response.ok) {
+                const body = await response.json()
+                markAuthenticated(body.csrfToken)
+                return true
+            }
+        } catch (e) {
+        }
+    }
+    clearAuthentication()
+    return false
+}
+
 /**
  * 当页面大小变化时重新计算一下布局
  * 对方法做节流处理
@@ -136,8 +225,7 @@ const base64Encode = s => {
 }
 
 const getBaseUrl = () => {
-    const {protocol, host, pathname} = location
-    return `${protocol}//${host}${pathname}`
+    return new URL('.', document.baseURI).toString()
 }
 
 const toApiUrl = (path, params) => {
@@ -147,23 +235,18 @@ const toApiUrl = (path, params) => {
     return url.toString();
 }
 
-const proxyImage = imgUrl => {
-    return toApiUrl('api/proxyImage', {
-        imgUrl: base64Encode(imgUrl),
-        s: authorization.value
+const toApiFile = filename => {
+    return toApiUrl('api/file', {
+        filename: base64Encode(filename)
     })
 }
 
-const toApiFile = filename => {
-    return toApiUrl('api/file', {
-        filename: base64Encode(filename),
-        s: authorization.value
-    })
-}
+const toApiMedia = handle => `${getBaseUrl()}api/v2/media/${encodeURIComponent(handle)}`
 
 export {
     rememberThePassword,
     authorization,
+    csrfToken,
     store,
     maxContentWidth,
     showScore,
@@ -177,9 +260,12 @@ export {
     init,
     initTheme,
     initLayout,
+    initAuth,
+    markAuthenticated,
+    clearAuthentication,
     base64Encode,
     toApiUrl,
-    proxyImage,
     toApiFile,
+    toApiMedia,
     getBaseUrl
 };

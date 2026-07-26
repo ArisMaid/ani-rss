@@ -5,27 +5,30 @@ import ani.rss.entity.Global;
 import ani.rss.entity.Log;
 import ani.rss.entity.web.Header;
 import ani.rss.entity.web.Result;
+import ani.rss.commons.PathPolicy;
 import ani.rss.util.basic.LogUtil;
 import ani.rss.util.other.ConfigUtil;
-import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.text.StrFormatter;
-import cn.hutool.core.util.StrUtil;
-import cn.hutool.core.util.ZipUtil;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.servlet.http.HttpServletResponse;
-import lombok.Cleanup;
 import lombok.Synchronized;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.io.File;
 import java.io.IOException;
-import java.io.OutputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 @Slf4j
 @RestController
@@ -55,8 +58,13 @@ public class LogsController extends BaseController {
     @Operation(summary = "下载日志")
     @GetMapping("/downloadLogs")
     public void downloadLogs() throws IOException {
-        File configDir = ConfigUtil.getConfigDir();
-        String logsPath = configDir + "/logs";
+        Path configRoot = ConfigUtil.getConfigDir().toPath().toAbsolutePath().normalize();
+        Path logsRoot = configRoot.resolve("logs");
+        if (!Files.isDirectory(logsRoot, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(logsRoot)) {
+            throw new IllegalStateException("log directory is unavailable");
+        }
+        PathPolicy.requireNoSymbolicLinks(configRoot, logsRoot);
+        Path realLogsRoot = PathPolicy.realPathWithin(configRoot, logsRoot);
 
         String filename = "logs.zip";
 
@@ -65,20 +73,25 @@ public class LogsController extends BaseController {
         HttpServletResponse response = Global.RESPONSE.get();
 
         response.setContentType(contentType);
-        response.setHeader(Header.CONTENT_DISPOSITION, StrFormatter.format("inline; filename=\"{}\"", filename));
+        response.setHeader(Header.CONTENT_DISPOSITION, StrFormatter.format("attachment; filename=\"{}\"", filename));
+        response.setHeader("Cache-Control", "no-store");
 
-        @Cleanup
-        OutputStream outputStream = response.getOutputStream();
-
-        ZipUtil.zip(outputStream, StandardCharsets.UTF_8, false, name -> {
-            if (FileUtil.isDirectory(name)) {
-                return true;
+        try (ZipOutputStream zip = new ZipOutputStream(response.getOutputStream(), StandardCharsets.UTF_8);
+             var paths = Files.list(realLogsRoot)) {
+            for (Path path : paths.sorted(Comparator.comparing(value -> value.getFileName().toString())).toList()) {
+                if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(path) ||
+                        !path.getFileName().toString().toLowerCase().endsWith(".log")) {
+                    continue;
+                }
+                PathPolicy.requireNoSymbolicLinks(realLogsRoot, path);
+                Path real = PathPolicy.realPathWithin(realLogsRoot, path);
+                zip.putNextEntry(new ZipEntry(real.getFileName().toString()));
+                try (InputStream input = Files.newInputStream(
+                        real, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
+                    input.transferTo(zip);
+                }
+                zip.closeEntry();
             }
-            String extName = FileUtil.extName(name);
-            if (StrUtil.isBlank(extName)) {
-                return false;
-            }
-            return extName.equals("log");
-        }, new File(logsPath));
+        }
     }
 }

@@ -39,23 +39,25 @@
 
 <script setup>
 import {onMounted, ref} from "vue";
-import {authorization} from "@/js/global.js";
 
 import {createOnigurumaEngine} from 'shiki/engine/oniguruma'
 import log from 'shiki/langs/log'
 import nord from 'shiki/themes/nord'
 import wasm from 'shiki/wasm'
 import {createHighlighterCore} from "shiki";
+import DOMPurify from 'dompurify'
 import * as http from "@/js/http.js";
 
-let highlighter = undefined
-onMounted(async () => {
-  highlighter = await createHighlighterCore({
+let highlighterPromise
+const getHighlighter = () => {
+  if (!highlighterPromise) highlighterPromise = createHighlighterCore({
     themes: [nord],
     langs: [log],
     engine: createOnigurumaEngine(wasm)
   })
-})
+  return highlighterPromise
+}
+onMounted(() => getHighlighter())
 
 const dialogVisible = ref(false)
 const loading = ref(true)
@@ -70,16 +72,17 @@ const loggerNames = ref([])
 const selectLoggerNames = ref([])
 
 const getHtmlLogs = async () => {
+  const highlighter = await getHighlighter()
   let log = logs.value
   log = log.filter(it => selectLevels.value.indexOf(it['level']) > -1)
   if (selectLoggerNames.value.length) {
     log = log.filter(it => selectLoggerNames.value.indexOf(it['loggerName']) > -1)
   }
   let code = log.map(it => it['message']).join('\r\n');
-  htmlLogs.value = highlighter.codeToHtml(code, {
+  htmlLogs.value = DOMPurify.sanitize(highlighter.codeToHtml(code, {
     lang: 'log',
     theme: 'nord'
-  })
+  }))
   setTimeout(() => {
     scrollbarRef.value?.setScrollTop(innerRef.value.clientHeight)
   })
@@ -129,7 +132,7 @@ const getLogs = () => {
 }
 
 let downloadLogs = () => {
-  window.open(`api/downloadLogs?s=${authorization.value}`)
+  window.open(new URL('api/downloadLogs', document.baseURI).toString())
 }
 
 let close = () => {

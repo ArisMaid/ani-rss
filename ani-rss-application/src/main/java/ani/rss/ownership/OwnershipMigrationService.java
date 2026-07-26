@@ -41,7 +41,7 @@ public class OwnershipMigrationService {
             return candidates;
         }
         String downloaderType = ConfigUtil.CONFIG.getDownloadToolType();
-        for (TorrentsInfo task : TorrentUtil.DOWNLOAD.getTorrentsInfos()) {
+        for (TorrentsInfo task : downloaderTasks()) {
             if (ownershipService.findOwned(task).isPresent() || !hasAniRssTag(task) || StrUtil.isBlank(task.getHash())) {
                 continue;
             }
@@ -83,7 +83,7 @@ public class OwnershipMigrationService {
         if (!confirmed) {
             throw new IllegalArgumentException("人工接管必须显式确认");
         }
-        TorrentsInfo task = TorrentUtil.DOWNLOAD.getTorrentsInfos().stream()
+        TorrentsInfo task = downloaderTasks().stream()
                 .filter(info -> StrUtil.equals(info.getId(), remoteTaskId) ||
                         StrUtil.equalsIgnoreCase(info.getHash(), infoHash))
                 .findFirst()
@@ -116,6 +116,14 @@ public class OwnershipMigrationService {
         repository.updateState(ownership.ownershipId(), OwnershipState.LEGACY_ADOPTED);
         ownershipService.captureFiles(ownership.ownershipId(), task);
         return repository.find(ownership.ownershipId()).orElseThrow();
+    }
+
+    private static List<TorrentsInfo> downloaderTasks() {
+        if (TorrentUtil.CLIENT == null) {
+            return List.of();
+        }
+        List<TorrentsInfo> tasks = TorrentUtil.CLIENT.torrents().value();
+        return tasks == null ? List.of() : tasks;
     }
 
     private List<Ani> strictMatches(TorrentsInfo task) {

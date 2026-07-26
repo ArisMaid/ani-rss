@@ -10,7 +10,8 @@
       </el-input>
     </el-form-item>
     <el-form-item label="密码">
-      <el-input v-model:model-value="props.config.login.password" autocomplete="new-password">
+      <el-input v-model:model-value="props.config.login.password" show-password autocomplete="new-password"
+                placeholder="留空则不修改">
         <template #prefix>
           <el-icon class="el-input__icon">
             <Key/>
@@ -44,7 +45,7 @@
                     :placeholder="'127.0.0.1\n192.168.1.0/24'" v-model:model-value="config['ipWhitelistStr']"/>
           <br>
           <el-text class="mx-1" size="small">
-            对IP白名单跳过身份验证, 换行可填写多个
+            白名单 IP 可免密创建受 CSRF 保护的会话，换行可填写多个
           </el-text>
         </div>
       </div>
@@ -58,10 +59,10 @@
     </el-form-item>
     <el-form-item label="Api Key">
       <div class="flex full-width">
-        <el-input v-model:model-value="props.config.apiKey" readonly/>
+        <el-input :model-value="props.config.apiKey ? props.config.apiKey : '已隐藏'" readonly/>
         <div class="login-api-key-buttons flex">
           <el-button bg text @click="createApiKey">生成</el-button>
-          <el-button bg text @click="copy(props.config.apiKey)">复制</el-button>
+          <el-button bg text @click="copyApiKey">复制</el-button>
         </div>
       </div>
     </el-form-item>
@@ -69,30 +70,43 @@
 </template>
 
 <script setup>
-import {ElMessage, ElText} from "element-plus";
+import {ElMessage, ElMessageBox, ElText} from "element-plus";
 import {Key, User} from "@element-plus/icons-vue";
+import * as http from '@/js/http.js'
 
-let generateRandomString = (length) => {
-  const charset = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let randomString = '';
-  for (let i = 0; i < length; i++) {
-    const randomIndex = Math.floor(Math.random() * charset.length);
-    randomString += charset[randomIndex];
+let createApiKey = async () => {
+  try {
+    await ElMessageBox.confirm('生成后旧 API Key 将立即失效，是否继续？', '轮换 API Key', {type: 'warning'})
+  } catch (e) {
+    return
   }
-  return randomString;
+  const response = await http.rotateApiKey()
+  props.config.apiKey = response.data.apiKey
+  await copy(response.data.apiKey)
 }
 
-let createApiKey = () => {
-  props.config.apiKey = generateRandomString(64);
+let copyApiKey = async () => {
+  const value = props.config.apiKey || (await http.revealApiKey()).data.apiKey
+  if (!value) {
+    ElMessage.error('尚未生成 API Key')
+    return
+  }
+  await copy(value)
 }
 
-let copy = (v) => {
-  const input = document.createElement('input');
-  input.value = v
-  document.body.appendChild(input);
-  input.select();
-  document.execCommand('copy');
-  document.body.removeChild(input);
+let copy = async (value) => {
+  try {
+    await navigator.clipboard.writeText(value)
+  } catch (e) {
+    const input = document.createElement('textarea')
+    input.value = value
+    input.style.position = 'fixed'
+    input.style.opacity = '0'
+    document.body.appendChild(input)
+    input.select()
+    document.execCommand('copy')
+    document.body.removeChild(input)
+  }
   ElMessage.success('已复制')
 }
 

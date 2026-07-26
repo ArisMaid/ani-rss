@@ -68,7 +68,7 @@
 
 <script setup>
 import {onMounted, ref} from 'vue'
-import {init} from "@/js/global.js";
+import {init, initAuth} from "@/js/global.js";
 import api from "@/js/api.js";
 import * as http from "@/js/http.js";
 
@@ -88,9 +88,11 @@ const loadMe = async () => {
       });
 }
 
-const load = async (code) => {
+const load = async (code, state) => {
   loading.value = true
-  api.post(`api/bgm/oauth/callback?code=${code}`)
+  const callback = new URL('api/bgm/oauth/callback', document.baseURI)
+  callback.search = new URLSearchParams({code, state}).toString()
+  api.post(callback.toString())
       .then(async res => {
         let {code, message} = res
         type.value = code === 200 ? 'success' : 'error'
@@ -106,15 +108,21 @@ const load = async (code) => {
       })
 }
 
-onMounted(() => {
-  const url = new URL(location.href)
-  const code = url.searchParams.get('code')
-  if (!code) {
+onMounted(async () => {
+  if (!await initAuth()) {
     type.value = 'error'
-    text.value = 'code 为空'
+    text.value = '登录会话已失效'
     return
   }
-  load(code)
+  const url = new URL(location.href)
+  const code = url.searchParams.get('code')
+  const state = url.searchParams.get('state')
+  if (!code || !state) {
+    type.value = 'error'
+    text.value = 'OAuth 回调参数不完整'
+    return
+  }
+  load(code, state)
 })
 
 init()

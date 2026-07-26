@@ -10,18 +10,19 @@
 
 import {ref} from "vue";
 import Artplayer from "./Artplayer.vue";
-import {toApiFile} from "@/js/global.js";
+import {toApiMedia} from "@/js/global.js";
 import * as http from "@/js/http.js";
 
 let loading = ref(false);
 let dialogVisible = ref(false)
 let playItem = ref({})
+let subtitleObjectUrls = []
 
 let show = (pi) => {
   playItem.value = {...pi};
-  playItem.value.src = toApiFile(playItem.value.filename)
+  playItem.value.src = toApiMedia(playItem.value.filename)
   for (let subtitle of playItem.value.subtitles) {
-    subtitle.url = toApiFile(subtitle.url)
+    subtitle.url = toApiMedia(subtitle.url)
   }
 
   loading.value = true;
@@ -31,6 +32,7 @@ let show = (pi) => {
         for (let sub of res.data) {
           const blob = new Blob([sub.content], {type: "text/plain"});
           sub.url = URL.createObjectURL(blob);
+          subtitleObjectUrls.push(sub.url)
           playItem.value.subtitles.push(sub)
         }
       })
@@ -45,6 +47,8 @@ defineExpose({
 })
 
 let onClose = () => {
+  for (const url of subtitleObjectUrls) URL.revokeObjectURL(url)
+  subtitleObjectUrls = []
   dialogVisible.value = false
   playItem.value = {}
 }

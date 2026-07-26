@@ -73,7 +73,7 @@
                     <el-collapse-item v-for="it in week.items" :name="it.url">
                       <template #title>
                         <div class="flex collapse-title">
-                          <img :src="proxyImage(it['cover'])" class="cover" @click.stop="open(it.url)">
+                          <SafeImage :src-url="it['cover']" class="cover" @click.stop="open(it.url)"/>
                           <div class="flex collapse-title">
                             <el-text :truncated="false" line-clamp="1" size="small"
                                      class="title-text">
@@ -156,7 +156,7 @@
 import {ref} from "vue";
 import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy, Download as DownloadIcon} from "@element-plus/icons-vue";
-import {proxyImage} from "@/js/global.js";
+import SafeImage from '@/other/SafeImage.vue'
 import * as http from "@/js/http.js";
 
 // 批量添加订阅

@@ -113,7 +113,7 @@ public class AniController extends BaseController {
                 }
             });
         }
-        log.info("添加订阅 {} {} {}", title, ani.getUrl(), ani.getId());
+        log.info("添加订阅 {} {}", title, ani.getId());
 
         return Result.success("添加订阅成功");
     }
@@ -197,7 +197,7 @@ public class AniController extends BaseController {
         clearService.clearDir(torrentDir);
         AniUtil.sync();
 
-        log.info("修改订阅 {} {} {}", ani.getTitle(), ani.getUrl(), ani.getId());
+        log.info("修改订阅 {} {}", ani.getTitle(), ani.getId());
         return Result.success("修改成功");
     }
 
@@ -223,7 +223,7 @@ public class AniController extends BaseController {
                 File torrentDir = TorrentUtil.getTorrentDir(ani);
                 FileUtil.del(torrentDir);
                 clearService.clearDir(torrentDir);
-                log.info("删除订阅 {} {} {}", ani.getTitle(), ani.getUrl(), ani.getId());
+                log.info("删除订阅 {} {}", ani.getTitle(), ani.getId());
 
                 if (!deleteFiles) {
                     continue;

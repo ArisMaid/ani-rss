@@ -21,7 +21,7 @@ public class Login implements Serializable {
     /**
      * 密码
      */
-    @Schema(description = "密码 (MD5摘要)")
+    @Schema(description = "密码（配置响应不返回，写入时持久化为 Argon2id）")
     private String password;
     /**
      * ip

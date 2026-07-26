@@ -1,6 +1,7 @@
 package ani.rss.controller;
 
 import ani.rss.annotation.Auth;
+import ani.rss.auth.enums.AuthType;
 import ani.rss.entity.*;
 import ani.rss.entity.web.Result;
 import ani.rss.enums.StringEnum;
@@ -50,11 +51,11 @@ public class EmbyController extends BaseController {
             .setWorkQueue(new LinkedBlockingQueue<>(256))
             .build();
 
-    @Auth
+    @Auth(type = AuthType.API_KEY)
     @Operation(summary = "BGM自动点格子")
     @PostMapping("/embyWebHook")
     public Result<Void> embyWebHook(@RequestBody EmbyWebHook embyWebHook) {
-        log.debug("webhook: {}", embyWebHook);
+        log.debug("webhook event: {}", embyWebHook.getEvent());
 
         Config config = ConfigUtil.CONFIG;
         String bgmToken = config.getBgmToken();

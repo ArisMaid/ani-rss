@@ -1,19 +1,24 @@
 import api from "@/js/api.js";
-import CryptoJS from "crypto-js";
-import {authorization, base64Encode} from "./global.js";
+import {base64Encode, markAuthenticated} from "./global.js";
+
+const withQuery = (path, params) => {
+    const url = new URL(path, document.baseURI)
+    url.search = new URLSearchParams(params).toString()
+    return url.toString()
+}
 
 /**
  * 获取设置
  * @returns {Promise<unknown>}
  */
-export let config = () => api.post('api/config')
+export let config = () => api.get('api/v2/config')
 
 /**
  * 修改设置
  * @param config 设置
  * @returns {Promise<unknown>}
  */
-export let setConfig = (config) => api.post('api/setConfig', config);
+export let setConfig = (config) => api.put('api/v2/config', config);
 
 /**
  * 订阅列表
@@ -34,7 +39,7 @@ export let addAni = (ani) => api.post('api/addAni', ani)
  * @param ani 订阅
  * @returns {Promise<unknown>}
  */
-export let setAni = (move, ani) => api.post(`api/setAni?move=${move}`, ani)
+export let setAni = (move, ani) => api.post(withQuery('api/setAni', {move}), ani)
 
 /**
  * 删除订阅
@@ -42,19 +47,19 @@ export let setAni = (move, ani) => api.post(`api/setAni?move=${move}`, ani)
  * @param ids ids
  * @returns {Promise<unknown>}
  */
-export let deleteAni = (deleteFiles, ids) => api.post(`api/deleteAni?deleteFiles=${deleteFiles}`, ids)
+export let deleteAni = (deleteFiles, ids) => api.post(withQuery('api/deleteAni', {deleteFiles}), ids)
 
 /**
  * 关于
  * @returns {Promise<unknown>}
  */
-export let about = () => api.post('api/about')
+export let about = () => api.get('api/v2/about')
 
 /**
  * 更新
  * @returns {Promise<unknown>}
  */
-export let update = () => api.post('api/update')
+export let update = () => api.post('api/v2/update')
 
 /**
  * 获取Mikan番剧列表
@@ -62,34 +67,34 @@ export let update = () => api.post('api/update')
  * @param season 季度
  * @returns {Promise<unknown>}
  */
-export let mikan = (text, season) => api.post(`api/mikan?text=${text}`, season)
+export let mikan = (text, season) => api.post(withQuery('api/mikan', {text}), season)
 
 /**
  * 获取Mikan番剧的字幕组列表
  * @param url 番剧url
  * @returns {Promise<unknown>}
  */
-export let mikanGroup = (url) => api.post(`api/mikanGroup?url=${url}`)
+export let mikanGroup = (url) => api.post(withQuery('api/mikanGroup', {url}))
 
 /**
  * 获取AniBT番剧的字幕组列表
  * @param url 番剧url
  * @returns {Promise<unknown>}
  */
-export let aniBTGroup = (url) => api.post(`api/aniBTGroup?bgmId=${url}`)
+export let aniBTGroup = (url) => api.post(withQuery('api/aniBTGroup', {bgmId: url}))
 
 /**
  * 获取AnimeGarden番剧列表
  * @returns {Promise<unknown>}
  */
-export let animeGardenList = (bgmUrl) => api.post(`api/animeGardenList?bgmUrl=${bgmUrl}`)
+export let animeGardenList = (bgmUrl) => api.post(withQuery('api/animeGardenList', {bgmUrl}))
 
 /**
  * 获取AnimeGarden番剧的字幕组列表
  * @param bgmId 番剧ID
  * @returns {Promise<unknown>}
  */
-export let animeGardenGroup = (bgmId) => api.post(`api/animeGardenGroup?bgmId=${bgmId}`)
+export let animeGardenGroup = (bgmId) => api.post(withQuery('api/animeGardenGroup', {bgmId}))
 
 /**
  * 刷新全部订阅
@@ -170,7 +175,7 @@ export let getBgmTitle = (ani) => api.post('api/getBgmTitle', ani)
  * @param name 关键词
  * @returns {Promise<unknown>}
  */
-export let searchBgm = (name) => api.post(`api/searchBgm?name=${name}`)
+export let searchBgm = (name) => api.post(withQuery('api/searchBgm', {name}))
 
 /**
  * 代理测试
@@ -178,7 +183,7 @@ export let searchBgm = (name) => api.post(`api/searchBgm?name=${name}`)
  * @param config 设置
  * @returns {Promise<unknown>}
  */
-export let testProxy = (url, config) => api.post(`api/testProxy?url=${url}`, config)
+export let testProxy = (url, config) => api.post('api/v2/config/proxy-test', {url, config})
 
 /**
  * 下载列表
@@ -199,7 +204,7 @@ export let verifyNo = (config) => api.post('api/verifyNo', config)
  * @param ids ids
  * @returns {Promise<unknown>}
  */
-export let updateTotalEpisodeNumber = (force, ids) => api.post(`api/updateTotalEpisodeNumber?force=${force}`, ids)
+export let updateTotalEpisodeNumber = (force, ids) => api.post(withQuery('api/updateTotalEpisodeNumber', {force}), ids)
 
 /**
  * 批量刮削
@@ -207,7 +212,7 @@ export let updateTotalEpisodeNumber = (force, ids) => api.post(`api/updateTotalE
  * @param ids ids
  * @returns {Promise<unknown>}
  */
-export let batchScrape = (force, ids) => api.post(`api/batchScrape?force=${force}`, ids)
+export let batchScrape = (force, ids) => api.post(withQuery('api/batchScrape', {force}), ids)
 
 /**
  * 批量 启用/禁用 订阅
@@ -215,7 +220,7 @@ export let batchScrape = (force, ids) => api.post(`api/batchScrape?force=${force
  * @param ids ids
  * @returns {Promise<unknown>}
  */
-export let batchEnable = (value, ids) => api.post(`api/batchEnable?value=${value}`, ids)
+export let batchEnable = (value, ids) => api.post(withQuery('api/batchEnable', {value}), ids)
 
 /**
  * 导入订阅
@@ -229,7 +234,7 @@ export let importAni = (anis) => api.post('api/importAni', anis)
  * @param status 0:重启 2:关闭
  * @returns {Promise<unknown>}
  */
-export let stop = (status) => api.post(`api/stop?status=${status}`)
+export let stop = (status) => api.post(withQuery('api/stop', {status}))
 
 /**
  * 刷新封面
@@ -265,7 +270,7 @@ export let downloadPath = (ani) => api.post('api/downloadPath', ani)
  * @param ani 订阅
  * @returns {Promise<unknown>}
  */
-export let scrape = (force, ani) => api.post(`api/scrape?force=${force}`, ani)
+export let scrape = (force, ani) => api.post(withQuery('api/scrape', {force}), ani)
 
 /**
  * 获取当前BGM账号信息
@@ -299,7 +304,11 @@ export let clearCache = () => api.post('api/clearCache')
  * @param config 设置
  * @returns {Promise<unknown>}
  */
-export let downloadLoginTest = (config) => api.post('api/downloadLoginTest', config)
+export let downloadLoginTest = (config) => api.post('api/v2/config/downloader-test', config)
+
+export let revealApiKey = () => api.post('api/v2/config/api-key/reveal')
+
+export let rotateApiKey = () => api.post('api/v2/config/api-key/rotate')
 
 /**
  * 获取TG最近消息
@@ -315,9 +324,24 @@ export let getTgUpdates = (notificationConfig) => api.post('api/getTgUpdates', n
  */
 export let login = (user) => {
     user = JSON.parse(JSON.stringify(user))
-    user.password = CryptoJS['MD5'](user.password).toString()
-    return api.post('api/login', user)
+    return api.post('api/v2/auth/login', user).then(res => {
+        markAuthenticated(res.data.csrfToken)
+        return res
+    })
 }
+
+export let setupStatus = () => api.get('api/v2/auth/setup-status')
+
+export let setup = (data) => api.post('api/v2/auth/setup', data).then(res => {
+    markAuthenticated(res.data.csrfToken)
+    return res
+})
+
+export let bgmOAuthState = () => api.post('api/v2/auth/oauth-state/bgm')
+
+export let logout = () => api.post('api/v2/auth/logout')
+
+export let cacheImage = (url) => api.post('api/v2/images', {url})
 
 /**
  * 测试IP白名单
@@ -338,7 +362,7 @@ export let playList = (ani) => api.post('api/playList', ani)
  * @returns {Promise<unknown>}
  */
 export let getSubtitles = (filename) => {
-    return api.post(`api/getSubtitles?filename=${base64Encode(filename)}`);
+    return api.post(withQuery('api/getSubtitles', {filename: base64Encode(filename)}));
 }
 
 /**
@@ -367,7 +391,7 @@ export let getCollectionSubgroup = (info) => api.post('api/getCollectionSubgroup
  * @param id BGM的ID
  * @returns {Promise<unknown>}
  */
-export let getAniBySubjectId = (id) => api.post(`api/getAniBySubjectId?id=${id}`)
+export let getAniBySubjectId = (id) => api.post(withQuery('api/getAniBySubjectId', {id}))
 
 /**
  * 获取AniBT番剧列表
@@ -388,18 +412,21 @@ export let aniBT = (season, bgmUrl, text) => api.post('api/aniBT', {
  * @param hash 种子hash
  * @returns {Promise<unknown>}
  */
-export let deleteTorrent = (id, hash) => api.post(`api/deleteTorrent?id=${id}&hash=${hash}`)
+export let deleteTorrent = (id, hash) => api.post(withQuery('api/deleteTorrent', {id, hash}))
 
-export let importConfig = (file) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    return fetch('api/importConfig', {
-        method: 'POST',
-        body: formData,
-        headers: {
-            'Authorization': authorization.value
-        }
-    }).then(res => res.json())
+export let stageRestore = async (file) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post('api/v2/restore', formData).then(response => response.data)
 }
+
+export let externalMediaHandle = (handle) =>
+    api.post(`api/v2/media/${encodeURIComponent(handle)}/external`)
+
+export let confirmRestore = (operationId) =>
+    api.post(`api/v2/restore/${encodeURIComponent(operationId)}/confirm`).then(res => res.data)
+
+export let restoreStatus = (operationId) =>
+    api.get(`api/v2/restore/${encodeURIComponent(operationId)}`).then(res => res.data)
 
 export let ping = () => api.get("api/ping")

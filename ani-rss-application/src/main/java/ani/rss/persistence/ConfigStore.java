@@ -3,6 +3,7 @@ package ani.rss.persistence;
 import ani.rss.commons.AtomicFileWriter;
 import ani.rss.commons.GsonStatic;
 import ani.rss.entity.Config;
+import ani.rss.entity.NotificationConfig;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.bean.copier.CopyOptions;
 
@@ -10,6 +11,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -164,6 +166,13 @@ public final class ConfigStore {
                 value.getNotificationConfigList() == null) {
             throw new IllegalArgumentException("notification configuration is incomplete");
         }
+        Set<String> notificationIds = new HashSet<>();
+        for (NotificationConfig notification : value.getNotificationConfigList()) {
+            if (notification == null || notification.getId() == null || notification.getId().isBlank() ||
+                    !notificationIds.add(notification.getId())) {
+                throw new IllegalArgumentException("notification identifiers must be unique");
+            }
+        }
         if (value.getDownloadToolType() == null ||
                 !DOWNLOADERS.contains(value.getDownloadToolType())) {
             throw new IllegalArgumentException("unsupported download tool");
@@ -176,9 +185,14 @@ public final class ConfigStore {
                 value.getRenameSleepSeconds() == null || value.getRenameSleepSeconds() < 0) {
             throw new IllegalArgumentException("task interval is invalid");
         }
+        if (value.getLoginEffectiveHours() == null || value.getLoginEffectiveHours() < 1 ||
+                value.getLoginEffectiveHours() > 8760) {
+            throw new IllegalArgumentException("loginEffectiveHours must be between 1 and 8760");
+        }
         if (Boolean.TRUE.equals(value.getProxy()) &&
-                (value.getProxyPort() == null || value.getProxyPort() < 1 || value.getProxyPort() > 65535)) {
-            throw new IllegalArgumentException("proxy port is invalid");
+                (value.getProxyHost() == null || value.getProxyHost().isBlank() ||
+                        value.getProxyPort() == null || value.getProxyPort() < 1 || value.getProxyPort() > 65535)) {
+            throw new IllegalArgumentException("proxy configuration is invalid");
         }
         if (value.getOpenListDownloadTimeout() == null || value.getOpenListDownloadTimeout() < 1 ||
                 value.getOpenListDownloadTimeout() > 3600 ||

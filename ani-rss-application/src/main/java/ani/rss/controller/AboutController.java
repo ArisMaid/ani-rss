@@ -2,7 +2,6 @@ package ani.rss.controller;
 
 import ani.rss.annotation.Auth;
 import ani.rss.auth.fun.IpWhitelist;
-import ani.rss.commons.ExceptionUtils;
 import ani.rss.commons.MavenUtils;
 import ani.rss.entity.About;
 import ani.rss.entity.Global;
@@ -16,8 +15,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.List;
 
 @Slf4j
 @RestController
@@ -37,7 +34,14 @@ public class AboutController extends BaseController {
     @Operation(summary = "停止服务")
     @PostMapping("/stop")
     public Result<Void> stop(@RequestParam("status") Integer status) {
-        String s = List.of("重启", "关闭").get(status);
+        String s;
+        if (status == 0) {
+            s = "重启";
+        } else if (status == 2) {
+            s = "关闭";
+        } else {
+            return Result.error("不支持的停止状态");
+        }
 
         MavenUtils.CurrentFile currentFile = MavenUtils.getCurrentFile();
         if (currentFile.isExe() && s.equals("重启")) {
@@ -62,9 +66,8 @@ public class AboutController extends BaseController {
             updateService.update(about);
             return Result.success("更新成功, 正在重启...");
         } catch (Exception e) {
-            String message = ExceptionUtils.getMessage(e);
-            log.info("更新失败 {}, {}", about.getLatest(), message);
-            return Result.success("更新失败 {}, {}", about.getLatest(), message);
+            log.info("更新失败 {} type:{}", about.getLatest(), e.getClass().getSimpleName());
+            return Result.error("更新失败 {}", about.getLatest());
         }
     }
 

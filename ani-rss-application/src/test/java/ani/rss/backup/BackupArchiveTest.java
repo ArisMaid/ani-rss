@@ -58,7 +58,8 @@ class BackupArchiveTest {
     void generatedArchiveKeepsUpstreamConfigurationFilesReadableByLegacyImporter() throws Exception {
         Path source = tempDir.resolve("fork-source");
         Files.createDirectories(source);
-        String config = "{\"version\":\"3.1.75\",\"login\":{\"username\":\"legacy\"}}";
+        String config = "{\"version\":\"3.1.75\",\"login\":{\"username\":\"legacy\","
+                + "\"password\":\"0123456789abcdef0123456789abcdef\"}}";
         String subscriptions = "[{\"id\":\"subscription\",\"title\":\"Legacy subscription\"}]";
         Files.writeString(source.resolve("config.v2.json"), config, StandardCharsets.UTF_8);
         Files.writeString(source.resolve("ani.v2.json"), subscriptions, StandardCharsets.UTF_8);
@@ -81,6 +82,9 @@ class BackupArchiveTest {
         assertEquals("3.1.75", JsonParser.parseString(
                 Files.readString(legacyTarget.resolve("config.v2.json")))
                 .getAsJsonObject().get("version").getAsString());
+        assertTrue(JsonParser.parseString(Files.readString(legacyTarget.resolve("config.v2.json")))
+                .getAsJsonObject().getAsJsonObject("login").get("password").getAsString()
+                .matches("(?i)[0-9a-f]{32}"));
         assertEquals("Legacy subscription", JsonParser.parseString(
                 Files.readString(legacyTarget.resolve("ani.v2.json")))
                 .getAsJsonArray().get(0).getAsJsonObject().get("title").getAsString());

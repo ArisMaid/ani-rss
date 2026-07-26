@@ -117,6 +117,39 @@ class ConfigStoreTest {
     }
 
     @Test
+    void acceptsEveryNumericBoundaryEmittedByTheUpstream320Ui() {
+        Config runtime = ConfigUtil.copy(ConfigUtil.CONFIG);
+        ConfigStore store = new ConfigStore(runtime, () -> tempDir.resolve("config.json"), value -> { });
+        Config upstream = ConfigUtil.copy(runtime)
+                .setDownloadRetry(100)
+                .setLoginEffectiveHours(99_999)
+                .setOpenListDownloadTimeout(Integer.MAX_VALUE)
+                .setOpenListDownloadRetryNumber(-1L)
+                .setConfigBackupDay(Integer.MAX_VALUE);
+
+        Config validated = store.validateCandidate(upstream);
+
+        assertEquals(100, validated.getDownloadRetry());
+        assertEquals(99_999, validated.getLoginEffectiveHours());
+        assertEquals(Integer.MAX_VALUE, validated.getOpenListDownloadTimeout());
+        assertEquals(-1L, validated.getOpenListDownloadRetryNumber());
+        assertEquals(Integer.MAX_VALUE, validated.getConfigBackupDay());
+    }
+
+    @Test
+    void stillRejectsValuesOutsideTheUpstream320Contract() {
+        Config runtime = ConfigUtil.copy(ConfigUtil.CONFIG);
+        ConfigStore store = new ConfigStore(runtime, () -> tempDir.resolve("config.json"), value -> { });
+
+        assertThrows(IllegalArgumentException.class,
+                () -> store.validateCandidate(ConfigUtil.copy(runtime).setDownloadRetry(101)));
+        assertThrows(IllegalArgumentException.class,
+                () -> store.validateCandidate(ConfigUtil.copy(runtime).setLoginEffectiveHours(0)));
+        assertThrows(IllegalArgumentException.class,
+                () -> store.validateCandidate(ConfigUtil.copy(runtime).setOpenListDownloadRetryNumber(-2L)));
+    }
+
+    @Test
     void removesRetiredLocalFieldsWithoutRemovingUnknownFutureFields() throws Exception {
         Config defaults = ConfigUtil.copy(ConfigUtil.CONFIG);
         JsonObject document = GsonStatic.GSON.toJsonTree(defaults).getAsJsonObject();

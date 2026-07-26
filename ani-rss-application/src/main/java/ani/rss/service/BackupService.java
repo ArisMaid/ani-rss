@@ -20,6 +20,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.util.Date;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -75,7 +76,9 @@ public class BackupService {
 
     public synchronized void clearBackup() {
         Integer days = ConfigUtil.snapshot().getConfigBackupDay();
-        long expiration = DateUtil.offsetDay(new Date(), -Math.max(1, days == null ? 7 : days)).getTime();
+        long retentionMillis = TimeUnit.DAYS.toMillis(Math.max(1L, days == null ? 7L : days.longValue()));
+        long now = System.currentTimeMillis();
+        long expiration = now - retentionMillis;
         Path backupDir = ConfigUtil.getConfigDir().toPath().toAbsolutePath().normalize().resolve("backup");
         if (!Files.isDirectory(backupDir, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(backupDir)) {
             return;

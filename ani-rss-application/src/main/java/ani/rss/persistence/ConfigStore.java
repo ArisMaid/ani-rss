@@ -219,16 +219,15 @@ public final class ConfigStore {
             throw new IllegalArgumentException("unsupported download tool");
         }
         if (value.getDownloadRetry() == null || value.getDownloadRetry() < 1 ||
-                value.getDownloadRetry() > 10) {
-            throw new IllegalArgumentException("downloadRetry must be between 1 and 10");
+                value.getDownloadRetry() > 100) {
+            throw new IllegalArgumentException("downloadRetry must be between 1 and 100");
         }
         if (value.getRssSleepMinutes() == null || value.getRssSleepMinutes() < 1 ||
                 value.getRenameSleepSeconds() == null || value.getRenameSleepSeconds() < 0) {
             throw new IllegalArgumentException("task interval is invalid");
         }
-        if (value.getLoginEffectiveHours() == null || value.getLoginEffectiveHours() < 1 ||
-                value.getLoginEffectiveHours() > 8760) {
-            throw new IllegalArgumentException("loginEffectiveHours must be between 1 and 8760");
+        if (value.getLoginEffectiveHours() == null || value.getLoginEffectiveHours() < 1) {
+            throw new IllegalArgumentException("loginEffectiveHours must be positive");
         }
         if (Boolean.TRUE.equals(value.getProxy()) &&
                 (value.getProxyHost() == null || value.getProxyHost().isBlank() ||
@@ -236,13 +235,11 @@ public final class ConfigStore {
             throw new IllegalArgumentException("proxy configuration is invalid");
         }
         if (value.getOpenListDownloadTimeout() == null || value.getOpenListDownloadTimeout() < 1 ||
-                value.getOpenListDownloadTimeout() > 3600 ||
                 value.getOpenListDownloadRetryNumber() == null ||
-                value.getOpenListDownloadRetryNumber() < 0 || value.getOpenListDownloadRetryNumber() > 20) {
+                value.getOpenListDownloadRetryNumber() < -1) {
             throw new IllegalArgumentException("OpenList retry settings are invalid");
         }
-        if (value.getConfigBackupDay() == null || value.getConfigBackupDay() < 1 ||
-                value.getConfigBackupDay() > 3650) {
+        if (value.getConfigBackupDay() == null || value.getConfigBackupDay() < 1) {
             throw new IllegalArgumentException("configBackupDay is invalid");
         }
     }

@@ -27,9 +27,11 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,6 +47,8 @@ public class RestoreService {
     private static final Duration MAINTENANCE_TIMEOUT = Duration.ofSeconds(30);
     private static final List<String> SWITCH_NAMES = List.of(
             "config.v2.json", "ani.v2.json", "database.db", "auth-state.v2.json", "files", "torrents");
+    private static final Set<String> RESET_WHEN_ABSENT = Set.of(
+            "database.db", "auth-state.v2.json", "torrents");
 
     private final TaskService taskService;
     private final TaskCoordinator taskCoordinator;
@@ -94,7 +98,7 @@ public class RestoreService {
             context.validation = BackupArchive.validateAndExtract(
                     context.uploadPath, context.extractedPath);
             validateRuntimeCandidates(context.extractedPath);
-            context.warnings = context.validation.warnings();
+            context.warnings = compatibilityWarnings(context.validation);
             context.files = context.validation.files();
             context.status = RestoreStatus.VALIDATED;
         } catch (Exception e) {
@@ -145,10 +149,9 @@ public class RestoreService {
             Path failedRoot = rollbackRoot(context).resolve("failed");
             Files.createDirectories(currentRoot);
             Files.createDirectories(failedRoot);
-            snapshotUnswitchedState(context, currentRoot);
-
             for (String name : SWITCH_NAMES) {
-                if (!context.validation.topLevelNames().contains(topLevel(name))) {
+                boolean supplied = context.validation.topLevelNames().contains(topLevel(name));
+                if (!supplied && !RESET_WHEN_ABSENT.contains(name)) {
                     continue;
                 }
                 Path current = child(configRoot(), name);
@@ -157,9 +160,12 @@ public class RestoreService {
                     persist(context);
                     moveExact(current, currentRoot.resolve(name));
                     checkpoint(Checkpoint.CURRENT_MOVED);
+                } else if (!supplied) {
+                    context.absentBefore.add(name);
+                    persist(context);
                 }
                 Path staged = child(context.extractedPath, name);
-                if (Files.exists(staged, LinkOption.NOFOLLOW_LINKS)) {
+                if (supplied && Files.exists(staged, LinkOption.NOFOLLOW_LINKS)) {
                     context.installed.add(name);
                     persist(context);
                     moveExact(staged, current);
@@ -221,9 +227,13 @@ public class RestoreService {
         }
         for (int i = context.currentMoved.size() - 1; i >= 0; i--) {
             String name = context.currentMoved.get(i);
+            Path current = child(configRoot(), name);
+            if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
+                moveExact(current, failedRoot.resolve(name));
+            }
             Path backup = child(currentRoot, name);
             if (Files.exists(backup, LinkOption.NOFOLLOW_LINKS)) {
-                moveExact(backup, child(configRoot(), name));
+                moveExact(backup, current);
             }
         }
         for (int i = context.copiedSnapshots.size() - 1; i >= 0; i--) {
@@ -244,26 +254,6 @@ public class RestoreService {
             if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
                 moveExact(current, failedRoot.resolve(name));
             }
-        }
-    }
-
-    private void snapshotUnswitchedState(Context context, Path currentRoot) throws IOException {
-        for (String name : SWITCH_NAMES) {
-            if (context.validation.topLevelNames().contains(topLevel(name))) {
-                continue;
-            }
-            Path current = child(configRoot(), name);
-            if (!Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
-                context.absentBefore.add(name);
-                persist(context);
-                continue;
-            }
-            if (!"database.db".equals(name) && !"auth-state.v2.json".equals(name)) {
-                continue;
-            }
-            copyExactRegularFile(current, currentRoot.resolve(name));
-            context.copiedSnapshots.add(name);
-            persist(context);
         }
     }
 
@@ -344,6 +334,20 @@ public class RestoreService {
         } catch (RuntimeException e) {
             throw new IOException("backup runtime validation failed", e);
         }
+    }
+
+    private static List<String> compatibilityWarnings(BackupValidation validation) {
+        List<String> warnings = new ArrayList<>(validation.warnings());
+        if (!validation.topLevelNames().contains("database.db")) {
+            warnings.add("backup has no database; local ownership and cache state will be initialized empty");
+        }
+        if (!validation.topLevelNames().contains("auth-state.v2.json")) {
+            warnings.add("backup has no private authentication state; the upstream MD5 login remains usable");
+        }
+        if (!validation.topLevelNames().contains("torrents")) {
+            warnings.add("backup has no torrent cache; the existing torrent cache will be reset");
+        }
+        return List.copyOf(warnings);
     }
 
     private void copyUpload(InputStream input, Path target) throws IOException {
@@ -453,21 +457,6 @@ public class RestoreService {
             Files.createDirectories(parent);
         }
         Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
-    }
-
-    private static void copyExactRegularFile(Path source, Path target) throws IOException {
-        if (Files.isSymbolicLink(source) || !Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS) ||
-                Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
-            throw new IOException("restore snapshot conflict or non-regular source");
-        }
-        Path parent = target.getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-        Files.copy(source, target, StandardCopyOption.COPY_ATTRIBUTES);
-        try (FileChannel channel = FileChannel.open(target, StandardOpenOption.WRITE)) {
-            channel.force(true);
-        }
     }
 
     private static String message(Exception e) {

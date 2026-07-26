@@ -84,6 +84,26 @@ class SubscriptionDeletionServiceTest {
     }
 
     @Test
+    void deletionReleasesPendingAndFailedOwnershipsForFutureSubscriptions() {
+        long now = System.currentTimeMillis();
+        repository.createPending(new DownloadOwnership(
+                "pending-ownership", "qBittorrent", null, "pending-hash", "subscription",
+                1, "2.0", ownedFile.getParent().toString(), OwnershipState.PENDING, now, now));
+        repository.createPending(new DownloadOwnership(
+                "failed-ownership", "qBittorrent", null, "failed-hash", "subscription",
+                1, "3.0", ownedFile.getParent().toString(), OwnershipState.FAILED, now, now));
+
+        service.delete(List.of("subscription"), false);
+
+        assertEquals(OwnershipState.DELETED,
+                repository.find("ownership").orElseThrow().state());
+        assertEquals(OwnershipState.DELETED,
+                repository.find("pending-ownership").orElseThrow().state());
+        assertEquals(OwnershipState.DELETED,
+                repository.find("failed-ownership").orElseThrow().state());
+    }
+
+    @Test
     void remoteFailureLeavesFilesAndSubscriptionUntouched() {
         remoteTasks.failDelete = true;
 
@@ -128,6 +148,12 @@ class SubscriptionDeletionServiceTest {
         assertTrue(store.snapshot().isEmpty());
         assertEquals(0, result.deletedRemoteTasks());
         assertEquals(0, result.deletedFiles());
+        assertEquals(OwnershipState.ACTIVE,
+                repository.find("ownership").orElseThrow().state());
+        assertThrows(IllegalStateException.class, () -> repository.createPending(new DownloadOwnership(
+                "replacement", "qBittorrent", null, "info-hash", "replacement-subscription",
+                1, "1.0", ownedFile.getParent().toString(), OwnershipState.PENDING,
+                System.currentTimeMillis(), System.currentTimeMillis())));
     }
 
     @Test

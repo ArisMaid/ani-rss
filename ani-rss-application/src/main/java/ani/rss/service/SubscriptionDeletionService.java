@@ -60,17 +60,18 @@ public final class SubscriptionDeletionService {
 
     /** Removes subscription metadata only; owned media and remote tasks stay intact. */
     public DeletionResult deleteWithoutFiles(Collection<String> subscriptionIds) {
-        return delete(subscriptionIds, false, false);
+        return delete(subscriptionIds, false, false, false);
     }
 
     public DeletionResult delete(Collection<String> subscriptionIds, boolean deleteFiles) {
-        return delete(subscriptionIds, deleteFiles, true);
+        return delete(subscriptionIds, deleteFiles, true, true);
     }
 
     private DeletionResult delete(
             Collection<String> subscriptionIds,
             boolean deleteFiles,
-            boolean deleteRemoteTasks) {
+            boolean deleteRemoteTasks,
+            boolean releaseOwnership) {
         synchronized (deletionLock) {
             LinkedHashSet<String> ids = normalizedIds(subscriptionIds);
             List<Ani> current = subscriptionStore.snapshot();
@@ -81,10 +82,17 @@ public final class SubscriptionDeletionService {
                 }
             }
 
-            List<DownloadOwnership> ownerships = ids.stream()
+            List<DownloadOwnership> subscriptionOwnerships = ids.stream()
                     .flatMap(id -> ownershipService.listBySubscription(id).stream())
+                    .toList();
+            List<DownloadOwnership> ownerships = subscriptionOwnerships.stream()
                     .filter(SubscriptionDeletionService::isActive)
                     .toList();
+            List<DownloadOwnership> deletableOwnerships = releaseOwnership
+                    ? subscriptionOwnerships.stream()
+                            .filter(SubscriptionDeletionService::isDeletable)
+                            .toList()
+                    : List.of();
             OwnershipService.FileDeletionPreparation fileDeletion =
                     new OwnershipService.FileDeletionPreparation(List.of(), 0);
             List<TorrentsInfo> ownedTasks = List.of();
@@ -107,10 +115,10 @@ public final class SubscriptionDeletionService {
             OwnershipService.FileDeletionOutcome fileOutcome = deleteFiles
                     ? ownershipService.deletePreparedFilesBestEffort(fileDeletion.files())
                     : new OwnershipService.FileDeletionOutcome(0, 0);
-            // From this point onward the owned content is gone. Mark it before
-            // persisting the subscription list so a persistence failure cannot
-            // make the recovery worker requeue deliberately deleted media.
-            ownershipService.markDeleted(ownerships);
+            // Explicit user deletion releases managed identities before the
+            // subscription list is persisted. Completion finalization keeps
+            // them active because its files and seeding tasks intentionally remain.
+            ownershipService.markDeleted(deletableOwnerships);
             if (recoveryService != null) {
                 for (String id : ids) {
                     recoveryService.cancelSubscription(id);
@@ -200,6 +208,11 @@ public final class SubscriptionDeletionService {
     private static boolean isActive(DownloadOwnership ownership) {
         return ownership.state() == OwnershipState.ACTIVE ||
                 ownership.state() == OwnershipState.LEGACY_ADOPTED;
+    }
+
+    private static boolean isDeletable(DownloadOwnership ownership) {
+        return isActive(ownership) || ownership.state() == OwnershipState.PENDING ||
+                ownership.state() == OwnershipState.FAILED;
     }
 
     public record SubscriptionSummary(String id, String title, Integer season) {

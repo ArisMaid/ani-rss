@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 @Repository
 public class OwnershipRepository {
@@ -27,6 +28,9 @@ public class OwnershipRepository {
                 try (ResultSet resultSet = existing.executeQuery()) {
                     if (resultSet.next()) {
                         DownloadOwnership current = mapOwnership(resultSet);
+                        if (current.state() == OwnershipState.DELETED) {
+                            return reassignDeletedOwnership(connection, current, ownership);
+                        }
                         if (!current.subscriptionId().equals(ownership.subscriptionId())) {
                             throw new IllegalStateException("下载任务已归属于其他订阅");
                         }
@@ -45,6 +49,95 @@ public class OwnershipRepository {
             }
             return ownership;
         });
+    }
+
+    /**
+     * The table deliberately keeps one live identity per downloader/hash.
+     * Reusing a deleted row avoids weakening that guard while preserving its
+     * prior ownership and manifest in a separate local audit record.
+     */
+    private DownloadOwnership reassignDeletedOwnership(
+            java.sql.Connection connection,
+            DownloadOwnership previous,
+            DownloadOwnership replacement) throws SQLException {
+        String historyId = UUID.randomUUID().toString();
+        long now = System.currentTimeMillis();
+        try (PreparedStatement history = connection.prepareStatement("""
+                INSERT INTO ownership_reassignment_history(
+                    history_id, ownership_id, downloader_type, remote_task_id, info_hash,
+                    subscription_id, season, episode, save_root, state, created_at, updated_at,
+                    reassigned_at, replacement_subscription_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """)) {
+            history.setString(1, historyId);
+            history.setString(2, previous.ownershipId());
+            history.setString(3, previous.downloaderType());
+            history.setString(4, blankToNull(previous.remoteTaskId()));
+            history.setString(5, normalizeHash(previous.infoHash()));
+            history.setString(6, previous.subscriptionId());
+            if (previous.season() == null) {
+                history.setNull(7, java.sql.Types.INTEGER);
+            } else {
+                history.setInt(7, previous.season());
+            }
+            history.setString(8, previous.episode());
+            history.setString(9, previous.saveRoot());
+            history.setString(10, previous.state().name());
+            history.setLong(11, previous.createdAt());
+            history.setLong(12, previous.updatedAt());
+            history.setLong(13, now);
+            history.setString(14, replacement.subscriptionId());
+            history.executeUpdate();
+        }
+        try (PreparedStatement archiveFiles = connection.prepareStatement("""
+                INSERT INTO ownership_reassignment_file_history(history_id, relative_path, kind, size)
+                SELECT ?, relative_path, kind, size FROM owned_files WHERE ownership_id = ?
+                """)) {
+            archiveFiles.setString(1, historyId);
+            archiveFiles.setString(2, previous.ownershipId());
+            archiveFiles.executeUpdate();
+        }
+        try (PreparedStatement deleteFiles = connection.prepareStatement(
+                "DELETE FROM owned_files WHERE ownership_id = ?")) {
+            deleteFiles.setString(1, previous.ownershipId());
+            deleteFiles.executeUpdate();
+        }
+        try (PreparedStatement update = connection.prepareStatement("""
+                UPDATE download_ownership
+                SET downloader_type = ?, remote_task_id = NULL, info_hash = ?, subscription_id = ?,
+                    season = ?, episode = ?, save_root = ?, state = ?, created_at = ?, updated_at = ?
+                WHERE ownership_id = ? AND state = 'DELETED'
+                """)) {
+            update.setString(1, replacement.downloaderType());
+            update.setString(2, normalizeHash(replacement.infoHash()));
+            update.setString(3, replacement.subscriptionId());
+            if (replacement.season() == null) {
+                update.setNull(4, java.sql.Types.INTEGER);
+            } else {
+                update.setInt(4, replacement.season());
+            }
+            update.setString(5, replacement.episode());
+            update.setString(6, replacement.saveRoot());
+            update.setString(7, replacement.state().name());
+            update.setLong(8, replacement.createdAt());
+            update.setLong(9, now);
+            update.setString(10, previous.ownershipId());
+            if (update.executeUpdate() != 1) {
+                throw new IllegalStateException("deleted ownership changed before reassignment");
+            }
+        }
+        return new DownloadOwnership(
+                previous.ownershipId(),
+                replacement.downloaderType(),
+                null,
+                normalizeHash(replacement.infoHash()),
+                replacement.subscriptionId(),
+                replacement.season(),
+                replacement.episode(),
+                replacement.saveRoot(),
+                replacement.state(),
+                replacement.createdAt(),
+                now);
     }
 
     public Optional<DownloadOwnership> find(String ownershipId) {
@@ -93,6 +186,54 @@ public class OwnershipRepository {
                 statement.setString(2, normalizeHash(infoHash));
                 try (ResultSet resultSet = statement.executeQuery()) {
                     return resultSet.next() ? Optional.of(mapOwnership(resultSet)) : Optional.empty();
+                }
+            }
+        });
+    }
+
+    /**
+     * Finds the exact deleted ownership that was reassigned to the current
+     * row. This is deliberately narrower than a hash lookup: callers use it
+     * before touching a still-existing remote downloader task.
+     */
+    public Optional<OwnershipReassignment> findDeletedReassignment(DownloadOwnership replacement) {
+        if (replacement == null || replacement.ownershipId() == null ||
+                replacement.downloaderType() == null || replacement.infoHash() == null ||
+                replacement.subscriptionId() == null) {
+            return Optional.empty();
+        }
+        return DatabaseManager.withConnection(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT history_id, ownership_id, downloader_type, remote_task_id, info_hash,
+                           subscription_id, save_root, replacement_subscription_id, reassigned_at
+                    FROM ownership_reassignment_history
+                    WHERE ownership_id = ?
+                      AND downloader_type = ?
+                      AND info_hash = ?
+                      AND replacement_subscription_id = ?
+                      AND state = 'DELETED'
+                    ORDER BY reassigned_at DESC
+                    LIMIT 1
+                    """)) {
+                statement.setString(1, replacement.ownershipId());
+                statement.setString(2, replacement.downloaderType());
+                statement.setString(3, normalizeHash(replacement.infoHash()));
+                statement.setString(4, replacement.subscriptionId());
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(new OwnershipReassignment(
+                            resultSet.getString("history_id"),
+                            resultSet.getString("ownership_id"),
+                            resultSet.getString("downloader_type"),
+                            resultSet.getString("remote_task_id"),
+                            resultSet.getString("info_hash"),
+                            resultSet.getString("subscription_id"),
+                            resultSet.getString("save_root"),
+                            resultSet.getString("replacement_subscription_id"),
+                            resultSet.getLong("reassigned_at")
+                    ));
                 }
             }
         });

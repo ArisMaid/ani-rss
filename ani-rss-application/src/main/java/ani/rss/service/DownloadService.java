@@ -16,6 +16,7 @@ import ani.rss.enums.TorrentsTagEnum;
 import ani.rss.ownership.DownloadOwnership;
 import ani.rss.ownership.OwnershipService;
 import ani.rss.ownership.QuarantineService;
+import ani.rss.ownership.QbittorrentDeletedTaskReassignmentService;
 import ani.rss.recovery.MissingEpisodeRecoveryService;
 import ani.rss.util.other.*;
 import cn.hutool.core.date.DateField;
@@ -57,6 +58,9 @@ public class DownloadService {
 
     @Resource
     private MissingEpisodeRecoveryService missingEpisodeRecoveryService;
+
+    @Resource
+    private QbittorrentDeletedTaskReassignmentService reassignmentService;
 
     /**
      * 下载动漫
@@ -459,6 +463,9 @@ public class DownloadService {
         String downloaderType = activeClient.configurationSnapshot().getDownloadToolType();
         DownloadOwnership ownership = ownershipService.registerPending(
                 downloaderType, ani, submittedItem, savePath);
+        if (reassignmentService != null && reassignmentService.reattach(activeClient, ownership)) {
+            return true;
+        }
 
         Integer downloadRetry = ObjectUtil.defaultIfNull(config.getDownloadRetry(), 1);
         String lastRemoteTaskId = null;

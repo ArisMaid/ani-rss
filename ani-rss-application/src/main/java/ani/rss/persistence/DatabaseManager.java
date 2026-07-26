@@ -335,6 +335,53 @@ public final class DatabaseManager {
                 current.setAutoCommit(autoCommit);
             }
         }
+        if (version < 6) {
+            boolean autoCommit = current.getAutoCommit();
+            current.setAutoCommit(false);
+            try (Statement statement = current.createStatement()) {
+                // A deleted ownership can be reused without weakening the
+                // single live downloader/hash identity constraint.
+                statement.executeUpdate("""
+                        CREATE TABLE IF NOT EXISTS ownership_reassignment_history (
+                            history_id TEXT PRIMARY KEY,
+                            ownership_id TEXT NOT NULL,
+                            downloader_type TEXT NOT NULL,
+                            remote_task_id TEXT,
+                            info_hash TEXT NOT NULL,
+                            subscription_id TEXT NOT NULL,
+                            season INTEGER,
+                            episode TEXT,
+                            save_root TEXT NOT NULL,
+                            state TEXT NOT NULL,
+                            created_at INTEGER NOT NULL,
+                            updated_at INTEGER NOT NULL,
+                            reassigned_at INTEGER NOT NULL,
+                            replacement_subscription_id TEXT NOT NULL
+                        )
+                        """);
+                statement.executeUpdate("""
+                        CREATE TABLE IF NOT EXISTS ownership_reassignment_file_history (
+                            history_id TEXT NOT NULL,
+                            relative_path TEXT NOT NULL,
+                            kind TEXT NOT NULL,
+                            size INTEGER,
+                            PRIMARY KEY (history_id, relative_path),
+                            FOREIGN KEY (history_id) REFERENCES ownership_reassignment_history(history_id)
+                                ON DELETE CASCADE
+                        )
+                        """);
+                statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_ownership_reassignment_history_ownership "
+                        + "ON ownership_reassignment_history(ownership_id, reassigned_at)");
+                statement.executeUpdate("INSERT INTO schema_migrations(version, applied_at) VALUES (6, "
+                        + System.currentTimeMillis() + ")");
+                current.commit();
+            } catch (SQLException e) {
+                current.rollback();
+                throw e;
+            } finally {
+                current.setAutoCommit(autoCommit);
+            }
+        }
     }
 
     private static boolean hasColumn(Connection connection, String table, String column) throws SQLException {

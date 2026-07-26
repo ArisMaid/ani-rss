@@ -44,6 +44,14 @@ class OwnershipMigrationServiceTest {
         assertTrue(OwnershipMigrationService.cachedTorrentMatches(cached.toFile(), hash));
     }
 
+    @Test
+    void emptyCachedTorrentIsNotParsedOrAdopted() throws Exception {
+        Path cached = tempDir.resolve("empty.torrent");
+        Files.write(cached, new byte[0]);
+
+        assertFalse(OwnershipMigrationService.cachedTorrentMatches(cached.toFile(), HASH));
+    }
+
     private static byte[] torrentBytes() throws Exception {
         ByteArrayOutputStream torrent = new ByteArrayOutputStream();
         torrent.write('d');

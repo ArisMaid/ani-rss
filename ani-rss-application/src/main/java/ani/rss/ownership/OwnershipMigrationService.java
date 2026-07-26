@@ -160,6 +160,9 @@ public class OwnershipMigrationService {
             return false;
         }
         try {
+            if (Files.size(file.toPath()) < 1) {
+                return false;
+            }
             String extension = FileUtil.extName(file);
             if ("torrent".equalsIgnoreCase(extension)) {
                 synchronized (TorrentFile.class) {

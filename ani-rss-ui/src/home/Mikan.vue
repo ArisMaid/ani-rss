@@ -36,7 +36,7 @@
       </el-button>
     </div>
   </el-dialog>
-  <el-dialog v-model="dialogVisible" center title="Mikan">
+  <el-dialog v-model="dialogVisible" center title="Mikan" @closed="onDialogClosed">
     <el-checkbox-group v-model="rssList">
       <div class="content-wrapper">
         <div class="search-section">
@@ -166,11 +166,13 @@ import SafeImage from '@/other/SafeImage.vue'
 import {openHttpUrl} from '@/js/url.js'
 import * as http from "@/js/http.js";
 
-// Two picker requests fill the backend's 48-entry warmup budget while keeping
-// each poll compact enough to render progressively on a cold season.
-const SCORE_BATCH_SIZE = 24
+// The backend accepts at most 48 ids per score request. Two concurrent batches
+// cover a typical season without making a second client-side warmup round.
+const SCORE_BATCH_SIZE = 48
 const MAX_CONCURRENT_SCORE_BATCHES = 2
-const SCORE_RETRY_DELAYS_MILLIS = [0, 250, 500, 1_000, 2_000, 4_000]
+// Slow Mikan detail lookups are queued behind a bounded server-side worker pool.
+// Keep the picker responsive while allowing that cold queue enough time to drain.
+const SCORE_RETRY_DELAYS_MILLIS = [0, 250, 500, 1_000, 2_000, 4_000, 6_000, 6_000, 6_000]
 const DEFAULT_LIST_PRELOAD_TTL_MILLIS = 30_000
 
 const emptyMikanData = () => ({
@@ -274,6 +276,14 @@ let cancelMikanRequests = () => {
   listAbortController?.abort()
   listAbortController = undefined
   cancelScoreRequest()
+}
+
+let onDialogClosed = () => {
+  // A quick reopen can emit the preceding dialog's closed event late. Keep the
+  // new picker request alive in that case.
+  if (!dialogVisible.value) {
+    cancelMikanRequests()
+  }
 }
 
 let resetListInteractionState = () => {

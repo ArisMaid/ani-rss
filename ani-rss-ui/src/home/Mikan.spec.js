@@ -51,7 +51,7 @@ const response = (seasonLabel, title, score) => ({
 })
 
 const stubs = {
-  ElDialog: {template: '<div><slot /></div>'},
+  ElDialog: {name: 'ElDialog', template: '<div><slot /></div>'},
   ElCheckboxGroup: {template: '<div><slot /></div>'},
   ElInput: true,
   ElButton: true,
@@ -233,7 +233,7 @@ describe('Mikan season changes', () => {
     expect(wrapper.text()).toContain('9.1')
   })
 
-  it('primes the first 48 score entries concurrently within the upstream-safe limit', async () => {
+  it('uses the server score cap for two concurrent seasonal batches', async () => {
     const items = Array.from({length: 49}, (_, index) => ({
       url: `https://mikanani.me/Home/Bangumi/${index + 1}`,
       title: `作品 ${index + 1}`,
@@ -267,10 +267,10 @@ describe('Mikan season changes', () => {
 
     expect(http.mikanScores).toHaveBeenCalledTimes(2)
     expect(vi.mocked(http.mikanScores).mock.calls[0][0]).toEqual(
-        Array.from({length: 24}, (_, index) => String(index + 1))
+        Array.from({length: 48}, (_, index) => String(index + 1))
     )
     expect(vi.mocked(http.mikanScores).mock.calls[1][0]).toEqual(
-        Array.from({length: 24}, (_, index) => String(index + 25))
+        ['49']
     )
 
     firstBatch.resolve({data: {scores: {}, subscribedBgmIds: []}})
@@ -280,7 +280,7 @@ describe('Mikan season changes', () => {
 
   it('primes later batches before retrying unresolved earlier cards', async () => {
     vi.useFakeTimers()
-    const items = Array.from({length: 49}, (_, index) => ({
+    const items = Array.from({length: 97}, (_, index) => ({
       url: `https://mikanani.me/Home/Bangumi/${index + 1}`,
       title: `浣滃搧 ${index + 1}`,
       cover: '',
@@ -314,7 +314,73 @@ describe('Mikan season changes', () => {
     await flushPromises()
 
     expect(http.mikanScores).toHaveBeenCalledTimes(3)
-    expect(vi.mocked(http.mikanScores).mock.calls[2][0]).toEqual(['49'])
+    expect(vi.mocked(http.mikanScores).mock.calls[2][0]).toEqual(['97'])
+  })
+
+  it('keeps polling a cold score queue after the initial retry window', async () => {
+    vi.useFakeTimers()
+    vi.mocked(http.mikan).mockResolvedValue(response('2026 summer', 'late public score', 0))
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      vi.mocked(http.mikanScores).mockResolvedValueOnce({
+        data: {scores: {}, subscribedBgmIds: [], retryableMikanIds: ['0']}
+      })
+    }
+    vi.mocked(http.mikanScores).mockResolvedValueOnce({
+      data: {
+        scores: {'0': {bgmId: 'late-score', score: 8.8}},
+        subscribedBgmIds: [],
+        retryableMikanIds: []
+      }
+    })
+
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    wrapper.vm.show()
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(7_750)
+    await flushPromises()
+
+    expect(http.mikanScores).toHaveBeenCalledTimes(6)
+
+    await vi.advanceTimersByTimeAsync(6_000)
+    await flushPromises()
+
+    expect(http.mikanScores).toHaveBeenCalledTimes(7)
+    expect(wrapper.text()).toContain('8.8')
+  })
+
+  it('cancels unresolved score polling when the Mikan dialog closes', async () => {
+    vi.useFakeTimers()
+    vi.mocked(http.mikan).mockResolvedValue(response('2026 summer', 'dismissed picker', 0))
+    vi.mocked(http.mikanScores).mockResolvedValue({
+      data: {scores: {}, subscribedBgmIds: [], retryableMikanIds: ['0']}
+    })
+
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    wrapper.vm.show()
+    await flushPromises()
+
+    const dialogs = wrapper.findAllComponents({name: 'ElDialog'})
+    expect(dialogs).toHaveLength(3)
+    dialogs[2].vm.$emit('update:modelValue', false)
+    dialogs[2].vm.$emit('closed')
+    await flushPromises()
+
+    expect(vi.mocked(http.mikanScores).mock.calls[0][1].signal.aborted).toBe(true)
+    await vi.advanceTimersByTimeAsync(30_000)
+    await flushPromises()
+    expect(http.mikanScores).toHaveBeenCalledTimes(1)
   })
 
   it('does not re-request scores already supplied by the cached list response', async () => {

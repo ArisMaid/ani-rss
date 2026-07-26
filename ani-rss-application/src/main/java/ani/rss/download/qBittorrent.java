@@ -248,56 +248,14 @@ public class qBittorrent implements BaseDownload {
     @Override
     public Boolean delete(TorrentsInfo torrentsInfo, Boolean deleteFiles) {
         String host = config.getDownloadToolHost();
-        String name = torrentsInfo.getName();
         String hash = torrentsInfo.getHash();
         try {
-            List<qBittorrentTorrentsInfo.FileEntity> files = files(torrentsInfo, false, config);
             boolean b = HttpReq.post(host + "/api/v2/torrents/delete")
                     .form("hashes", hash)
                     .form("deleteFiles", deleteFiles)
                     .thenFunction(HttpResponse::isOk);
             if (!b) {
                 return false;
-            }
-
-            // 剧场版不用进行残留的文件夹清理
-            if (!ReUtil.contains(StringEnum.SEASON_REG, name)) {
-                return true;
-            }
-
-            String downloadDir = torrentsInfo.getSavePath();
-
-            List<File> dirList = files.stream()
-                    .map(qBittorrentTorrentsInfo.FileEntity::getName)
-                    .map(File::new)
-                    .map(File::getParent)
-                    .filter(StrUtil::isNotBlank)
-                    .map(s -> downloadDir + "/" + s)
-                    .distinct()
-                    .map(File::new)
-                    .filter(File::exists)
-                    .filter(File::isDirectory)
-                    .toList();
-
-            Boolean subtitleIndependentFolderEnabled = config.getSubtitleIndependentFolderEnabled();
-            String subtitleIndependentFolderName = config.getSubtitleIndependentFolderName();
-
-            // 清空剩余文件夹
-            for (File file : dirList) {
-                if (subtitleIndependentFolderEnabled) {
-                    if (subtitleIndependentFolderName.equals(file.getName())) {
-                        // 字幕独立文件夹 不进行删除
-                        continue;
-                    }
-                }
-
-                log.info("删除剩余文件夹: {}", file);
-                try {
-                    FileUtil.del(file);
-                } catch (Exception e) {
-                    log.info("删除失败: {}", file);
-                    log.error(e.getMessage(), e);
-                }
             }
 
             return true;

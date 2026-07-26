@@ -11,6 +11,7 @@ import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.enums.StringEnum;
 import ani.rss.enums.TorrentsStateEnum;
 import ani.rss.enums.TorrentsTagEnum;
+import ani.rss.ownership.OwnershipService;
 import ani.rss.service.ClearService;
 import ani.rss.util.basic.HttpReq;
 import cn.hutool.core.io.FileUtil;
@@ -40,7 +41,12 @@ public class TorrentUtil {
      */
     public static List<TorrentsInfo> getTorrentsInfos() {
         ThreadUtil.sleep(1000);
-        return DOWNLOAD.getTorrentsInfos();
+        List<TorrentsInfo> tasks = DOWNLOAD.getTorrentsInfos();
+        ownershipService().observeTasks(tasks);
+        if ("Aria2".equals(ConfigUtil.CONFIG.getDownloadToolType())) {
+            return tasks.stream().filter(task -> ownershipService().findOwned(task).isPresent()).toList();
+        }
+        return tasks;
     }
 
     /**
@@ -197,6 +203,7 @@ public class TorrentUtil {
      * @param deleteFiles  删除本地文件
      */
     public static Boolean delete(TorrentsInfo torrentsInfo, Boolean forcedDelete, Boolean deleteFiles) {
+        ownershipService().requireOwned(torrentsInfo);
         String name = torrentsInfo.getName();
 
         if (!forcedDelete) {
@@ -247,6 +254,7 @@ public class TorrentUtil {
      * @param torrentsInfo 种子信息
      */
     public static void rename(TorrentsInfo torrentsInfo) {
+        ownershipService().requireOwned(torrentsInfo);
         Config config = ConfigUtil.CONFIG;
         Boolean rename = config.getRename();
         if (!rename) {
@@ -276,6 +284,7 @@ public class TorrentUtil {
         if (StrUtil.isBlank(tags)) {
             return false;
         }
+        ownershipService().requireOwned(torrentsInfo);
         String name = torrentsInfo.getName();
         log.debug("添加标签 {} {}", name, tags);
         boolean b = false;
@@ -298,6 +307,8 @@ public class TorrentUtil {
         if (StrUtil.isBlank(path)) {
             return;
         }
+        OwnershipService ownershipService = ownershipService();
+        ownershipService.requireOwned(torrentsInfo);
         try {
             log.info("修改保存位置 {} ==> {}", torrentsInfo.getName(), path);
             DOWNLOAD.setSavePath(torrentsInfo, path);
@@ -321,6 +332,10 @@ public class TorrentUtil {
 
         DOWNLOAD = SpringUtil.getBean(ClassUtil.loadClass("ani.rss.download." + download));
         log.info("下载工具 {}", download);
+    }
+
+    private static OwnershipService ownershipService() {
+        return SpringUtil.getBean(OwnershipService.class);
     }
 
     /**

@@ -13,6 +13,9 @@ import ani.rss.enums.NotificationStatusEnum;
 import ani.rss.enums.StringEnum;
 import ani.rss.enums.TorrentsStateEnum;
 import ani.rss.enums.TorrentsTagEnum;
+import ani.rss.ownership.DownloadOwnership;
+import ani.rss.ownership.OwnershipService;
+import ani.rss.ownership.QuarantineService;
 import ani.rss.util.other.*;
 import cn.hutool.core.date.DateField;
 import cn.hutool.core.date.DateUtil;
@@ -45,6 +48,12 @@ public class DownloadService {
 
     @Resource
     private ScrapeService scrapeService;
+
+    @Resource
+    private OwnershipService ownershipService;
+
+    @Resource
+    private QuarantineService quarantineService;
 
     /**
      * 下载动漫
@@ -162,6 +171,9 @@ public class DownloadService {
                 TorrentsInfo standbyRSS = torrentsInfos
                         .stream()
                         .filter(torrentsInfo -> {
+                            if (!ownershipService.belongsTo(torrentsInfo, ani.getId())) {
+                                return false;
+                            }
                             if (!torrentsInfo.getSavePath().equals(savePath)) {
                                 return false;
                             }
@@ -311,6 +323,9 @@ public class DownloadService {
         torrentsInfos
                 .stream()
                 .filter(torrentsInfo -> {
+                    if (!ownershipService.belongsTo(torrentsInfo, ani.getId())) {
+                        return false;
+                    }
                     String name = torrentsInfo.getName();
                     String downloadDir = torrentsInfo.getSavePath();
                     if (!downloadDir.equals(downloadPath)) {
@@ -323,55 +338,12 @@ public class DownloadService {
                     return s.equalsIgnoreCase(episode);
                 })
                 .findFirst()
-                .ifPresent(standbyRSS ->
-                        TorrentUtil.delete(standbyRSS, true, true)
-                );
-
-        File[] files = FileUtils.listFiles(downloadPath);
-        for (File file : files) {
-            String fileMainName = FileUtil.mainName(file);
-            if (StrUtil.isBlank(fileMainName)) {
-                continue;
-            }
-            if (!ReUtil.contains(StringEnum.SEASON_REG, fileMainName)) {
-                continue;
-            }
-            fileMainName = ReUtil.get(StringEnum.SEASON_REG, fileMainName, 0);
-            if (!fileMainName.equalsIgnoreCase(episode)) {
-                continue;
-            }
-            boolean isDel = false;
-            // 文件在删除前先判断其格式
-            if (file.isFile()) {
-                String extName = FileUtil.extName(file);
-                // 没有后缀 跳过
-                if (StrUtil.isBlank(extName)) {
-                    continue;
-                }
-                if (FileUtils.isVideoFormat(extName)) {
-                    isDel = true;
-                }
-                if (List.of("nfo", "bif").contains(extName)) {
-                    isDel = true;
-                }
-                if (file.getName().endsWith("-thumb.jpg")) {
-                    isDel = true;
-                }
-            }
-            if (file.isDirectory()) {
-                isDel = true;
-            }
-            if (isDel) {
-                log.info("已开启备用RSS, 自动删除 {}", FileUtils.getAbsolutePath(file));
-                try {
-                    FileUtil.del(file);
-                    log.info("删除成功 {}", FileUtils.getAbsolutePath(file));
-                } catch (Exception e) {
-                    log.error("删除失败 {}", FileUtils.getAbsolutePath(file));
-                    log.error(e.getMessage(), e);
-                }
-            }
-        }
+                .ifPresent(standbyRSS -> {
+                    String ownershipId = ownershipService.requireOwned(standbyRSS).ownershipId();
+                    ownershipService.captureFiles(ownershipId, standbyRSS);
+                    quarantineService.quarantineOwnership(ownershipId);
+                    TorrentUtil.delete(standbyRSS, true, false);
+                });
     }
 
     /**
@@ -407,11 +379,17 @@ public class DownloadService {
         NotificationUtil.send(ConfigUtil.CONFIG, ani, text, NotificationStatusEnum.DOWNLOAD_START);
 
         Config config = ConfigUtil.CONFIG;
+        DownloadOwnership ownership = ownershipService.registerPending(ani, item, savePath);
 
         Integer downloadRetry = config.getDownloadRetry();
         for (int i = 1; i <= downloadRetry; i++) {
             try {
                 if (TorrentUtil.DOWNLOAD.download(ani, item, savePath, torrentFile)) {
+                    TorrentsInfo task = TorrentUtil.DOWNLOAD.getTorrentsInfos().stream()
+                            .filter(info -> StrUtil.equalsIgnoreCase(info.getHash(), item.getInfoHash()))
+                            .findFirst()
+                            .orElse(null);
+                    ownershipService.activate(ownership.ownershipId(), task);
                     return;
                 }
             } catch (Exception e) {
@@ -420,6 +398,8 @@ public class DownloadService {
             }
             log.error("{} 下载失败将进行重试, 当前重试次数为{}次", name, i);
         }
+
+        ownershipService.markFailed(ownership.ownershipId());
 
         // 删除下载失败的种子, 下次轮询仍会重试
         FileUtil.del(torrentFile);
@@ -729,15 +709,11 @@ public class DownloadService {
      * @return 订阅
      */
     public Optional<Ani> findAniByDownloadPath(TorrentsInfo torrentsInfo) {
-        String downloadDir = torrentsInfo.getSavePath();
-        return AniUtil.ANI_LIST
-                .stream()
-                .filter(ani -> {
-                    String path = getDownloadPath(ani);
-                    return path.equals(downloadDir);
-                })
-                .map(ObjectUtil::clone)
-                .findFirst();
+        return ownershipService.findOwned(torrentsInfo)
+                .flatMap(ownership -> AniUtil.ANI_LIST.stream()
+                        .filter(ani -> ani.getId().equals(ownership.subscriptionId()))
+                        .map(ObjectUtil::clone)
+                        .findFirst());
     }
 
 }

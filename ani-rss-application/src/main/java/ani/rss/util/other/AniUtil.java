@@ -1,13 +1,12 @@
 package ani.rss.util.other;
 
-import ani.rss.commons.FileUtils;
 import ani.rss.commons.AtomicFileWriter;
 import ani.rss.commons.GsonStatic;
 import ani.rss.entity.*;
 import ani.rss.entity.dto.RssToAniDTO;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.exception.ResultException;
-import ani.rss.service.ClearService;
+import ani.rss.ownership.OwnershipService;
 import ani.rss.service.DownloadService;
 import ani.rss.service.MikanService;
 import ani.rss.util.basic.HttpReq;
@@ -420,14 +419,15 @@ public class AniUtil {
 
         // 旧文件路径
         DownloadService downloadService = SpringUtil.getBean(DownloadService.class);
-        String oldPath = downloadService.getDownloadPath(ani, config);
+        Ani pathAni = ObjectUtil.clone(ani);
+        String oldPath = downloadService.getDownloadPath(pathAni, config);
 
         config.setDownloadPathTemplate(completedPathTemplate);
         // 因为临时修改下载位置模版以获取对应下载位置, 要关闭自定义下载位置
-        ani.setCustomDownloadPath(false);
+        pathAni.setCustomDownloadPath(false);
 
         // 新文件路径
-        String newPath = downloadService.getDownloadPath(ani, config);
+        String newPath = downloadService.getDownloadPath(pathAni, config);
 
         if (!FileUtil.exist(oldPath)) {
             // 旧文件不存在
@@ -437,11 +437,10 @@ public class AniUtil {
         FileUtil.mkdir(newPath);
 
         List<TorrentsInfo> torrentsInfos = TorrentUtil.getTorrentsInfos();
+        OwnershipService ownershipService = SpringUtil.getBean(OwnershipService.class);
 
         for (TorrentsInfo torrentsInfo : torrentsInfos) {
-            String savePath = torrentsInfo.getSavePath();
-            if (!savePath.equals(oldPath)) {
-                // 旧位置不相同
+            if (!ownershipService.belongsTo(torrentsInfo, ani.getId())) {
                 continue;
             }
             // 修改保存位置
@@ -452,22 +451,8 @@ public class AniUtil {
             ThreadUtil.sleep(3000);
         }
 
-        File[] files = FileUtils.listFiles(oldPath);
-
-        log.info("订阅已完结 {}, 移动已完结文件共 {} 个", title, files.length);
-
-        for (File file : files) {
-            if (!file.exists()) {
-                continue;
-            }
-            // 移动文件
-            log.info("移动 {} ==> {}", file, newPath);
-            FileUtil.move(file, new File(newPath), true);
-        }
-
-        // 清理残留文件夹
-        ClearService clearService = SpringUtil.getBean(ClearService.class);
-        clearService.clearDir(oldPath);
+        ownershipService.moveSubscriptionFiles(ani.getId(), newPath);
+        log.info("订阅已完结 {}, 已移动归属清单文件", title);
     }
 
     public static Ani createAni() {

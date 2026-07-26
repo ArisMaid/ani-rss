@@ -4,6 +4,7 @@ import ani.rss.commons.ExceptionUtils;
 import ani.rss.commons.MavenUtils;
 import ani.rss.service.BackupService;
 import ani.rss.service.TaskService;
+import ani.rss.ownership.OwnershipMigrationService;
 import ani.rss.util.other.AniUtil;
 import ani.rss.util.other.ConfigUtil;
 import cn.hutool.core.net.NetUtil;
@@ -28,6 +29,9 @@ public class Runner implements ApplicationRunner {
     @Resource
     private TaskService taskService;
 
+    @Resource
+    private OwnershipMigrationService ownershipMigrationService;
+
     @Value("${server.port}")
     private String port;
 
@@ -38,6 +42,11 @@ public class Runner implements ApplicationRunner {
             backupService.backup();
 
             AniUtil.load();
+            try {
+                ownershipMigrationService.adoptStrictCandidates();
+            } catch (Exception e) {
+                log.warn("旧下载任务归属扫描失败: {}", ExceptionUtils.getMessage(e));
+            }
             taskService.start();
             String version = MavenUtils.getVersion();
             log.info("version {}", version);

@@ -12,6 +12,8 @@ import ani.rss.entity.dto.RssToAniDTO;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.entity.web.Result;
 import ani.rss.enums.AniSortTypeEnum;
+import ani.rss.ownership.OwnershipService;
+import ani.rss.ownership.QuarantineService;
 import ani.rss.service.AniService;
 import ani.rss.service.ClearService;
 import ani.rss.service.DownloadService;
@@ -49,6 +51,12 @@ public class AniController extends BaseController {
 
     @Resource
     private DownloadService downloadService;
+
+    @Resource
+    private OwnershipService ownershipService;
+
+    @Resource
+    private QuarantineService quarantineService;
 
     @Auth
     @Operation(summary = "添加订阅")
@@ -149,6 +157,9 @@ public class AniController extends BaseController {
                 File downloadPathFile = new File(downloadPath);
 
                 for (TorrentsInfo torrentsInfo : torrentsInfos) {
+                    if (!ownershipService.belongsTo(torrentsInfo, get.getId())) {
+                        continue;
+                    }
                     String savePath = torrentsInfo.getSavePath();
                     if (!savePath.equals(downloadPath)) {
                         // 旧位置不相同
@@ -167,13 +178,7 @@ public class AniController extends BaseController {
                     ThreadUtil.sleep(3000);
                 }
                 try {
-                    FileUtil.mkdir(newDownloadPath);
-                    File[] files = FileUtils.listFiles(downloadPath);
-                    for (File oldFile : files) {
-                        log.info("移动文件 {} ==> {}", oldFile, newDownloadPath);
-                        FileUtil.move(oldFile, new File(newDownloadPath), true);
-                    }
-                    clearService.clearDir(downloadPath);
+                    ownershipService.moveSubscriptionFiles(get.getId(), newDownloadPath);
                 } catch (Exception e) {
                     log.error(ExceptionUtils.getMessage(e), e);
                 }
@@ -224,15 +229,14 @@ public class AniController extends BaseController {
                     continue;
                 }
                 // 删除本地文件
-                String downloadPath = downloadService.getDownloadPath(ani);
                 for (TorrentsInfo torrentsInfo : torrentsInfos) {
-                    String savePath = torrentsInfo.getSavePath();
-                    if (savePath.equals(downloadPath)) {
-                        TorrentUtil.delete(torrentsInfo, true, true);
+                    if (ownershipService.belongsTo(torrentsInfo, ani.getId())) {
+                        String ownershipId = ownershipService.requireOwned(torrentsInfo).ownershipId();
+                        ownershipService.captureFiles(ownershipId, torrentsInfo);
+                        quarantineService.quarantineOwnership(ownershipId);
+                        TorrentUtil.delete(torrentsInfo, true, false);
                     }
                 }
-                ThreadUtil.sleep(3000);
-                clearService.clearDir(downloadPath);
             }
         });
         return Result.success("删除订阅成功");

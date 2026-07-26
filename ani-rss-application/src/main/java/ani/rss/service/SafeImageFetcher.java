@@ -3,6 +3,7 @@ package ani.rss.service;
 import ani.rss.entity.Config;
 import ani.rss.util.basic.CidrRangeChecker;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.crypto.SecureUtil;
 import org.apache.hc.client5.http.DnsResolver;
 import org.apache.hc.client5.http.auth.AuthScope;
 import org.apache.hc.client5.http.auth.UsernamePasswordCredentials;
@@ -30,9 +31,14 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /** HTTP image fetcher with bounded redirects, bytes and DNS address checks. */
@@ -43,13 +49,19 @@ public final class SafeImageFetcher {
     public static final long MAX_PIXELS = 100_000_000L;
     private static final Timeout TIMEOUT = Timeout.ofSeconds(10);
     private static final String IMAGE_PRIVATE_ALLOWLIST = "ANI_RSS_IMAGE_PRIVATE_ALLOWLIST";
+    /** A bounded pool keeps thumbnail TLS connections warm without leaking obsolete proxy credentials. */
+    private static final int MAX_CACHED_CLIENTS = 2;
+    private static final Object CLIENT_POOL_LOCK = new Object();
+    private static final LinkedHashMap<ClientKey, ClientHolder> CLIENTS =
+            new LinkedHashMap<>(4, 0.75f, true);
 
     private SafeImageFetcher() {
     }
 
     public static FetchedImage fetch(String value, Config config) {
         URI current = parse(value);
-        try (CloseableHttpClient client = createClient(config)) {
+        try (ClientLease lease = leaseClient(config)) {
+            CloseableHttpClient client = lease.client();
             for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
                 validateAddress(current, config);
                 HttpGet request = new HttpGet(current);
@@ -124,6 +136,11 @@ public final class SafeImageFetcher {
         var connectionManager = PoolingHttpClientConnectionManagerBuilder.create()
                 .setDnsResolver(resolver)
                 .setDefaultConnectionConfig(connectionConfig)
+                // A Mikan weekday can show more than five covers at once.
+                // Keep concurrency bounded, but avoid serializing thumbnail
+                // downloads behind HttpClient's small per-route default.
+                .setMaxConnTotal(32)
+                .setMaxConnPerRoute(16)
                 .build();
         RequestConfig requestConfig = RequestConfig.custom()
                 .setConnectionRequestTimeout(TIMEOUT)
@@ -151,6 +168,142 @@ public final class SafeImageFetcher {
             }
         }
         return builder.build();
+    }
+
+    private static ClientLease leaseClient(Config config) {
+        ClientKey key = ClientKey.from(config);
+        ClientHolder holder;
+        List<CloseableHttpClient> retired;
+        synchronized (CLIENT_POOL_LOCK) {
+            holder = CLIENTS.get(key);
+            if (holder == null) {
+                holder = new ClientHolder(createClient(config));
+                CLIENTS.put(key, holder);
+            }
+            holder.leases++;
+            retired = evictRetiredClientsLocked();
+        }
+        closeAll(retired);
+        return new ClientLease(holder);
+    }
+
+    private static List<CloseableHttpClient> evictRetiredClientsLocked() {
+        List<CloseableHttpClient> result = new ArrayList<>();
+        Iterator<Map.Entry<ClientKey, ClientHolder>> iterator = CLIENTS.entrySet().iterator();
+        while (CLIENTS.size() > MAX_CACHED_CLIENTS && iterator.hasNext()) {
+            ClientHolder holder = iterator.next().getValue();
+            iterator.remove();
+            holder.retired = true;
+            if (holder.leases == 0 && !holder.closed) {
+                holder.closed = true;
+                result.add(holder.client);
+            }
+        }
+        return result;
+    }
+
+    private static void releaseClient(ClientHolder holder) {
+        CloseableHttpClient retired = null;
+        synchronized (CLIENT_POOL_LOCK) {
+            if (holder.leases > 0) {
+                holder.leases--;
+            }
+            if (holder.retired && holder.leases == 0 && !holder.closed) {
+                holder.closed = true;
+                retired = holder.client;
+            }
+        }
+        closeQuietly(retired);
+    }
+
+    /** Closes retained clients during application shutdown and test cleanup. */
+    static void closeCachedClients() {
+        List<CloseableHttpClient> retired = new ArrayList<>();
+        synchronized (CLIENT_POOL_LOCK) {
+            for (ClientHolder holder : CLIENTS.values()) {
+                holder.retired = true;
+                if (holder.leases == 0 && !holder.closed) {
+                    holder.closed = true;
+                    retired.add(holder.client);
+                }
+            }
+            CLIENTS.clear();
+        }
+        closeAll(retired);
+    }
+
+    private static void closeAll(List<CloseableHttpClient> clients) {
+        for (CloseableHttpClient client : clients) {
+            closeQuietly(client);
+        }
+    }
+
+    private static void closeQuietly(CloseableHttpClient client) {
+        if (client == null) {
+            return;
+        }
+        try {
+            client.close();
+        } catch (IOException ignored) {
+            // The pool is only an optimization; a later request can safely create a new client.
+        }
+    }
+
+    private static final class ClientLease implements AutoCloseable {
+        private final ClientHolder holder;
+        private boolean closed;
+
+        private ClientLease(ClientHolder holder) {
+            this.holder = holder;
+        }
+
+        private CloseableHttpClient client() {
+            return holder.client;
+        }
+
+        @Override
+        public void close() {
+            if (!closed) {
+                closed = true;
+                releaseClient(holder);
+            }
+        }
+    }
+
+    private static final class ClientHolder {
+        private final CloseableHttpClient client;
+        private int leases;
+        private boolean retired;
+        private boolean closed;
+
+        private ClientHolder(CloseableHttpClient client) {
+            this.client = client;
+        }
+    }
+
+    private record ClientKey(
+            boolean proxy,
+            String proxyHost,
+            int proxyPort,
+            String proxyListFingerprint,
+            String proxyCredentialFingerprint
+    ) {
+        private static ClientKey from(Config config) {
+            boolean proxy = config != null && Boolean.TRUE.equals(config.getProxy());
+            String proxyHost = normalizeHost(config == null ? "" : config.getProxyHost());
+            Integer configuredPort = config == null ? null : config.getProxyPort();
+            int proxyPort = configuredPort == null ? -1 : configuredPort;
+            String proxyList = config == null ? "" : StrUtil.blankToDefault(config.getProxyList(), "");
+            String credentials = proxy
+                    ? StrUtil.blankToDefault(config.getProxyUsername(), "") + "\u0000"
+                    + StrUtil.blankToDefault(config.getProxyPassword(), "")
+                    : "";
+            return new ClientKey(proxy, proxyHost, proxyPort, fingerprint(proxyList), fingerprint(credentials));
+        }
+
+        private static String fingerprint(String value) {
+            return SecureUtil.sha256(StrUtil.blankToDefault(value, ""));
+        }
     }
 
     private static InetAddress[] resolveForClient(String host, Config config) throws UnknownHostException {

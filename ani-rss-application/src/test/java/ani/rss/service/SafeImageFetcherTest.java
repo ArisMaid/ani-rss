@@ -4,22 +4,32 @@ import ani.rss.entity.Config;
 import ani.rss.util.other.ConfigUtil;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.InetAddress;
 import java.util.Base64;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SafeImageFetcherTest {
     private static final String PRIVATE_ALLOWLIST = "ANI_RSS_IMAGE_PRIVATE_ALLOWLIST";
+
+    @AfterEach
+    void closeClientPool() {
+        SafeImageFetcher.closeCachedClients();
+        System.clearProperty(PRIVATE_ALLOWLIST);
+    }
 
     @Test
     void allowsExplicitLocalhostAndValidatesRedirectAndContentType() throws Exception {
@@ -70,6 +80,31 @@ class SafeImageFetcherTest {
         Config config = ConfigUtil.copy(ConfigUtil.CONFIG);
         assertThrows(IllegalArgumentException.class, () -> SafeImageFetcher.fetch(
                 "http://127.0.0.1:1/image", config));
+    }
+
+    @Test
+    void reusesOnePooledConnectionForRepeatedThumbnailFetches() throws Exception {
+        byte[] image = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        Set<Integer> remotePorts = ConcurrentHashMap.newKeySet();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/image", exchange -> {
+            remotePorts.add(exchange.getRemoteAddress().getPort());
+            respond(exchange, 200, "image/png", image);
+        });
+        server.start();
+        try {
+            System.setProperty(PRIVATE_ALLOWLIST, "127.0.0.1");
+            Config config = ConfigUtil.copy(ConfigUtil.CONFIG);
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/image";
+
+            SafeImageFetcher.fetch(url, config);
+            SafeImageFetcher.fetch(url, config);
+
+            assertEquals(1, remotePorts.size(), "the second cover should reuse the pooled connection");
+        } finally {
+            server.stop(0);
+        }
     }
 
     @Test

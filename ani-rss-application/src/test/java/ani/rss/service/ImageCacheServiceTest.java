@@ -49,6 +49,7 @@ class ImageCacheServiceTest {
 
     @AfterEach
     void tearDown() {
+        SafeImageFetcher.closeCachedClients();
         AuthService.invalidateSessions();
         ConfigUtil.sync(original);
         System.clearProperty(PRIVATE_ALLOWLIST);

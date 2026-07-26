@@ -6,6 +6,7 @@ import ani.rss.commons.PathPolicy;
 import ani.rss.exception.UpstreamServiceException;
 import ani.rss.util.other.ConfigUtil;
 import cn.hutool.crypto.SecureUtil;
+import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Service;
 
@@ -29,6 +30,11 @@ public class ImageCacheService {
     private final Map<String, Entry> entries = new ConcurrentHashMap<>();
     private final Map<String, String> sourceIndex = new ConcurrentHashMap<>();
     private final Object[] sourceLocks = createLocks();
+
+    @PreDestroy
+    void closeImageClients() {
+        SafeImageFetcher.closeCachedClients();
+    }
 
     public ImageRef cache(String url, HttpServletRequest request) {
         if (!AuthService.validateRequest(request)) {

@@ -58,10 +58,14 @@ public class PublicScoreService {
     private static final int MIKAN_MAPPING_SCAN_BUFFER_BYTES = 4 * 1024;
     static final long BGM_BATCH_TIMEOUT_MILLIS = 12_000;
     static final long MIKAN_MAPPING_BATCH_TIMEOUT_MILLIS = 12_000;
-    static final int MAX_CONCURRENT_REQUESTS = 12;
-    /** Keep two upstream slots available so completed Mikan mappings can turn into scores immediately. */
-    private static final int MAX_MAPPING_WARMUP_WORKERS = MAX_CONCURRENT_REQUESTS - 2;
-    private static final int MAX_SCORE_WARMUP_WORKERS = 2;
+    static final int MAX_CONCURRENT_REQUESTS = 16;
+    /**
+     * Mikan detail pages now stop after their small header. Keep four slots
+     * reserved so completed mappings can turn into visible scores immediately
+     * instead of waiting behind the remaining seasonal detail pages.
+     */
+    private static final int MAX_MAPPING_WARMUP_WORKERS = MAX_CONCURRENT_REQUESTS - 4;
+    private static final int MAX_SCORE_WARMUP_WORKERS = 4;
     private static final long WARMUP_QUEUE_TIMEOUT_MILLIS = 12_000;
     private static final long WARMUP_FAILURE_RETRY_DELAY_MILLIS = 500;
     static final int MAX_SCORE_LOOKUPS_PER_BATCH = 64;
@@ -1026,7 +1030,9 @@ public class PublicScoreService {
                     break;
                 }
                 document.write(buffer, 0, read);
-                String bgmId = extractMikanBgmId(document.toString(StandardCharsets.UTF_8), mikanUrl);
+                // The link is ASCII and normally in the header. Avoid a full
+                // Jsoup DOM build for every 4 KiB chunk across a cold season.
+                String bgmId = extractLeadingMikanBgmId(document.toString(StandardCharsets.UTF_8));
                 if (StrUtil.isNotBlank(bgmId)) {
                     return bgmId;
                 }
@@ -1045,6 +1051,11 @@ public class PublicScoreService {
             }
         }
         return extractBgmSubjectId(document.html());
+    }
+
+    private static String extractLeadingMikanBgmId(String html) {
+        Matcher matcher = BGM_SUBJECT_ID.matcher(html);
+        return matcher.find() ? matcher.group(1) : "";
     }
 
     @FunctionalInterface

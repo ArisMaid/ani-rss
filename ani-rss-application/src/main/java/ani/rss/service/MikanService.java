@@ -6,6 +6,7 @@ import ani.rss.commons.GsonStatic;
 import ani.rss.entity.*;
 import ani.rss.entity.dto.MikanScoreResponse;
 import ani.rss.exception.UpstreamServiceException;
+import ani.rss.persistence.MikanListCacheRepository;
 import ani.rss.util.basic.HttpReq;
 import ani.rss.util.other.AniUtil;
 import ani.rss.util.other.BgmUtil;
@@ -41,13 +42,17 @@ import java.util.stream.Collectors;
 public class MikanService {
     private static final int MIKAN_REQUEST_TIMEOUT_MILLIS = 10_000;
     private static final int MAX_SCORE_LOOKUP_IDS = 48;
-    private static final long SEASON_LIST_CACHE_TTL = TimeUnit.MINUTES.toMillis(2);
+    /** A seasonal schedule changes slowly enough to safely reuse it across a short service restart. */
+    private static final long SEASON_LIST_CACHE_TTL = TimeUnit.MINUTES.toMillis(10);
     private static final long SEARCH_LIST_CACHE_TTL = TimeUnit.SECONDS.toMillis(45);
     private static final String LIST_CACHE_PREFIX = "mikan:list:";
     private static final Pattern MIKAN_ID = Pattern.compile("\\d+");
 
     @Resource
     private PublicScoreService publicScoreService;
+    /** Nullable only in isolated unit tests that deliberately avoid SQLite I/O. */
+    @Resource
+    private MikanListCacheRepository persistentListCache;
     private final ConcurrentMap<String, Object> listLoadLocks = new ConcurrentHashMap<>();
     private final MikanListLoader listLoader;
 
@@ -56,8 +61,17 @@ public class MikanService {
     }
 
     MikanService(PublicScoreService publicScoreService, MikanListLoader listLoader) {
+        this(publicScoreService, listLoader, null);
+    }
+
+    MikanService(
+            PublicScoreService publicScoreService,
+            MikanListLoader listLoader,
+            MikanListCacheRepository persistentListCache
+    ) {
         this.publicScoreService = publicScoreService;
         this.listLoader = listLoader;
+        this.persistentListCache = persistentListCache;
     }
 
     public static String getMikanHost() {
@@ -242,6 +256,13 @@ public class MikanService {
         if (cached != null) {
             return copyMikan(cached);
         }
+        CachedMikanList persisted = loadPersistentList(cacheKey, normalizedText);
+        if (persisted != null) {
+            long remaining = Math.max(1, persisted.expiresAt() - System.currentTimeMillis());
+            Mikan snapshot = copyMikan(persisted.list());
+            CacheUtils.put(cacheKey, snapshot, remaining);
+            return copyMikan(snapshot);
+        }
 
         Object lock = listLoadLocks.computeIfAbsent(cacheKey, ignored -> new Object());
         try {
@@ -250,13 +271,22 @@ public class MikanService {
                 if (cached != null) {
                     return copyMikan(cached);
                 }
+                persisted = loadPersistentList(cacheKey, normalizedText);
+                if (persisted != null) {
+                    long remaining = Math.max(1, persisted.expiresAt() - System.currentTimeMillis());
+                    Mikan snapshot = copyMikan(persisted.list());
+                    CacheUtils.put(cacheKey, snapshot, remaining);
+                    return copyMikan(snapshot);
+                }
                 Mikan loaded = listLoader.load(normalizedText, copySeason(season));
                 Mikan snapshot = copyMikan(loaded);
+                long ttl = listCacheTtl(normalizedText);
                 CacheUtils.put(
                         cacheKey,
                         snapshot,
-                        StrUtil.isBlank(normalizedText) ? SEASON_LIST_CACHE_TTL : SEARCH_LIST_CACHE_TTL
+                        ttl
                 );
+                persistSeasonList(cacheKey, normalizedText, snapshot, ttl);
                 return copyMikan(snapshot);
             }
         } finally {
@@ -264,7 +294,41 @@ public class MikanService {
         }
     }
 
-    private static String listCacheKey(String text, Mikan.Season season) {
+    private CachedMikanList loadPersistentList(String cacheKey, String text) {
+        if (StrUtil.isNotBlank(text) || persistentListCache == null) {
+            return null;
+        }
+        try {
+            return persistentListCache.findValid(cacheKey, System.currentTimeMillis())
+                    .map(snapshot -> new CachedMikanList(
+                            copyMikan(GsonStatic.GSON.fromJson(snapshot.snapshotJson(), Mikan.class)),
+                            snapshot.expiresAt()))
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            // A public list cache is an optional acceleration. A corrupt or
+            // unavailable record must fall back to Mikan without breaking the picker.
+            log.debug("Unable to read durable Mikan season list cache");
+            return null;
+        }
+    }
+
+    private void persistSeasonList(String cacheKey, String text, Mikan snapshot, long ttl) {
+        if (StrUtil.isNotBlank(text) || persistentListCache == null || ttl <= 0) {
+            return;
+        }
+        try {
+            persistentListCache.save(cacheKey, GsonStatic.toJson(snapshot), System.currentTimeMillis() + ttl);
+        } catch (RuntimeException e) {
+            // The live in-memory entry is still valid even when persistence is unavailable.
+            log.debug("Unable to save durable Mikan season list cache");
+        }
+    }
+
+    private static long listCacheTtl(String text) {
+        return StrUtil.isBlank(text) ? SEASON_LIST_CACHE_TTL : SEARCH_LIST_CACHE_TTL;
+    }
+
+    static String listCacheKey(String text, Mikan.Season season) {
         String seasonKey = season == null
                 ? ""
                 : String.valueOf(season.getYear()) + "\u0000" + StrUtil.blankToDefault(season.getSeason(), "");
@@ -678,6 +742,9 @@ public class MikanService {
     @FunctionalInterface
     interface MikanListLoader {
         Mikan load(String text, Mikan.Season season);
+    }
+
+    private record CachedMikanList(Mikan list, long expiresAt) {
     }
 
 }

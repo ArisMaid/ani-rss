@@ -416,6 +416,30 @@ public final class DatabaseManager {
                 current.setAutoCommit(autoCommit);
             }
         }
+        if (version < 8) {
+            boolean autoCommit = current.getAutoCommit();
+            current.setAutoCommit(false);
+            try (Statement statement = current.createStatement()) {
+                statement.executeUpdate("""
+                        CREATE TABLE IF NOT EXISTS mikan_list_cache (
+                            cache_key TEXT PRIMARY KEY,
+                            snapshot_json TEXT NOT NULL,
+                            expires_at INTEGER NOT NULL,
+                            updated_at INTEGER NOT NULL
+                        )
+                        """);
+                statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_mikan_list_cache_expiry "
+                        + "ON mikan_list_cache(expires_at)");
+                statement.executeUpdate("INSERT INTO schema_migrations(version, applied_at) VALUES (8, "
+                        + System.currentTimeMillis() + ")");
+                current.commit();
+            } catch (SQLException e) {
+                current.rollback();
+                throw e;
+            } finally {
+                current.setAutoCommit(autoCommit);
+            }
+        }
     }
 
     private static boolean hasColumn(Connection connection, String table, String column) throws SQLException {

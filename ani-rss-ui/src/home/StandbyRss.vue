@@ -109,10 +109,12 @@
 
 <script setup>
 import {ref} from "vue";
+import {ElMessage} from "element-plus";
 import Mikan from "./Mikan.vue";
 import AniBT from "@/home/AniBT.vue";
 import * as http from "@/js/http.js";
 import AnimeGarden from "@/home/AnimeGarden.vue";
+import {mikanSearchQuery, normalizeRssSelection, subgroupMatchRules} from "@/home/rssSelection.js";
 
 const editIndex = ref(-1)
 
@@ -128,7 +130,8 @@ const config = ref({
 let show = () => {
   editIndex.value = -1
   dialogVisible.value = true
-  standbyRss.value = JSON.parse(JSON.stringify(props.ani.standbyRssList))
+  standbyRss.value = Array.isArray(props.ani.standbyRssList)
+      ? JSON.parse(JSON.stringify(props.ani.standbyRssList)) : []
 
   http.config()
       .then(res => {
@@ -175,16 +178,22 @@ let move = (index, offset) => {
 }
 
 let mikanCallback = v => {
-  let {subgroup, match, url} = v
+  const selection = normalizeRssSelection(v)
+  if (!selection) {
+    ElMessage.error('字幕组订阅信息不完整')
+    return
+  }
+  const {subgroup, url} = selection
 
   let later = plus()
   later.url = url
   later.label = subgroup
 
-  let newMatch = JSON.parse(match).map(s => `{{${subgroup}}}:${s}`)
+  const newMatch = subgroupMatchRules(selection)
 
   // 剔除旧的同字幕组规则
-  props.ani.match = props.ani.match.filter(it => it.indexOf(`{{${subgroup}}}:`) !== 0)
+  const existing = Array.isArray(props.ani.match) ? props.ani.match : []
+  props.ani.match = existing.filter(it => typeof it !== 'string' || it.indexOf(`{{${subgroup}}}:`) !== 0)
 
   props.ani.match.push(...newMatch)
 
@@ -202,18 +211,7 @@ let aniBTShow = () => {
 }
 
 let mikanShow = () => {
-  let query = props.ani.mikanTitle ? props.ani.mikanTitle : props.ani.title;
-
-  if (props.ani.url) {
-    let url = new URL(props.ani.url);
-    let searchParams = url.searchParams;
-    let mikanId = searchParams.get("bangumiId");
-    if (mikanId) {
-      query = `id: ${mikanId}`
-    }
-  }
-
-  mikanRef.value?.show(query)
+  mikanRef.value?.show(mikanSearchQuery(props.ani))
 }
 
 defineExpose({show})

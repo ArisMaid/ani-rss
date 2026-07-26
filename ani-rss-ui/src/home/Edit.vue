@@ -1,6 +1,6 @@
 <template>
   <el-dialog v-model="downloadPathDialogVisible" align-center center width="300"
-             @close="callback" title="移动文件">
+             @close="onDownloadPathDialogClose" title="移动文件">
     <div>
       <strong>
         检测到修改后的下载位置发生了改动，是否将已下载文件移动到新的位置？
@@ -11,17 +11,9 @@
       </el-text>
     </div>
     <div class="action">
-      <el-button icon="Check" text bg type="danger" @click="()=>{
-        move = true
-        editAni()
-        downloadPathDialogVisible = false
-      }">移动
+      <el-button icon="Check" text bg type="danger" @click="submitPathDecision(true)">移动
       </el-button>
-      <el-button icon="Close" bg text @click="()=>{
-        move = false
-        editAni()
-        downloadPathDialogVisible = false
-      }">不移动
+      <el-button icon="Close" bg text @click="submitPathDecision(false)">不移动
       </el-button>
     </div>
   </el-dialog>
@@ -48,16 +40,42 @@ let move = ref(false)
 let downloadPath = ref('')
 let callback = ref(() => {
 })
+let pathDecisionCommitted = ref(false)
+
+const finish = () => {
+  const done = callback.value
+  callback.value = () => {
+  }
+  if (typeof done === 'function') done()
+}
 
 const editChange = async (fun) => {
-  callback.value = fun
-  let req = await http.downloadPath(ani.value)
-  downloadPath.value = req.data.downloadPath
-  if (req.data.change) {
-    downloadPathDialogVisible.value = true
-    return
+  callback.value = typeof fun === 'function' ? fun : () => {
   }
+  pathDecisionCommitted.value = false
+  try {
+    const req = await http.downloadPath(ani.value)
+    downloadPath.value = req.data.downloadPath
+    if (req.data.change) {
+      downloadPathDialogVisible.value = true
+      return
+    }
+    await editAni()
+  } catch {
+    finish()
+  }
+}
+
+const submitPathDecision = shouldMove => {
+  pathDecisionCommitted.value = true
+  move.value = shouldMove
+  downloadPathDialogVisible.value = false
   editAni()
+}
+
+const onDownloadPathDialogClose = () => {
+  if (!pathDecisionCommitted.value) finish()
+  pathDecisionCommitted.value = false
 }
 
 const editAni = () => {
@@ -67,14 +85,13 @@ const editAni = () => {
         window.$reLoadList()
         dialogVisible.value = false
       })
-      .finally(callback.value)
+      .finally(finish)
 
   if (!move.value) {
-    action()
-    return
+    return action()
   }
 
-  ElMessageBox.confirm(
+  return ElMessageBox.confirm(
       '将会移动整个文件夹, 是否执意继续?',
       '警告',
       {
@@ -86,11 +103,16 @@ const editAni = () => {
       }
   )
       .then(action)
+      .catch(error => {
+        finish()
+        if (error !== 'cancel' && error !== 'close') throw error
+      })
 }
 
 const show = (item) => {
   ani.value = JSON.parse(JSON.stringify(item))
   move.value = false
+  pathDecisionCommitted.value = false
   dialogVisible.value = true
 }
 

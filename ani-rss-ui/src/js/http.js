@@ -31,7 +31,7 @@ export let listAni = () => api.post('api/listAni')
  * @param ani 订阅
  * @returns {Promise<any>}
  */
-export let addAni = (ani) => api.post('api/addAni', ani)
+export let addAni = (ani, options = {}) => api.post('api/addAni', ani, options)
 
 /**
  * 修改订阅
@@ -141,7 +141,7 @@ export let refreshAni = (ani) => api.post('api/refreshAni', ani)
  * @param ani 订阅
  * @returns {Promise<any>}
  */
-export let rssToAni = (ani) => api.post('api/rssToAni', ani)
+export let rssToAni = (ani, options = {}) => api.post('api/rssToAni', ani, options)
 
 /**
  * 预览订阅
@@ -368,13 +368,58 @@ export let bgmOAuthState = () => api.post('api/v2/auth/oauth-state/bgm')
 
 export let logout = () => api.post('api/v2/auth/logout')
 
-export let cacheImage = (url) => api.post('api/v2/images', {url})
+const MAX_CONCURRENT_IMAGE_REQUESTS = 6
+const imageRequests = new Map()
+const imageQueue = []
+let activeImageRequests = 0
+
+const runImageQueue = () => {
+    while (activeImageRequests < MAX_CONCURRENT_IMAGE_REQUESTS && imageQueue.length) {
+        const item = imageQueue.shift()
+        activeImageRequests++
+        const finish = () => {
+            activeImageRequests--
+            runImageQueue()
+        }
+        try {
+            Promise.resolve(item.task()).then(value => {
+                item.resolve(value)
+                finish()
+            }, error => {
+                item.reject(error)
+                finish()
+            })
+        } catch (error) {
+            item.reject(error)
+            finish()
+        }
+    }
+}
+
+const scheduleImageRequest = task => new Promise((resolve, reject) => {
+    imageQueue.push({task, resolve, reject})
+    runImageQueue()
+})
+
+export let cacheImage = (url) => {
+    const existing = imageRequests.get(url)
+    if (existing) return existing
+
+    const request = scheduleImageRequest(() =>
+        api.post('api/v2/images', {url}, {silent: true}))
+    imageRequests.set(url, request)
+    const clear = () => {
+        if (imageRequests.get(url) === request) imageRequests.delete(url)
+    }
+    request.then(clear, clear)
+    return request
+}
 
 /**
  * 测试IP白名单
  * @returns {Promise<Response>}
  */
-export let testIpWhitelist = () => fetch('api/testIpWhitelist', {method: 'post'}).then(res => res.json())
+export let testIpWhitelist = () => api.post('api/testIpWhitelist')
 
 /**
  * 获取视频列表
@@ -444,16 +489,17 @@ export let deleteTorrent = (id, hash) => api.post(withQuery('api/deleteTorrent',
 export let stageRestore = async (file) => {
     const formData = new FormData()
     formData.append('file', file)
-    return api.post('api/v2/restore', formData).then(response => response.data)
+    return api.post('api/v2/restore', formData, {silent: true}).then(response => response.data)
 }
 
 export let externalMediaHandle = (handle) =>
     api.post(`api/v2/media/${encodeURIComponent(handle)}/external`)
 
 export let confirmRestore = (operationId) =>
-    api.post(`api/v2/restore/${encodeURIComponent(operationId)}/confirm`).then(res => res.data)
+    api.post(`api/v2/restore/${encodeURIComponent(operationId)}/confirm`, null, {silent: true})
+        .then(res => res.data)
 
 export let restoreStatus = (operationId) =>
-    api.get(`api/v2/restore/${encodeURIComponent(operationId)}`).then(res => res.data)
+    api.get(`api/v2/restore/${encodeURIComponent(operationId)}`, {silent: true}).then(res => res.data)
 
 export let ping = () => api.get("api/ping")

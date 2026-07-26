@@ -18,23 +18,23 @@ import {clearAuthentication, csrfToken} from "@/js/global.js";
  * }} ApiError
  */
 
-let post = async (url, body) => {
-    return await fetch_(url, 'POST', body);
+let post = async (url, body, options = {}) => {
+    return await fetch_(url, 'POST', body, options);
 }
 
-let get = async (url) => {
-    return await fetch_(url, 'GET', '');
+let get = async (url, options = {}) => {
+    return await fetch_(url, 'GET', '', options);
 }
 
-let del = async (url, body) => {
-    return await fetch_(url, 'DELETE', body);
+let del = async (url, body, options = {}) => {
+    return await fetch_(url, 'DELETE', body, options);
 }
 
-let put = async (url, body) => {
-    return await fetch_(url, 'PUT', body);
+let put = async (url, body, options = {}) => {
+    return await fetch_(url, 'PUT', body, options);
 }
 
-let fetch_ = async (url, method, body) => {
+let fetch_ = async (url, method, body, options = {}) => {
     /** @type {Record<string, string>} */
     let headers = {}
     const isForm = typeof FormData !== 'undefined' && body instanceof FormData
@@ -44,12 +44,22 @@ let fetch_ = async (url, method, body) => {
     if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && csrfToken.value && !isCsrfExempt(url)) {
         headers['X-CSRF-Token'] = csrfToken.value
     }
-    const response = await fetch(url, {
-        method: method,
-        body: body ? (isForm ? body : JSON.stringify(body)) : null,
-        headers: headers,
-        credentials: 'include'
-    })
+    let response
+    try {
+        response = await fetch(url, {
+            method: method,
+            body: body ? (isForm ? body : JSON.stringify(body)) : null,
+            headers: headers,
+            credentials: 'include'
+        })
+    } catch (cause) {
+        const error = /** @type {ApiError} */ (new Error('网络请求失败'))
+        error.code = 'NETWORK_ERROR'
+        error.status = 0
+        error.cause = cause
+        if (!options.silent) ElMessage.error(error.message)
+        throw error
+    }
     /** @type {any} */
     let result
     try {
@@ -60,7 +70,7 @@ let fetch_ = async (url, method, body) => {
     if (!result || typeof result !== 'object') result = {}
     if (!response.ok) {
         const message = result.detail || result.message || `请求失败 (${response.status})`
-        ElMessage.error(message)
+        if (!options.silent) ElMessage.error(message)
         if (response.status === 401 || response.status === 403) {
             clearAuthentication()
             setTimeout(() => location.reload(), 1000)
@@ -87,7 +97,7 @@ let fetch_ = async (url, method, body) => {
     if (code >= 200 && code < 300) {
         return result
     }
-    ElMessage.error(message)
+    if (!options.silent) ElMessage.error(message)
     if (code === 401 || code === 403) {
         clearAuthentication()
         setTimeout(() => location.reload(), 1000)

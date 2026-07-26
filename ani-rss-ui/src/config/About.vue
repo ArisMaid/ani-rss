@@ -75,6 +75,14 @@
                 title="更新依赖于Github, 需要网络环境支持"
                 type="info"
             />
+          <el-alert
+              v-if="about.update && !about.autoUpdate"
+              show-icon
+              :closable="false"
+              class="about-alert"
+              title="当前为本地修订版本，请手动同步上游更新，避免覆盖本地修改"
+              type="warning"
+          />
           </el-scrollbar>
         </el-form-item>
       </el-form>
@@ -89,7 +97,7 @@
         更新历史
       </el-button>
       <div>
-        <el-button :disabled="!about.update" bg text icon="Check"
+        <el-button :disabled="!about.update || !about.autoUpdate" bg text icon="Check"
                    type="success" @click="update">
           开始更新
         </el-button>
@@ -165,6 +173,7 @@ const about = ref({
   'version': '',
   'latest': '',
   'update': false,
+  'autoUpdate': false,
   'markdownBody': '',
   'date': null
 })

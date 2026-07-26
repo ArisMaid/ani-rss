@@ -319,6 +319,7 @@ import {getBgmTitle} from "@/js/http.js";
 import AniBT from "@/home/AniBT.vue";
 import AnimeGarden from "@/home/AnimeGarden.vue";
 import Disable from "@/other/Disable.vue";
+import {mikanSearchQuery, normalizeRssSelection, subgroupMatchRules} from "@/home/rssSelection.js";
 
 const activeName = ref('base')
 
@@ -423,14 +424,20 @@ let getBgmName = () => {
 }
 
 let mikanCallback = v => {
-  let {subgroup, match, url} = v
+  const selection = normalizeRssSelection(v)
+  if (!selection) {
+    ElMessage.error('字幕组订阅信息不完整')
+    return
+  }
+  const {subgroup, url} = selection
   props.ani.url = url
   props.ani.subgroup = subgroup
 
-  let newMatch = JSON.parse(match).map(s => `{{${subgroup}}}:${s}`)
+  const newMatch = subgroupMatchRules(selection)
 
   // 剔除旧的同字幕组规则
-  props.ani.match = props.ani.match.filter(it => it.indexOf(`{{${subgroup}}}:`) !== 0)
+  const existing = Array.isArray(props.ani.match) ? props.ani.match : []
+  props.ani.match = existing.filter(it => typeof it !== 'string' || it.indexOf(`{{${subgroup}}}:`) !== 0)
 
   props.ani.match.push(...newMatch)
 }
@@ -443,18 +450,7 @@ let scrape = (force) => {
 }
 
 let mikanShow = () => {
-  let query = props.ani.mikanTitle ? props.ani.mikanTitle : props.ani.title;
-
-  if (props.ani.url) {
-    let url = new URL(props.ani.url);
-    let searchParams = url.searchParams;
-    let mikanId = searchParams.get("bangumiId");
-    if (mikanId) {
-      query = `id: ${mikanId}`
-    }
-  }
-
-  mikanRef.value?.show(query)
+  mikanRef.value?.show(mikanSearchQuery(props.ani))
 }
 
 let animeGardenShow = () => {

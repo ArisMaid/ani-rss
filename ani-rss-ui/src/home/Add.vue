@@ -167,6 +167,7 @@ import * as http from "@/js/http.js";
 import AniBT from "@/home/AniBT.vue";
 import {useLocalStorage} from "@vueuse/core";
 import AnimeGarden from "@/home/AnimeGarden.vue";
+import {normalizeRssSelection, subgroupMatchRules} from "@/home/rssSelection.js";
 
 const showRss = ref(true)
 const aniBTRef = ref()
@@ -189,7 +190,7 @@ const getRss = () => {
   }
   rssButtonLoading.value = true
   ani.value.type = activeName.value
-  http.rssToAni(ani.value)
+  return http.rssToAni(ani.value)
       .then(res => {
         let match = ani.value['match'];
         ani.value = res['data']
@@ -225,12 +226,15 @@ let bgmCallback = it => {
 }
 
 let rssCallback = v => {
-  let {subgroup, match, url, bgmUrl} = v
-  ani.value.url = url
-  ani.value.bgmUrl = bgmUrl
-  ani.value.subgroup = subgroup
-  ani.value.match = JSON.parse(match)
-      .map(s => `{{${subgroup}}}:${s}`)
+  const selection = normalizeRssSelection(v)
+  if (!selection || !selection.bgmUrl) {
+    ElMessage.error('字幕组订阅信息不完整')
+    return
+  }
+  ani.value.url = selection.url
+  ani.value.bgmUrl = selection.bgmUrl
+  ani.value.subgroup = selection.subgroup
+  ani.value.match = subgroupMatchRules(selection)
   getRss()
 }
 

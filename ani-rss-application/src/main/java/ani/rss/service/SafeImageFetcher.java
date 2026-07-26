@@ -4,14 +4,21 @@ import ani.rss.entity.Config;
 import ani.rss.util.basic.CidrRangeChecker;
 import cn.hutool.core.util.StrUtil;
 import org.apache.hc.client5.http.DnsResolver;
+import org.apache.hc.client5.http.auth.AuthScope;
+import org.apache.hc.client5.http.auth.UsernamePasswordCredentials;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.config.RequestConfig;
+import org.apache.hc.client5.http.impl.auth.BasicCredentialsProvider;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpResponse;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.core5.http.HttpEntity;
+import org.apache.hc.core5.http.HttpException;
+import org.apache.hc.core5.http.HttpHost;
+import org.apache.hc.client5.http.impl.routing.DefaultProxyRoutePlanner;
+import org.apache.hc.core5.http.protocol.HttpContext;
 import org.apache.hc.core5.util.Timeout;
 
 import java.io.ByteArrayOutputStream;
@@ -88,6 +95,8 @@ public final class SafeImageFetcher {
                     return new FetchedImage(bytes, detectedType);
                 }
             }
+        } catch (LinkageError e) {
+            throw new IllegalStateException("image HTTP client is incompatible with this Java runtime", e);
         } catch (IOException e) {
             throw new IllegalStateException("image fetch failed", e);
         }
@@ -98,12 +107,12 @@ public final class SafeImageFetcher {
         DnsResolver resolver = new DnsResolver() {
             @Override
             public InetAddress[] resolve(String host) throws UnknownHostException {
-                return resolveAndValidate(host, config);
+                return resolveForClient(host, config);
             }
 
             @Override
             public String resolveCanonicalHostname(String host) throws UnknownHostException {
-                resolveAndValidate(host, config);
+                resolveForClient(host, config);
                 return normalizeHost(host);
             }
         };
@@ -119,12 +128,60 @@ public final class SafeImageFetcher {
                 .setConnectionRequestTimeout(TIMEOUT)
                 .setResponseTimeout(TIMEOUT)
                 .build();
-        return HttpClients.custom()
+        var builder = HttpClients.custom()
                 .setConnectionManager(connectionManager)
                 .setDefaultRequestConfig(requestConfig)
                 .disableRedirectHandling()
-                .disableAutomaticRetries()
-                .build();
+                .disableAutomaticRetries();
+
+        if (Boolean.TRUE.equals(config == null ? null : config.getProxy())) {
+            String proxyHost = normalizeHost(config.getProxyHost());
+            Integer proxyPort = config.getProxyPort();
+            if (proxyHost.isEmpty() || proxyPort == null || proxyPort < 1 || proxyPort > 65535) {
+                throw new IllegalStateException("proxy configuration is incomplete");
+            }
+            HttpHost proxy = new HttpHost(proxyHost, proxyPort);
+            builder.setRoutePlanner(new ConfiguredProxyRoutePlanner(proxy, config));
+            if (StrUtil.isAllNotBlank(config.getProxyUsername(), config.getProxyPassword())) {
+                BasicCredentialsProvider credentials = new BasicCredentialsProvider();
+                credentials.setCredentials(new AuthScope(proxy), new UsernamePasswordCredentials(
+                        config.getProxyUsername(), config.getProxyPassword().toCharArray()));
+                builder.setDefaultCredentialsProvider(credentials);
+            }
+        }
+        return builder.build();
+    }
+
+    private static InetAddress[] resolveForClient(String host, Config config) throws UnknownHostException {
+        if (isConfiguredProxyHost(host, config)) {
+            return InetAddress.getAllByName(normalizeHost(host));
+        }
+        return resolveAndValidate(host, config);
+    }
+
+    private static boolean isConfiguredProxyHost(String host, Config config) {
+        return config != null && StrUtil.isNotBlank(config.getProxyHost()) &&
+                normalizeHost(host).equals(normalizeHost(config.getProxyHost()));
+    }
+
+    private static final class ConfiguredProxyRoutePlanner extends DefaultProxyRoutePlanner {
+        private final Config config;
+
+        private ConfiguredProxyRoutePlanner(HttpHost proxy, Config config) {
+            super(proxy);
+            this.config = config;
+        }
+
+        @Override
+        protected HttpHost determineProxy(HttpHost target, HttpContext context) throws HttpException {
+            return target != null && shouldUseConfiguredProxy(target.getHostName(), config)
+                    ? super.determineProxy(target, context) : null;
+        }
+    }
+
+    private static boolean shouldUseConfiguredProxy(String host, Config config) {
+        return config != null && Boolean.TRUE.equals(config.getProxy()) &&
+                isProxyListed(normalizeHost(host), config);
     }
 
     public static boolean isForbiddenAddress(InetAddress address) {
@@ -202,14 +259,76 @@ public final class SafeImageFetcher {
     private static InetAddress[] resolveAndValidate(String host, Config config) throws UnknownHostException {
         String normalizedHost = normalizeHost(host);
         InetAddress[] addresses = InetAddress.getAllByName(normalizedHost);
+        validateResolvedAddresses(normalizedHost, addresses, config);
+        return addresses;
+    }
+
+    static void validateResolvedAddresses(String host, InetAddress[] addresses, Config config) {
+        String normalizedHost = normalizeHost(host);
         Set<String> allowlist = allowlist(config);
         boolean explicitlyAllowed = allowlist.contains(normalizedHost);
+        boolean domainName = !isIpLiteral(normalizedHost);
+        // In transparent/fake-IP proxy environments DNS returns 198.18/15 for
+        // configured upstream domains. The exception is deliberately limited to
+        // the application's proxy-domain list; arbitrary domains must remain
+        // blocked even when a system proxy happens to use fake IPs.
+        boolean proxyListed = isProxyListed(normalizedHost, config);
         for (InetAddress address : addresses) {
-            if (isForbiddenAddress(address) && !explicitlyAllowed && !allowedByCidr(address, allowlist)) {
+            boolean proxyFakeIp = domainName && proxyListed && isProxyFakeIp(address);
+            if (isForbiddenAddress(address) && !proxyFakeIp &&
+                    !explicitlyAllowed && !allowedByCidr(address, allowlist)) {
                 throw new IllegalArgumentException("image URL resolves to a private or reserved address");
             }
         }
-        return addresses;
+    }
+
+    private static boolean isProxyFakeIp(InetAddress address) {
+        if (!(address instanceof Inet4Address)) {
+            return false;
+        }
+        byte[] bytes = address.getAddress();
+        int value = ((bytes[0] & 0xff) << 24) | ((bytes[1] & 0xff) << 16) |
+                ((bytes[2] & 0xff) << 8) | (bytes[3] & 0xff);
+        return (value & 0xfffe0000) == 0xc6120000; // 198.18.0.0/15 proxy fake-IP range
+    }
+
+    private static boolean isIpLiteral(String host) {
+        if (host.indexOf(':') >= 0) {
+            return true;
+        }
+        if (host.isEmpty() || !host.chars().allMatch(ch -> ch == '.' || ch >= '0' && ch <= '9')) {
+            return false;
+        }
+        String[] parts = host.split("\\.", -1);
+        if (parts.length != 4) {
+            return true;
+        }
+        for (String part : parts) {
+            try {
+                if (part.isEmpty() || Integer.parseInt(part) > 255) {
+                    return true;
+                }
+            } catch (NumberFormatException e) {
+                return true;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isProxyListed(String host, Config config) {
+        if (config == null || StrUtil.isBlank(config.getProxyList())) {
+            return false;
+        }
+        for (String entry : config.getProxyList().split("[,\\r\\n]")) {
+            String candidate = normalizeHost(entry);
+            if (candidate.isEmpty()) {
+                continue;
+            }
+            if (host.equals(candidate) || host.endsWith("." + candidate)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static Set<String> allowlist(Config config) {
@@ -255,6 +374,9 @@ public final class SafeImageFetcher {
         String value = host == null ? "" : host.trim().toLowerCase(Locale.ROOT);
         if (value.startsWith("[") && value.endsWith("]")) {
             return value.substring(1, value.length() - 1);
+        }
+        while (value.length() > 1 && value.endsWith(".")) {
+            value = value.substring(0, value.length() - 1);
         }
         return value;
     }

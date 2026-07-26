@@ -16,11 +16,11 @@
               <div v-for="item in weekItem.items" :key="item.id">
                 <AniCard
                     :item="item"
-                    @edit="item => openLazy('edit', editRef, item)"
-                    @playlist="item => openLazy('playlist', playListRef, item)"
-                    @cover="item => openLazy('cover', coverRef, item)"
-                    @del="item => openLazy('delete', delRef, item)"
-                    @rate="item => openLazy('rate', bgmRateRef, item)"
+                    @edit="item => openLazy('edit', item)"
+                    @playlist="item => openLazy('playlist', item)"
+                    @cover="item => openLazy('cover', item)"
+                    @del="item => openLazy('delete', item)"
+                    @rate="item => openLazy('rate', item)"
                 />
               </div>
             </div>
@@ -31,11 +31,11 @@
             <div v-for="item in flatFilterList" :key="item.id">
               <AniCard
                   :item="item"
-                  @edit="item => openLazy('edit', editRef, item)"
-                  @playlist="item => openLazy('playlist', playListRef, item)"
-                  @cover="item => openLazy('cover', coverRef, item)"
-                  @del="item => openLazy('delete', delRef, item)"
-                  @rate="item => openLazy('rate', bgmRateRef, item)"
+                  @edit="item => openLazy('edit', item)"
+                  @playlist="item => openLazy('playlist', item)"
+                  @cover="item => openLazy('cover', item)"
+                  @del="item => openLazy('delete', item)"
+                  @rate="item => openLazy('rate', item)"
               />
             </div>
           </div>
@@ -65,8 +65,16 @@ const coverRef = ref()
 const playListRef = ref()
 const bgmRateRef = ref()
 const mounted = reactive({edit: false, playlist: false, cover: false, delete: false, rate: false})
+const componentRefs = {
+  edit: editRef,
+  playlist: playListRef,
+  cover: coverRef,
+  delete: delRef,
+  rate: bgmRateRef
+}
 
-const openLazy = (name, componentRef, ...args) => {
+const openLazy = (name, ...args) => {
+  const componentRef = componentRefs[name]
   mounted[name] = true
   if (componentRef.value) {
     componentRef.value.show(...args)

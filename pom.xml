@@ -5,7 +5,7 @@
 
     <groupId>ani.rss</groupId>
     <artifactId>ani-rss</artifactId>
-    <version>3.1.75</version>
+    <version>3.1.75.12</version>
 
     <name>ani-rss</name>
     <inceptionYear>2025</inceptionYear>
@@ -22,6 +22,7 @@
         <commons-compress.version>1.27.1</commons-compress.version>
         <bouncycastle.version>1.84</bouncycastle.version>
         <jackson2-bom.version>2.21.5</jackson2-bom.version>
+        <jackson3-bom.version>3.1.5</jackson3-bom.version>
         <jacoco.version>0.8.15</jacoco.version>
         <spotbugs-maven-plugin.version>4.10.3.0</spotbugs-maven-plugin.version>
         <cyclonedx-maven-plugin.version>2.9.2</cyclonedx-maven-plugin.version>
@@ -45,6 +46,13 @@
                 <groupId>com.fasterxml.jackson</groupId>
                 <artifactId>jackson-bom</artifactId>
                 <version>${jackson2-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>tools.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson3-bom.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

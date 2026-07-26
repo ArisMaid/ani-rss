@@ -129,7 +129,7 @@ public class CustomExceptionHandler {
     @ExceptionHandler(Exception.class)
     public Object handleException(Exception e, HttpServletRequest request) {
         String operationId = java.util.UUID.randomUUID().toString();
-        log.error("request failed operationId:{} type:{}", operationId, e.getClass().getSimpleName());
+        log.error("request failed operationId:{} type:{}", operationId, e.getClass().getSimpleName(), e);
         if (isV2(request)) {
             return problem(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "request failed", operationId);
         }

@@ -1,4 +1,4 @@
-FROM wushuo894/eclipse-temurin:26-jre-alpine
+FROM eclipse-temurin:17-jre-alpine
 
 COPY docker/run.sh /run.sh
 COPY docker/exec.sh /exec.sh
@@ -9,5 +9,7 @@ ENV PUID=0 PGID=0 UMASK=022
 ENV JAVA_OPTS="-Xms64m -Xmx512m -Xss256k -XX:+UseG1GC"
 ENV SERVER_PORT=7789 CONFIG=/config TZ=Asia/Shanghai SWAGGER_ENABLED=false MCP_ENABLED=false
 EXPOSE $SERVER_PORT
-RUN sed -i 's/\r//g' /*.sh && chmod +x /*.sh
+RUN apk add --no-cache su-exec \
+    && sed -i 's/\r//g' /*.sh \
+    && chmod +x /*.sh
 CMD ["/exec.sh"]

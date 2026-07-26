@@ -21,10 +21,51 @@ import org.springframework.stereotype.Service;
 import java.io.File;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
 public class UpdateService {
+    private static final Pattern RELEASE_VERSION =
+            Pattern.compile("^[Vv]?(\\d+\\.\\d+\\.\\d+)(?:[-+].*)?$");
+    private static final Pattern LOCAL_FORK_VERSION =
+            Pattern.compile("^[Vv]?(\\d+\\.\\d+\\.\\d+)\\.\\d+(?:[-+].*)?$");
+
+    static boolean isLocalForkVersion(String value) {
+        return value != null && LOCAL_FORK_VERSION.matcher(value.trim()).matches();
+    }
+
+    static String upstreamBaseVersion(String value) {
+        if (value == null) {
+            return "";
+        }
+        Matcher localMatcher = LOCAL_FORK_VERSION.matcher(value.trim());
+        if (localMatcher.matches()) {
+            return localMatcher.group(1);
+        }
+        Matcher matcher = RELEASE_VERSION.matcher(value.trim());
+        return matcher.matches() ? matcher.group(1) : value.trim();
+    }
+
+    static boolean isUpstreamUpdateAvailable(String latest, String current) {
+        String latestBase = upstreamBaseVersion(latest);
+        String currentBase = upstreamBaseVersion(current);
+        if (!RELEASE_VERSION.matcher(latest == null ? "" : latest.trim()).matches() ||
+                !RELEASE_VERSION.matcher(currentBase).matches()) {
+            return false;
+        }
+        return VersionComparator.INSTANCE.compare(latestBase, currentBase) > 0;
+    }
+
+    static boolean isAutomaticUpdateAllowed(String latest, String current) {
+        if (isLocalForkVersion(current)) {
+            return false;
+        }
+        String latestSeries = ReUtil.get("^[Vv]?(\\d+\\.\\d+)", latest, 1);
+        String currentSeries = ReUtil.get("^[Vv]?(\\d+\\.\\d+)", current, 1);
+        return StrUtil.isNotBlank(latestSeries) && latestSeries.equals(currentSeries);
+    }
 
     /**
      * 关于
@@ -72,7 +113,7 @@ public class UpdateService {
                     throw new IllegalStateException("release API rejected the request");
                 }
 
-                String latest = release.getTagName().replace("v", "");
+                String latest = release.getTagName().replaceFirst("(?i)^v", "");
 
                 /*
                 禁止非跨小版本的更新
@@ -84,8 +125,8 @@ public class UpdateService {
 
                 about
                         .setDate(release.getPublishedAt())
-                        .setAutoUpdate(autoUpdate)
-                        .setUpdate(VersionComparator.INSTANCE.compare(latest, version) > 0)
+                        .setAutoUpdate(autoUpdate && isAutomaticUpdateAllowed(latest, version))
+                        .setUpdate(isUpstreamUpdateAvailable(latest, version))
                         .setLatest(latest)
                         .setMarkdownBody(release.getBody());
 
@@ -113,8 +154,9 @@ public class UpdateService {
                 }
             });
         } catch (Exception e) {
-            log.error("检测更新失败 type:{}", e.getClass().getSimpleName());
-            throw new UpstreamServiceException("update check failed", e);
+            // Settings must stay usable when GitHub or the configured proxy is offline.
+            // An explicit update still fails because this fallback has update=false.
+            log.warn("检测更新失败，使用本地版本信息 type:{}", e.getClass().getSimpleName());
         }
         // 缓存一分钟
         CacheUtils.put(key, about, 1000 * 60);
@@ -130,6 +172,9 @@ public class UpdateService {
         Boolean update = about.getUpdate();
         if (!Boolean.TRUE.equals(update)) {
             throw new IllegalStateException("no update is available");
+        }
+        if (isLocalForkVersion(MavenUtils.getVersion())) {
+            throw new IllegalStateException("local fork build requires manual upstream synchronization");
         }
         if (StrUtil.isBlank(about.getDownloadUrl()) || StrUtil.isBlank(about.getSha256()) ||
                 about.getSize() == null || about.getSize() <= 0) {

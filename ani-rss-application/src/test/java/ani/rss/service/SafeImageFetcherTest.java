@@ -13,6 +13,7 @@ import java.util.Base64;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -79,6 +80,21 @@ class SafeImageFetcherTest {
     }
 
     @Test
+    void permitsConfiguredProxyFakeIpButNeverArbitraryOrDirectIpUrls() throws Exception {
+        Config config = ConfigUtil.copy(ConfigUtil.CONFIG).setImagePrivateAllowlist("");
+        InetAddress fakeIp = InetAddress.getByName("198.18.0.23");
+
+        assertDoesNotThrow(() -> SafeImageFetcher.validateResolvedAddresses(
+                "mikanani.me", new InetAddress[]{fakeIp}, config));
+        assertThrows(IllegalArgumentException.class, () -> SafeImageFetcher.validateResolvedAddresses(
+                "unlisted.example", new InetAddress[]{fakeIp}, config));
+        assertThrows(IllegalArgumentException.class, () -> SafeImageFetcher.validateResolvedAddresses(
+                "198.18.0.23", new InetAddress[]{fakeIp}, config));
+        assertThrows(IllegalArgumentException.class, () -> SafeImageFetcher.validateResolvedAddresses(
+                "images.example.test", new InetAddress[]{InetAddress.getByName("127.0.0.1")}, config));
+    }
+
+    @Test
     void enforcesRedirectLimitAndDeclaredBodyLimit() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         AtomicInteger redirects = new AtomicInteger();
@@ -111,6 +127,42 @@ class SafeImageFetcherTest {
         Config config = ConfigUtil.copy(ConfigUtil.CONFIG).setImagePrivateAllowlist("127.0.0.1");
         assertThrows(IllegalArgumentException.class,
                 () -> SafeImageFetcher.fetch("http://user:password@127.0.0.1/image", config));
+    }
+
+    @Test
+    void routesConfiguredImageDomainsThroughTheApplicationProxy() throws Exception {
+        byte[] image = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        AtomicInteger targetHits = new AtomicInteger();
+        AtomicInteger proxyHits = new AtomicInteger();
+        HttpServer target = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        target.createContext("/image", exchange -> {
+            targetHits.incrementAndGet();
+            respond(exchange, 200, "image/png", image);
+        });
+        HttpServer proxy = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        proxy.createContext("/", exchange -> {
+            proxyHits.incrementAndGet();
+            respond(exchange, 200, "image/png", image);
+        });
+        target.start();
+        proxy.start();
+        try {
+            Config config = ConfigUtil.copy(ConfigUtil.CONFIG)
+                    .setProxy(true)
+                    .setProxyHost("127.0.0.1")
+                    .setProxyPort(proxy.getAddress().getPort())
+                    .setProxyList("127.0.0.1")
+                    .setImagePrivateAllowlist("127.0.0.1");
+            SafeImageFetcher.FetchedImage fetched = SafeImageFetcher.fetch(
+                    "http://127.0.0.1:" + target.getAddress().getPort() + "/image", config);
+            assertArrayEquals(image, fetched.bytes());
+            assertTrue(proxyHits.get() > 0);
+            assertTrue(targetHits.get() == 0);
+        } finally {
+            proxy.stop(0);
+            target.stop(0);
+        }
     }
 
     private static void redirect(HttpExchange exchange, String location) throws IOException {

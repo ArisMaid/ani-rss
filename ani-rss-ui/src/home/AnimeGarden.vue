@@ -278,7 +278,7 @@ let batchAddition = async () => {
         "subgroup": item[0].name
       }
 
-      ani = (await http.rssToAni(ani)).data
+      ani = (await http.rssToAni(ani, {silent: true})).data
       if (item.length > 1) {
         ani.standbyRssList = item.slice(1)
             .map(o => {
@@ -290,7 +290,7 @@ let batchAddition = async () => {
             })
       }
       batchAdditionNum.value += item.length
-      await http.addAni(ani)
+      await http.addAni(ani, {silent: true})
     }
     ElMessage.success("添加成功")
 
@@ -298,7 +298,7 @@ let batchAddition = async () => {
       location.reload()
     }, 1000)
   } catch (e) {
-    ElMessage.error(e)
+    ElMessage.error(e?.message || '批量添加失败')
   } finally {
     batchAdditionDialogVisible.value = false
   }

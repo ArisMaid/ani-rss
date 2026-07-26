@@ -86,19 +86,21 @@ public class MikanService {
                 .filter(Objects::nonNull)
                 .toList();
 
-        // A season must be usable even when the public score cache is cold.
-        // Uncached enrichment is requested separately by the UI after this
-        // response is rendered.
+        // A season must be usable even when the public score cache is cold;
+        // cache reads and warmup queueing must not wait for the upstream.
+        // Read cached scores and start cold enrichment in one traversal. The
+        // previous two-step path consulted the durable mapping cache once for
+        // rendering and again for warmup, multiplying SQLite work by the
+        // number of cards in a season.
+        PublicScoreService.MikanScoreLookup cachedScores =
+                publicScoreService.getCachedMikanScoreLookupAndWarm(
+                        mikanInfos, PublicScoreService.MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH);
         applyScores(
                 mikan,
-                publicScoreService.getCachedMikanScores(mikanInfos),
+                cachedScores.scores(),
                 subscribedBgmIds(),
                 subscribedMikanIds()
         );
-        // Start bounded enrichment only after the list snapshot is ready. The
-        // HTTP response stays fast; the picker polls the score cache and shows
-        // completed entries as each Mikan mapping flows into its Bangumi score.
-        publicScoreService.warmMikanScores(mikanInfos);
 
         return mikan;
     }

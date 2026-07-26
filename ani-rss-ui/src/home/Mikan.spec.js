@@ -194,7 +194,7 @@ describe('Mikan season changes', () => {
     expect(wrapper.text()).toContain('9.1')
   })
 
-  it('prioritizes the first visible score batches concurrently within the upstream-safe limit', async () => {
+  it('primes the first 48 score entries concurrently within the upstream-safe limit', async () => {
     const items = Array.from({length: 49}, (_, index) => ({
       url: `https://mikanani.me/Home/Bangumi/${index + 1}`,
       title: `作品 ${index + 1}`,
@@ -228,15 +228,54 @@ describe('Mikan season changes', () => {
 
     expect(http.mikanScores).toHaveBeenCalledTimes(2)
     expect(vi.mocked(http.mikanScores).mock.calls[0][0]).toEqual(
-        Array.from({length: 12}, (_, index) => String(index + 1))
+        Array.from({length: 24}, (_, index) => String(index + 1))
     )
     expect(vi.mocked(http.mikanScores).mock.calls[1][0]).toEqual(
-        Array.from({length: 12}, (_, index) => String(index + 13))
+        Array.from({length: 24}, (_, index) => String(index + 25))
     )
 
     firstBatch.resolve({data: {scores: {}, subscribedBgmIds: []}})
     secondBatch.resolve({data: {scores: {}, subscribedBgmIds: []}})
     await flushPromises()
+  })
+
+  it('primes later batches before retrying unresolved earlier cards', async () => {
+    vi.useFakeTimers()
+    const items = Array.from({length: 49}, (_, index) => ({
+      url: `https://mikanani.me/Home/Bangumi/${index + 1}`,
+      title: `浣滃搧 ${index + 1}`,
+      cover: '',
+      score: 0,
+      exists: false
+    }))
+    vi.mocked(http.mikan).mockResolvedValue({
+      data: {
+        seasons: [],
+        weeks: [{weekLabel: '鏄熸湡涓€', items}],
+        totalItem: items.length
+      }
+    })
+    vi.mocked(http.mikanScores).mockResolvedValue({
+      data: {
+        scores: {},
+        subscribedBgmIds: [],
+        retryableMikanIds: items.map(item => item.url.split('/').pop())
+      }
+    })
+
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    wrapper.vm.show()
+    await flushPromises()
+    await flushPromises()
+
+    expect(http.mikanScores).toHaveBeenCalledTimes(3)
+    expect(vi.mocked(http.mikanScores).mock.calls[2][0]).toEqual(['49'])
   })
 
   it('does not re-request scores already supplied by the cached list response', async () => {

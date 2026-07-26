@@ -131,11 +131,11 @@ public class PublicScoreService {
         Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, String> missing = new LinkedHashMap<>();
         Set<String> retryableBgmIds = new LinkedHashSet<>();
+        Map<String, Double> cachedScores = cachedBgmScores(ids);
 
         for (String subjectId : ids) {
-            Double cached = cachedBgmScore(subjectId);
-            if (cached != null) {
-                scores.put(subjectId, cached);
+            if (cachedScores.containsKey(subjectId)) {
+                scores.put(subjectId, cachedScores.get(subjectId));
             } else {
                 missing.put(subjectId, subjectId);
             }
@@ -205,12 +205,25 @@ public class PublicScoreService {
      * long-lived HTTP request.</p>
      */
     public MikanScoreLookup getCachedMikanScoreLookupAndWarm(Collection<MikanInfo> mikanInfos) {
+        return getCachedMikanScoreLookupAndWarm(mikanInfos, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Same cache read as {@link #getCachedMikanScoreLookupAndWarm(Collection)}
+     * with a bounded number of cold items allowed to enter the warmup queue.
+     * Cached scores are still returned for the complete collection.
+     */
+    MikanScoreLookup getCachedMikanScoreLookupAndWarm(
+            Collection<MikanInfo> mikanInfos, int maxColdWarmups) {
         Map<String, MikanBgm> scores = new LinkedHashMap<>();
         Set<String> retryableMikanIds = new LinkedHashSet<>();
         if (mikanInfos == null) {
             return new MikanScoreLookup(scores, retryableMikanIds);
         }
+        int remainingColdWarmups = Math.max(0, maxColdWarmups);
 
+        Map<String, String> knownBgmIds = new LinkedHashMap<>();
+        Map<String, String> mikanUrls = new LinkedHashMap<>();
         for (MikanInfo mikanInfo : mikanInfos) {
             if (mikanInfo == null) {
                 continue;
@@ -221,29 +234,49 @@ public class PublicScoreService {
             }
 
             String bgmId = extractBgmSubjectId(mikanInfo.getBgmUrl());
-            if (StrUtil.isBlank(bgmId)) {
-                String mikanUrl = mikanInfo.getUrl();
-                String cachedMapping = cachedMikanMapping(mikanId, mikanUrl);
-                if (cachedMapping == null) {
-                    retryableMikanIds.add(mikanId);
-                    warmMikanMappingAndScore(mikanUrl);
-                    continue;
-                }
-                bgmId = extractBgmSubjectId(cachedMapping);
-                if (StrUtil.isBlank(bgmId)) {
-                    // A completed lookup with no Bangumi link is cached briefly
-                    // and is not an upstream outage worth polling again.
-                    continue;
-                }
+            if (StrUtil.isNotBlank(bgmId)) {
+                knownBgmIds.put(mikanId, bgmId);
+            } else if (StrUtil.isNotBlank(mikanInfo.getUrl())) {
+                mikanUrls.putIfAbsent(mikanId, mikanInfo.getUrl());
             }
+        }
 
-            Double cachedScore = cachedBgmScore(bgmId);
-            if (cachedScore != null) {
-                scores.put(mikanId, new MikanBgm(mikanId, bgmId, cachedScore));
+        mikanUrls.keySet().removeAll(knownBgmIds.keySet());
+        Map<String, String> cachedMappings = cachedMikanMappings(mikanUrls);
+        for (Map.Entry<String, String> entry : mikanUrls.entrySet()) {
+            String mikanId = entry.getKey();
+            if (!cachedMappings.containsKey(mikanId)) {
+                retryableMikanIds.add(mikanId);
+                // The bulk cache read above already proved that this mapping
+                // is absent, so avoid immediately taking the SQLite lock a
+                // second time for the same picker card.
+                if (remainingColdWarmups > 0) {
+                    warmMikanMappingAndScore(entry.getValue(), true);
+                    remainingColdWarmups--;
+                }
+                continue;
+            }
+            String bgmId = extractBgmSubjectId(cachedMappings.get(mikanId));
+            if (StrUtil.isNotBlank(bgmId)) {
+                knownBgmIds.put(mikanId, bgmId);
+            }
+            // A completed lookup with no Bangumi link is cached briefly and
+            // is not an upstream outage worth polling again.
+        }
+
+        Map<String, Double> cachedScores = cachedBgmScores(knownBgmIds.values());
+        for (Map.Entry<String, String> entry : knownBgmIds.entrySet()) {
+            String mikanId = entry.getKey();
+            String bgmId = entry.getValue();
+            if (cachedScores.containsKey(bgmId)) {
+                scores.put(mikanId, new MikanBgm(mikanId, bgmId, cachedScores.get(bgmId)));
                 continue;
             }
             retryableMikanIds.add(mikanId);
-            warmBgmScore(bgmId);
+            if (remainingColdWarmups > 0) {
+                warmBgmScore(bgmId);
+                remainingColdWarmups--;
+            }
         }
         return new MikanScoreLookup(scores, retryableMikanIds);
     }
@@ -322,6 +355,8 @@ public class PublicScoreService {
             return result;
         }
 
+        Map<String, String> knownBgmIds = new LinkedHashMap<>();
+        Map<String, String> mikanUrls = new LinkedHashMap<>();
         for (MikanInfo mikanInfo : mikanInfos) {
             if (mikanInfo == null) {
                 continue;
@@ -332,16 +367,27 @@ public class PublicScoreService {
             }
 
             String bgmId = extractBgmSubjectId(mikanInfo.getBgmUrl());
-            if (StrUtil.isBlank(bgmId) && StrUtil.isNotBlank(mikanInfo.getUrl())) {
-                bgmId = cachedMikanMapping(mikanId, mikanInfo.getUrl());
+            if (StrUtil.isNotBlank(bgmId)) {
+                knownBgmIds.put(mikanId, bgmId);
+            } else if (StrUtil.isNotBlank(mikanInfo.getUrl())) {
+                mikanUrls.putIfAbsent(mikanId, mikanInfo.getUrl());
             }
-            if (StrUtil.isBlank(bgmId)) {
-                continue;
-            }
+        }
 
-            Double score = cachedBgmScore(bgmId);
-            if (score != null) {
-                result.put(mikanId, new MikanBgm(mikanId, bgmId, score));
+        mikanUrls.keySet().removeAll(knownBgmIds.keySet());
+        for (Map.Entry<String, String> entry : cachedMikanMappings(mikanUrls).entrySet()) {
+            String bgmId = extractBgmSubjectId(entry.getValue());
+            if (StrUtil.isNotBlank(bgmId)) {
+                knownBgmIds.put(entry.getKey(), bgmId);
+            }
+        }
+
+        Map<String, Double> cachedScores = cachedBgmScores(knownBgmIds.values());
+        for (Map.Entry<String, String> entry : knownBgmIds.entrySet()) {
+            String bgmId = entry.getValue();
+            if (cachedScores.containsKey(bgmId)) {
+                result.put(entry.getKey(), new MikanBgm(
+                        entry.getKey(), bgmId, cachedScores.get(bgmId)));
             }
         }
         return result;
@@ -370,17 +416,18 @@ public class PublicScoreService {
         Map<String, String> bgmIds = new LinkedHashMap<>();
         Map<String, String> missing = new LinkedHashMap<>();
         Set<String> retryableMikanIds = new LinkedHashSet<>();
+        Map<String, String> cachedMappings = cachedMikanMappings(mikanUrls);
 
         for (Map.Entry<String, String> entry : mikanUrls.entrySet()) {
             String mikanId = entry.getKey();
-            String url = entry.getValue();
-            String cached = cachedMikanMapping(mikanId, url);
-            if (cached != null) {
-                if (StrUtil.isNotBlank(cached)) {
-                    bgmIds.put(mikanId, cached);
+            if (cachedMappings.containsKey(mikanId)) {
+                String cached = cachedMappings.get(mikanId);
+                String bgmId = extractBgmSubjectId(cached);
+                if (StrUtil.isNotBlank(bgmId)) {
+                    bgmIds.put(mikanId, bgmId);
                 }
             } else {
-                missing.put(mikanId, url);
+                missing.put(mikanId, entry.getValue());
             }
         }
 
@@ -534,6 +581,100 @@ public class PublicScoreService {
         return score;
     }
 
+    /**
+     * Bulk-primes the in-memory Mikan mapping cache from SQLite.  A seasonal
+     * list often has dozens of cards; taking the database lock once is much
+     * faster than checking its durable mapping record once per card.
+     */
+    private Map<String, String> cachedMikanMappings(Map<String, String> mikanUrls) {
+        Map<String, String> result = new LinkedHashMap<>();
+        Map<String, String> missing = new LinkedHashMap<>();
+        if (mikanUrls == null || mikanUrls.isEmpty()) {
+            return result;
+        }
+
+        for (Map.Entry<String, String> entry : mikanUrls.entrySet()) {
+            String mikanId = entry.getKey();
+            String mikanUrl = entry.getValue();
+            if (StrUtil.isBlank(mikanId) || StrUtil.isBlank(mikanUrl)) {
+                continue;
+            }
+            String cached = CacheUtils.get(MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanUrl));
+            if (cached != null) {
+                result.put(mikanId, cached);
+            } else {
+                missing.put(mikanId, mikanUrl);
+            }
+        }
+        if (missing.isEmpty() || persistentCache == null || !backgroundWorkAllowed()) {
+            return result;
+        }
+
+        try {
+            long now = System.currentTimeMillis();
+            Map<String, PublicScoreCacheRepository.MikanMapping> persisted =
+                    persistentCache.findMikanMappings(missing.keySet(), now);
+            for (Map.Entry<String, PublicScoreCacheRepository.MikanMapping> entry : persisted.entrySet()) {
+                String mikanUrl = missing.get(entry.getKey());
+                PublicScoreCacheRepository.MikanMapping mapping = entry.getValue();
+                if (mikanUrl == null || mapping == null) {
+                    continue;
+                }
+                long remaining = mapping.expiresAt() - now;
+                if (remaining <= 0) {
+                    continue;
+                }
+                String value = StrUtil.blankToDefault(mapping.bgmId(), "");
+                CacheUtils.put(MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanUrl), value, remaining);
+                result.put(entry.getKey(), value);
+            }
+        } catch (RuntimeException e) {
+            // A durable cache failure is never allowed to make an optional
+            // public score lookup fail; the normal upstream path still works.
+            log.debug("Unable to read durable Mikan score mapping cache");
+        }
+        return result;
+    }
+
+    /** See {@link #cachedMikanMappings(Map)} for why this is batch-oriented. */
+    private Map<String, Double> cachedBgmScores(Collection<String> bgmIds) {
+        LinkedHashSet<String> ids = normalizedIds(bgmIds);
+        Map<String, Double> result = new LinkedHashMap<>();
+        LinkedHashSet<String> missing = new LinkedHashSet<>();
+        for (String bgmId : ids) {
+            Double cached = CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId);
+            if (cached != null) {
+                result.put(bgmId, cached);
+            } else {
+                missing.add(bgmId);
+            }
+        }
+        if (missing.isEmpty() || persistentCache == null || !backgroundWorkAllowed()) {
+            return result;
+        }
+
+        try {
+            long now = System.currentTimeMillis();
+            Map<String, PublicScoreCacheRepository.BgmScore> persisted =
+                    persistentCache.findBgmScores(missing, now);
+            for (Map.Entry<String, PublicScoreCacheRepository.BgmScore> entry : persisted.entrySet()) {
+                PublicScoreCacheRepository.BgmScore score = entry.getValue();
+                if (score == null) {
+                    continue;
+                }
+                long remaining = score.expiresAt() - now;
+                if (remaining <= 0) {
+                    continue;
+                }
+                CacheUtils.put(BGM_SCORE_CACHE_PREFIX + entry.getKey(), score.score(), remaining);
+                result.put(entry.getKey(), score.score());
+            }
+        } catch (RuntimeException e) {
+            log.debug("Unable to read durable Bangumi score cache");
+        }
+        return result;
+    }
+
     private String cachedMikanMapping(String mikanId, String mikanUrl) {
         if (StrUtil.isBlank(mikanUrl)) {
             return null;
@@ -622,11 +763,14 @@ public class PublicScoreService {
      * a long list of detail pages cannot force completed entries to wait for
      * every remaining mapping request.
      */
-    private void warmMikanMappingAndScore(String mikanUrl) {
+    private void warmMikanMappingAndScore(String mikanUrl, boolean mappingAlreadyRead) {
         if (StrUtil.isBlank(mikanUrl)) {
             return;
         }
-        String cached = cachedMikanMapping(extractMikanId(mikanUrl), mikanUrl);
+        String cacheKey = MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanUrl);
+        String cached = mappingAlreadyRead
+                ? CacheUtils.get(cacheKey)
+                : cachedMikanMapping(extractMikanId(mikanUrl), mikanUrl);
         if (cached != null) {
             String bgmId = extractBgmSubjectId(cached);
             if (StrUtil.isNotBlank(bgmId)) {

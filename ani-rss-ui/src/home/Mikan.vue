@@ -166,9 +166,9 @@ import SafeImage from '@/other/SafeImage.vue'
 import {openHttpUrl} from '@/js/url.js'
 import * as http from "@/js/http.js";
 
-// Small, ordered batches let the first visible weekday receive scores while
-// the rest of a cold season continues resolving in the background.
-const SCORE_BATCH_SIZE = 12
+// Two picker requests fill the backend's 48-entry warmup budget while keeping
+// each poll compact enough to render progressively on a cold season.
+const SCORE_BATCH_SIZE = 24
 const MAX_CONCURRENT_SCORE_BATCHES = 2
 const SCORE_RETRY_DELAYS_MILLIS = [0, 250, 500, 1_000, 2_000, 4_000]
 
@@ -395,26 +395,50 @@ let list = async (body = {}, searchText = '') => {
   }
 }
 
-let applyScoreBatch = (listState, scores, subscribedBgmIds) => ({
-  ...listState,
-  weeks: listState.weeks.map(week => {
-    const items = week.items.map(item => {
-      const mikanId = mikanIdFromUrl(item.url)
-      const score = mikanId ? scores[mikanId] : null
+let applyScoreBatch = (scores, subscribedBgmIds) => {
+  const scoreEntries = scores && typeof scores === 'object' ? scores : {}
+  const listState = data.value
+  if (!Array.isArray(listState?.weeks) || !Object.keys(scoreEntries).length) {
+    return
+  }
+
+  // Mutate only score-bearing cards and re-sort only affected weekdays. The
+  // former immutable whole-list rewrite was repeated for every polling batch,
+  // which made a large seasonal picker spend more time in Vue updates than in
+  // the local score request itself.
+  for (const week of listState.weeks) {
+    if (!Array.isArray(week?.items)) {
+      continue
+    }
+    let shouldResort = false
+    for (const item of week.items) {
+      const mikanId = mikanIdFromUrl(item?.url)
+      if (!mikanId || !Object.prototype.hasOwnProperty.call(scoreEntries, mikanId)) {
+        continue
+      }
+      const score = scoreEntries[mikanId]
       if (!score) {
-        return item
+        continue
       }
+      const nextScore = Number(score.score) || 0
       const bgmId = score.bgmId || item.bgmId
-      return {
-        ...item,
-        score: Number(score.score) || 0,
-        bgmId,
-        exists: Boolean(item.exists) || Boolean(bgmId && subscribedBgmIds.has(bgmId))
+      const nextExists = Boolean(item.exists) || Boolean(bgmId && subscribedBgmIds.has(bgmId))
+      if (Number(item.score || 0) !== nextScore) {
+        item.score = nextScore
+        shouldResort = true
       }
-    }).sort((left, right) => Number(right.score || 0) - Number(left.score || 0))
-    return {...week, items}
-  })
-})
+      if (item.bgmId !== bgmId) {
+        item.bgmId = bgmId
+      }
+      if (Boolean(item.exists) !== nextExists) {
+        item.exists = nextExists
+      }
+    }
+    if (shouldResort) {
+      week.items.sort((left, right) => Number(right.score || 0) - Number(left.score || 0))
+    }
+  }
+}
 
 let enrichScores = async (requestId, currentScoreRequestId, currentListStateId, initialListState) => {
   const mikanIds = [...new Set(
@@ -430,60 +454,73 @@ let enrichScores = async (requestId, currentScoreRequestId, currentListStateId, 
 
   const controller = new AbortController()
   scoreAbortController = controller
-  let listState = initialListState
   const isCurrentScoreRequest = () =>
       !controller.signal.aborted
       && isCurrentList(requestId, currentScoreRequestId)
       && currentListStateId === listStateId
 
   const enrichScoreBatch = async batch => {
-    let retryIds = [...batch]
-    for (let attempt = 0;
-         retryIds.length && attempt < SCORE_RETRY_DELAYS_MILLIS.length;
-         attempt += 1) {
-      if (attempt > 0) {
-        await waitForScoreRetry(SCORE_RETRY_DELAYS_MILLIS[attempt], controller.signal)
+    const requestedIds = [...batch]
+    try {
+      const res = await http.mikanScores(requestedIds, {signal: controller.signal, silent: true})
+      if (!isCurrentScoreRequest()) {
+        return null
       }
-      const requestedIds = [...retryIds]
-      try {
-        const res = await http.mikanScores(requestedIds, {signal: controller.signal, silent: true})
-        if (!isCurrentScoreRequest()) {
-          return false
-        }
-        const scores = res?.data?.scores || {}
-        const subscribedBgmIds = new Set(res?.data?.subscribedBgmIds || [])
-        listState = applyScoreBatch(listState, scores, subscribedBgmIds)
-        data.value = listState
-        const retryableMikanIds = new Set(res?.data?.retryableMikanIds || [])
-        retryIds = requestedIds.filter(id => retryableMikanIds.has(id))
-      } catch (error) {
-        if (isAborted(error)) {
-          return false
-        }
-        if (!isRetryableScoreError(error)) {
-          console.debug('Mikan public score enrichment failed')
-          return true
-        }
+      const scores = res?.data?.scores || {}
+      const subscribedBgmIds = new Set(res?.data?.subscribedBgmIds || [])
+      applyScoreBatch(scores, subscribedBgmIds)
+      const retryableMikanIds = new Set(res?.data?.retryableMikanIds || [])
+      return requestedIds.filter(id => retryableMikanIds.has(id))
+    } catch (error) {
+      if (isAborted(error) || !isCurrentScoreRequest()) {
+        return null
       }
+      if (!isRetryableScoreError(error)) {
+        console.debug('Mikan public score enrichment failed')
+        return []
+      }
+      return requestedIds
     }
-    return isCurrentScoreRequest()
   }
 
-  try {
-    const batches = scoreBatches(mikanIds)
+  const enrichScoreRound = async pendingBatches => {
+    const retryBatches = []
     let nextBatchIndex = 0
+    let cancelled = false
     const workers = Array.from(
-        {length: Math.min(MAX_CONCURRENT_SCORE_BATCHES, batches.length)},
+        {length: Math.min(MAX_CONCURRENT_SCORE_BATCHES, pendingBatches.length)},
         async () => {
-          while (isCurrentScoreRequest() && nextBatchIndex < batches.length) {
-            const batch = batches[nextBatchIndex++]
-            if (!await enrichScoreBatch(batch)) {
+          while (!cancelled && isCurrentScoreRequest() && nextBatchIndex < pendingBatches.length) {
+            const batch = pendingBatches[nextBatchIndex++]
+            const retryIds = await enrichScoreBatch(batch)
+            if (retryIds === null) {
+              cancelled = true
               return
+            }
+            if (retryIds.length) {
+              retryBatches.push(retryIds)
             }
           }
         }
     )
     await Promise.all(workers)
+    return cancelled || !isCurrentScoreRequest() ? null : retryBatches
+  }
+
+  try {
+    let pendingBatches = scoreBatches(mikanIds)
+    for (let attempt = 0;
+         pendingBatches.length && attempt < SCORE_RETRY_DELAYS_MILLIS.length;
+         attempt += 1) {
+      if (attempt > 0) {
+        await waitForScoreRetry(SCORE_RETRY_DELAYS_MILLIS[attempt], controller.signal)
+      }
+      const nextRetryBatches = await enrichScoreRound(pendingBatches)
+      if (nextRetryBatches === null) {
+        return
+      }
+      pendingBatches = nextRetryBatches
+    }
   } catch (error) {
     // Scores are optional. Requests superseded by a season change are silent.
     if (!isAborted(error)) {

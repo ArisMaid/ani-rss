@@ -1,5 +1,6 @@
 package ani.rss.ownership;
 
+import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.persistence.DatabaseManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -10,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -70,5 +72,26 @@ class OwnershipMediaVerificationTest {
         repository.updateSaveRoot("owned", target.toString());
 
         assertTrue(service.isSubscriptionAtRoot("subscription", target.toString()));
+    }
+
+    @Test
+    void capturesTheFinalDownloaderPathsBeforeAutomaticTaskDeletion() throws Exception {
+        Path renamed = media.resolveSibling("Example S01E01.mkv");
+        Files.move(media, renamed);
+        TorrentsInfo task = new TorrentsInfo()
+                .setFilesSupplier(() -> List.of(renamed.getFileName().toString()));
+
+        assertTrue(service.captureAndVerifyFiles("owned", task));
+        assertEquals(List.of("Example S01E01.mkv"), repository.listFiles("owned").stream()
+                .map(OwnedFile::relativePath)
+                .toList());
+    }
+
+    @Test
+    void blocksAutomaticTaskDeletionWhenTheFinalPathIsNotVisibleLocally() {
+        TorrentsInfo task = new TorrentsInfo()
+                .setFilesSupplier(() -> List.of("missing S01E01.mkv"));
+
+        assertFalse(service.captureAndVerifyFiles("owned", task));
     }
 }

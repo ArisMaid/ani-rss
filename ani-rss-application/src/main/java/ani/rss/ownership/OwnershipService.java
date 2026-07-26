@@ -317,6 +317,15 @@ public class OwnershipService {
         repository.replaceFiles(ownershipId, List.copyOf(files.values()));
     }
 
+    /** Captures the downloader's latest paths and proves they exist locally. */
+    public boolean captureAndVerifyFiles(String ownershipId, TorrentsInfo task) {
+        captureFiles(ownershipId, task);
+        DownloadOwnership ownership = repository.find(ownershipId)
+                .orElseThrow(() -> new IllegalArgumentException("ownership record does not exist"));
+        MediaVerification verification = verifyMediaFiles(ownership);
+        return verification.manifestAvailable() && verification.healthy();
+    }
+
     public void updateTaskSaveRoot(TorrentsInfo task, String saveRoot) {
         DownloadOwnership ownership = requireOwned(task);
         repository.updateSaveRoot(ownership.ownershipId(), FileUtils.getAbsolutePath(saveRoot));

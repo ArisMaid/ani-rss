@@ -250,6 +250,15 @@ public class TorrentUtil {
             if (!allowDelete(torrentsInfo)) {
                 return false;
             }
+
+            // qBittorrent can finish a small torrent in the same loop that
+            // performs its rename. Persist and verify the final paths before
+            // removing the only remaining remote de-duplication evidence.
+            if ("qBittorrent".equalsIgnoreCase(downloaderType) &&
+                    !ownershipService.captureAndVerifyFiles(ownership.ownershipId(), torrentsInfo)) {
+                log.warn("保留已完成 qBittorrent 任务，本地文件清单尚不可验证 {}", name);
+                return false;
+            }
         }
 
         log.info("删除任务 title:{} forcedDelete:{} deleteFiles:{}", name, forcedDelete, deleteFiles);
@@ -293,7 +302,8 @@ public class TorrentUtil {
             throw new IllegalStateException("downloader is not initialized");
         }
         String downloaderType = activeClient.configurationSnapshot().getDownloadToolType();
-        ownershipService().requireOwned(downloaderType, torrentsInfo);
+        ani.rss.ownership.DownloadOwnership ownership =
+                ownershipService().requireOwned(downloaderType, torrentsInfo);
         Config config = ConfigUtil.CONFIG;
         Boolean rename = config.getRename();
         if (!rename) {
@@ -309,6 +319,7 @@ public class TorrentUtil {
         Boolean renamed = activeClient.rename(torrentsInfo).isSuccess();
         if (renamed) {
             addTags(torrentsInfo, TorrentsTagEnum.RENAME.getValue());
+            ownershipService().captureFiles(ownership.ownershipId(), torrentsInfo);
         }
     }
 

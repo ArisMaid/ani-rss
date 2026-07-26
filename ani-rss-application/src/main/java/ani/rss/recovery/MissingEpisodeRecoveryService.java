@@ -57,6 +57,12 @@ public class MissingEpisodeRecoveryService {
     private final ObjectProvider<DownloadService> downloadService;
     private final Set<String> inFlight = ConcurrentHashMap.newKeySet();
 
+    public enum SubmissionDisposition {
+        NEW,
+        TRACKED,
+        LEGACY_CACHE_SATISFIED
+    }
+
     public MissingEpisodeRecoveryService(
             RecoveryRepository repository,
             OwnershipService ownershipService,
@@ -72,6 +78,29 @@ public class MissingEpisodeRecoveryService {
             return;
         }
         repository.observe(ani, item);
+    }
+
+    /**
+     * Registers an eligible item and decides who owns any follow-up submission.
+     * Existing records are always reconciled through the durable recovery state
+     * machine. A cached input with no prior record predates that state machine,
+     * so preserve the legacy "already handled" meaning during upgrades and
+     * restores instead of redownloading an entire historical feed.
+     */
+    public SubmissionDisposition prepareEligible(Ani ani, Item item, boolean cachedInput) {
+        if (!valid(ani, item)) {
+            return SubmissionDisposition.NEW;
+        }
+        boolean tracked = repository.find(ani.getId(), item.getInfoHash()).isPresent();
+        repository.observe(ani, item);
+        if (tracked) {
+            return SubmissionDisposition.TRACKED;
+        }
+        if (cachedInput) {
+            repository.markSatisfied(ani.getId(), item.getInfoHash());
+            return SubmissionDisposition.LEGACY_CACHE_SATISFIED;
+        }
+        return SubmissionDisposition.NEW;
     }
 
     /** Promotes a verified torrent identity while preserving the RSS cache key. */

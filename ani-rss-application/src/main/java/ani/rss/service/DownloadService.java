@@ -18,6 +18,7 @@ import ani.rss.ownership.OwnershipService;
 import ani.rss.ownership.QuarantineService;
 import ani.rss.ownership.QbittorrentDeletedTaskReassignmentService;
 import ani.rss.recovery.MissingEpisodeRecoveryService;
+import ani.rss.recovery.MissingEpisodeRecoveryService.SubmissionDisposition;
 import ani.rss.util.other.*;
 import cn.hutool.core.date.DateField;
 import cn.hutool.core.date.DateUtil;
@@ -178,8 +179,12 @@ public class DownloadService {
 
             // The item has passed all user-visible download policies. Persist
             // it before any network submission so a later RSS window cannot
-            // erase a genuine ANI-RSS download failure.
-            missingEpisodeRecoveryService.observeEligible(ani, item);
+            // erase a genuine ANI-RSS download failure. Existing records are
+            // submitted only by the recovery state machine; otherwise a task
+            // removed after completion can be immediately re-added here before
+            // its durable local-file manifest is reconciled.
+            SubmissionDisposition submissionDisposition = missingEpisodeRecoveryService
+                    .prepareEligible(ani, item, torrent.exists());
             if (StrUtil.isNotBlank(canonicalHash)) {
                 missingEpisodeRecoveryService.promoteCanonicalHash(ani, item, canonicalHash);
             }
@@ -251,6 +256,20 @@ public class DownloadService {
                 continue;
             }
 
+            if (submissionDisposition == SubmissionDisposition.LEGACY_CACHE_SATISFIED) {
+                log.info("兼容已有下载缓存，跳过历史资源重复提交 {}", reName);
+                sync = true;
+                if (master && !is5) {
+                    currentDownloadCount++;
+                }
+                continue;
+            }
+
+            if (submissionDisposition == SubmissionDisposition.TRACKED) {
+                log.debug("下载条目已由补全状态机跟踪 {}", reName);
+                continue;
+            }
+
             // 同时下载数量限制
             if (downloadCount > 0) {
                 if (count >= downloadCount) {
@@ -259,16 +278,7 @@ public class DownloadService {
                 }
             }
 
-            // A cached torrent only proves that the input was fetched. A prior
-            // process may have stopped before the remote downloader accepted it.
-            // Reuse the exact cache, but retry submission when no remote task
-            // with the same hash was observed above.
-            boolean cachedTorrent = torrent.exists();
-            File saveTorrent = cachedTorrent ? torrent : TorrentUtil.saveTorrent(ani, item);
-
-            if (cachedTorrent) {
-                log.info("复用未关联远端任务的缓存种子并重试下载 {}", reName);
-            }
+            File saveTorrent = TorrentUtil.saveTorrent(ani, item);
 
             if (!saveTorrent.exists()) {
                 // 种子下载失败

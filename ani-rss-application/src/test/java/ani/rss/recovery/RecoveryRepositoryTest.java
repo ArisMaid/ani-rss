@@ -2,6 +2,8 @@ package ani.rss.recovery;
 
 import ani.rss.entity.Ani;
 import ani.rss.entity.Item;
+import ani.rss.ownership.OwnershipRepository;
+import ani.rss.ownership.OwnershipService;
 import ani.rss.persistence.DatabaseManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +14,7 @@ import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 class RecoveryRepositoryTest {
     @TempDir
@@ -106,5 +109,40 @@ class RecoveryRepositoryTest {
         assertTrue(repository.promoteCanonicalHash(ani.getId(), second.getInfoHash(), "same-canonical").isEmpty());
         assertEquals("same-canonical", repository.find(ani.getId(), first.getInfoHash()).orElseThrow().infoHash());
         assertEquals("episode-two", repository.find(ani.getId(), second.getInfoHash()).orElseThrow().infoHash());
+    }
+
+    @Test
+    void delegatesPreviouslyTrackedItemsToRecoveryInsteadOfSubmittingAgain() {
+        MissingEpisodeRecoveryService service = recoveryService();
+        Ani ani = new Ani().setId("subscription").setSeason(1);
+        Item item = new Item().setInfoHash("tracked").setTorrent("magnet:?xt=urn:btih:tracked");
+
+        assertEquals(MissingEpisodeRecoveryService.SubmissionDisposition.NEW,
+                service.prepareEligible(ani, item, false));
+        assertEquals(MissingEpisodeRecoveryService.SubmissionDisposition.TRACKED,
+                service.prepareEligible(ani, item, false));
+    }
+
+    @Test
+    void treatsAnUntrackedLegacyTorrentCacheAsAlreadySatisfied() {
+        MissingEpisodeRecoveryService service = recoveryService();
+        Ani ani = new Ani().setId("subscription").setSeason(1);
+        Item item = new Item().setInfoHash("legacy-cache")
+                .setTorrent("https://example.invalid/legacy-cache.torrent");
+
+        assertEquals(MissingEpisodeRecoveryService.SubmissionDisposition.LEGACY_CACHE_SATISFIED,
+                service.prepareEligible(ani, item, true));
+        assertEquals(RecoveryState.SATISFIED,
+                repository.find(ani.getId(), item.getInfoHash()).orElseThrow().state());
+        assertEquals(MissingEpisodeRecoveryService.SubmissionDisposition.TRACKED,
+                service.prepareEligible(ani, item, true));
+    }
+
+    @SuppressWarnings("unchecked")
+    private MissingEpisodeRecoveryService recoveryService() {
+        return new MissingEpisodeRecoveryService(
+                repository,
+                new OwnershipService(new OwnershipRepository()),
+                mock(org.springframework.beans.factory.ObjectProvider.class));
     }
 }

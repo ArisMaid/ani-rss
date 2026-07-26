@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -29,6 +30,7 @@ class SubscriptionDeletionServiceTest {
     Path tempDir;
 
     private OwnershipRepository repository;
+    private OwnershipService ownershipService;
     private FakeSubscriptionStore store;
     private FakeRemoteTasks remoteTasks;
     private SubscriptionDeletionService service;
@@ -39,7 +41,7 @@ class SubscriptionDeletionServiceTest {
         System.setProperty("CONFIG", tempDir.resolve("config").toString());
         DatabaseManager.close();
         repository = new OwnershipRepository();
-        OwnershipService ownershipService = new OwnershipService(repository);
+        ownershipService = new OwnershipService(repository);
         store = new FakeSubscriptionStore(List.of(subscription("subscription", "Example")));
         remoteTasks = new FakeRemoteTasks();
         service = new SubscriptionDeletionService(
@@ -96,6 +98,26 @@ class SubscriptionDeletionServiceTest {
         assertFalse(Files.exists(subscriptionRoot));
         assertTrue(Files.isDirectory(downloadBase));
         assertEquals(1, result.deletedFiles());
+    }
+
+    @Test
+    void deletesEmptyTemplateDirectoriesWhenNoMediaFileCouldBeVerified() throws Exception {
+        Path subscriptionRoot = ownedFile.getParent().getParent();
+        Path downloadBase = subscriptionRoot.getParent();
+        Files.delete(ownedFile);
+        repository.updateSaveRoot("ownership", ownedFile.getParent().toString());
+        repository.replaceFiles("ownership", List.of(
+                new OwnedFile("ownership", "episode.mkv", "FILE", null)));
+        DownloadOwnership ownership = repository.find("ownership").orElseThrow();
+
+        ownershipService.markDeleted(List.of(ownership));
+        int deletedDirectories = ownershipService.pruneEmptyDirectoriesAfterDeletion(
+                List.of(), List.of(ownership), Map.of("ownership", downloadBase));
+
+        assertFalse(Files.exists(ownedFile.getParent()));
+        assertFalse(Files.exists(subscriptionRoot));
+        assertTrue(Files.isDirectory(downloadBase));
+        assertEquals(2, deletedDirectories);
     }
 
     @Test

@@ -586,14 +586,28 @@ public class OwnershipService {
 
     /**
      * Removes empty directories left by an explicit subscription deletion.
-     * This method never walks above an ownership's saved root and never
-     * recursively deletes anything. A directory shared with, or containing,
-     * another live ownership root is retained even when it is currently empty.
+     * This method never recursively deletes anything. It may only walk above
+     * an ownership's saved root when the caller supplies a verified immutable
+     * download-root boundary. A directory shared with, or containing, another
+     * live ownership root is retained even when it is currently empty.
      */
     public int pruneEmptyDirectoriesAfterDeletion(
             Collection<VerifiedOwnedFile> deletedFiles,
             Collection<DownloadOwnership> releasedOwnerships) {
-        if (deletedFiles == null || deletedFiles.isEmpty()) {
+        return pruneEmptyDirectoriesAfterDeletion(deletedFiles, releasedOwnerships, Map.of());
+    }
+
+    /**
+     * Removes empty directories left by explicit deletion. A cleanup boundary
+     * is exclusive: it is kept, while empty descendants up to it can be
+     * removed. Invalid, missing, or out-of-root boundaries are ignored.
+     */
+    public int pruneEmptyDirectoriesAfterDeletion(
+            Collection<VerifiedOwnedFile> deletedFiles,
+            Collection<DownloadOwnership> releasedOwnerships,
+            Map<String, Path> cleanupBoundaries) {
+        if ((deletedFiles == null || deletedFiles.isEmpty()) &&
+                (releasedOwnerships == null || releasedOwnerships.isEmpty())) {
             return 0;
         }
 
@@ -607,21 +621,32 @@ public class OwnershipService {
         }
         List<Path> protectedRoots = liveOwnershipRootsExcept(releasedIds);
         Set<Path> candidates = new HashSet<>();
-        for (VerifiedOwnedFile file : deletedFiles) {
-            if (file == null) {
-                continue;
-            }
-            try {
-                Path root = ownershipRoot(file.ownership());
-                for (Path current = file.path().getParent(); current != null; current = current.getParent()) {
-                    PathPolicy.requireWithin(root, current);
-                    candidates.add(current);
-                    if (current.equals(root)) {
-                        break;
-                    }
+        if (deletedFiles != null) {
+            for (VerifiedOwnedFile file : deletedFiles) {
+                if (file == null) {
+                    continue;
                 }
-            } catch (Exception ignored) {
-                // An invalid path must not authorize directory deletion.
+                try {
+                    addCandidatesWithinOwnedRoot(candidates, file.path().getParent(),
+                            ownershipRoot(file.ownership()));
+                } catch (Exception ignored) {
+                    // An invalid path must not authorize directory deletion.
+                }
+            }
+        }
+        if (releasedOwnerships != null) {
+            for (DownloadOwnership ownership : releasedOwnerships) {
+                if (ownership == null) {
+                    continue;
+                }
+                try {
+                    Path root = ownershipRoot(ownership);
+                    cleanupBoundary(ownership, root, cleanupBoundaries)
+                            .ifPresent(boundary -> addCandidatesWithinCleanupScope(
+                                    candidates, root, boundary));
+                } catch (Exception ignored) {
+                    // Unverified roots must not authorize directory deletion.
+                }
             }
         }
 
@@ -852,6 +877,41 @@ public class OwnershipService {
             return true;
         } catch (java.io.IOException | RuntimeException ignored) {
             return false;
+        }
+    }
+
+    private static void addCandidatesWithinOwnedRoot(
+            Set<Path> candidates, Path start, Path root) {
+        for (Path current = start; current != null; current = current.getParent()) {
+            PathPolicy.requireWithin(root, current);
+            candidates.add(current);
+            if (current.equals(root)) {
+                return;
+            }
+        }
+    }
+
+    private static Optional<Path> cleanupBoundary(
+            DownloadOwnership ownership, Path root, Map<String, Path> cleanupBoundaries) {
+        if (cleanupBoundaries == null || ownership == null) {
+            return Optional.empty();
+        }
+        Path candidate = cleanupBoundaries.get(ownership.ownershipId());
+        if (candidate == null) {
+            return Optional.empty();
+        }
+        Path boundary = candidate.toAbsolutePath().normalize();
+        if (PathPolicy.isFileSystemRoot(boundary) || root.equals(boundary) || !root.startsWith(boundary)) {
+            return Optional.empty();
+        }
+        return Optional.of(boundary);
+    }
+
+    private static void addCandidatesWithinCleanupScope(
+            Set<Path> candidates, Path root, Path boundary) {
+        PathPolicy.requireWithin(boundary, root);
+        for (Path current = root; current != null && !current.equals(boundary); current = current.getParent()) {
+            candidates.add(current);
         }
     }
 

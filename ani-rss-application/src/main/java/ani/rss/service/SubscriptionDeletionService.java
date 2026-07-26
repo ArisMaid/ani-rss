@@ -13,6 +13,7 @@ import ani.rss.util.other.TorrentUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.nio.file.Path;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -108,6 +109,10 @@ public final class SubscriptionDeletionService {
             if (deleteFiles) {
                 fileDeletion = ownershipService.prepareSubscriptionFileDeletionBestEffort(ids);
             }
+            Map<String, Path> directoryCleanupBoundaries = deleteFiles
+                    ? SubscriptionDirectoryCleanupPolicy.resolveBoundaries(
+                            byId, deletableOwnerships, ConfigUtil.snapshot())
+                    : Map.of();
 
             for (TorrentsInfo task : ownedTasks) {
                 remoteTasks.deleteTaskOnly(task);
@@ -121,7 +126,7 @@ public final class SubscriptionDeletionService {
             ownershipService.markDeleted(deletableOwnerships);
             if (deleteFiles) {
                 ownershipService.pruneEmptyDirectoriesAfterDeletion(
-                        fileDeletionResult.deletedFiles(), deletableOwnerships);
+                        fileDeletionResult.deletedFiles(), deletableOwnerships, directoryCleanupBoundaries);
             }
             if (recoveryService != null) {
                 for (String id : ids) {

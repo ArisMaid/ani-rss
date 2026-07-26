@@ -136,7 +136,7 @@ public final class SubscriptionDeletionService {
                     : Map.of();
             List<OwnershipService.DirectoryCleanupTarget> inferredDirectoryCleanupTargets = releaseOwnership
                     ? resolveInferredDirectoryCleanupTargets(
-                            ids, byId, subscriptionOwnerships, configSnapshot)
+                            ids, byId, configSnapshot)
                     : List.of();
 
             for (TorrentsInfo task : ownedTasks) {
@@ -189,28 +189,19 @@ public final class SubscriptionDeletionService {
     private List<OwnershipService.DirectoryCleanupTarget> resolveInferredDirectoryCleanupTargets(
             Collection<String> subscriptionIds,
             Map<String, Ani> subscriptions,
-            Collection<DownloadOwnership> subscriptionOwnerships,
             Config config) {
-        Set<String> trackedSubscriptionIds = new HashSet<>();
-        if (subscriptionOwnerships != null) {
-            for (DownloadOwnership ownership : subscriptionOwnerships) {
-                if (ownership != null && ownership.state() != OwnershipState.DELETED &&
-                        ownership.subscriptionId() != null) {
-                    trackedSubscriptionIds.add(ownership.subscriptionId());
-                }
-            }
-        }
-
         List<OwnershipService.DirectoryCleanupTarget> targets = new java.util.ArrayList<>();
         for (String id : subscriptionIds) {
-            if (trackedSubscriptionIds.contains(id)) {
-                continue;
-            }
             Ani subscription = subscriptions.get(id);
             if (subscription == null) {
                 continue;
             }
             try {
+                // Ownership roots can predate a later path-template change.
+                // The current template may therefore have created an empty
+                // subscription directory that is not covered by those old
+                // roots. The cleanup service still protects every directory
+                // used by another live ownership before deleting candidates.
                 SubscriptionDirectoryCleanupPolicy.resolveInferredTarget(
                         subscription, downloadPathResolver.resolve(subscription), config)
                         .ifPresent(targets::add);

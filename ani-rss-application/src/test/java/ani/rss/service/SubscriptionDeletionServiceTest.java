@@ -177,6 +177,24 @@ class SubscriptionDeletionServiceTest {
     }
 
     @Test
+    void deletesAnEmptyCurrentTemplateDirectoryAfterTheSubscriptionSavePathChanged() throws Exception {
+        Path downloadBase = tempDir.resolve("downloads");
+        Path currentTemplateRoot = downloadBase.resolve("Renamed").resolve("Season 1");
+        Files.createDirectories(currentTemplateRoot);
+        service = new SubscriptionDeletionService(
+                ownershipService, store, remoteTasks, ignored -> currentTemplateRoot.toString());
+
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), true);
+
+        assertFalse(Files.exists(ownedFile));
+        assertFalse(Files.exists(subscriptionRoot));
+        assertFalse(Files.exists(currentTemplateRoot));
+        assertFalse(Files.exists(currentTemplateRoot.getParent()));
+        assertTrue(Files.isDirectory(downloadBase));
+        assertEquals(1, result.deletedSubscriptions());
+    }
+
+    @Test
     void retainsAnInferredLegacyDirectoryInsideAnotherLiveOwnershipRoot() throws Exception {
         Path legacyRoot = subscriptionRoot.resolve("legacy").resolve("Season 1");
         Files.createDirectories(legacyRoot);

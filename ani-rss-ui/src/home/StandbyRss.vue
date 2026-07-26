@@ -17,7 +17,7 @@
       <div class="standby-spacer"></div>
       <div>
         <el-button
-            @click="mikanShow"
+            @click="mikanRef?.show(props.ani)"
             text bg>
           <template #icon>
             <img src="@/icon/icon-Mikan.png" alt="mikan" class="icon"/>
@@ -114,7 +114,7 @@ import Mikan from "./Mikan.vue";
 import AniBT from "@/home/AniBT.vue";
 import * as http from "@/js/http.js";
 import AnimeGarden from "@/home/AnimeGarden.vue";
-import {mikanSearchQuery, normalizeRssSelection, subgroupMatchRules} from "@/home/rssSelection.js";
+import {normalizeRssSelection, subgroupMatchRules} from "@/home/rssSelection.js";
 
 const editIndex = ref(-1)
 
@@ -208,10 +208,6 @@ let animeGardenShow = () => {
 let aniBTShow = () => {
   let bgmUrl = props.ani.bgmUrl;
   aniBTRef.value?.show(bgmUrl)
-}
-
-let mikanShow = () => {
-  mikanRef.value?.show(mikanSearchQuery(props.ani))
 }
 
 defineExpose({show})

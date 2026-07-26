@@ -2,6 +2,7 @@ package ani.rss.commons;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.core.util.XmlUtil;
 import cn.hutool.extra.spring.SpringUtil;
 import cn.hutool.system.OsInfo;
 import cn.hutool.system.SystemUtil;
@@ -9,29 +10,18 @@ import lombok.Data;
 import lombok.experimental.Accessors;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.info.BuildProperties;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
 
 import java.io.File;
-import java.io.IOException;
 import java.io.Serializable;
 import java.util.Objects;
-import java.util.jar.JarFile;
+import java.util.Optional;
 
 @Slf4j
 public class MavenUtils {
     private static final Object VERSION_LOCK = new Object();
     private static volatile String version;
-    public static JarFile JAR_FILE = null;
-
-    static {
-        CurrentFile currentFile = getCurrentFile();
-        try {
-            if (currentFile.isFile()) {
-                JAR_FILE = new JarFile(currentFile.getFile());
-            }
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
-    }
 
     public static CurrentFile getCurrentFile() {
         OsInfo osInfo = SystemUtil.getOsInfo();
@@ -49,6 +39,13 @@ public class MavenUtils {
         }
         synchronized (VERSION_LOCK) {
             if (version == null) {
+                if (getCurrentFile().isDirectory()) {
+                    Optional<String> projectVersion = readProjectVersion(new File("pom.xml"));
+                    if (projectVersion.isPresent()) {
+                        version = projectVersion.get();
+                        return version;
+                    }
+                }
                 try {
                     BuildProperties buildProperties = SpringUtil.getBean(BuildProperties.class);
                     version = buildProperties.getVersion();
@@ -60,6 +57,27 @@ public class MavenUtils {
                 }
             }
             return version;
+        }
+    }
+
+    static Optional<String> readProjectVersion(File pom) {
+        if (pom == null || !pom.isFile()) {
+            return Optional.empty();
+        }
+        try {
+            Document document = XmlUtil.readXML(pom);
+            Element root = document.getDocumentElement();
+            Element artifactId = XmlUtil.getElement(root, "artifactId");
+            Element versionElement = XmlUtil.getElement(root, "version");
+            if (artifactId == null || versionElement == null ||
+                    !"ani-rss".equals(artifactId.getTextContent().trim())) {
+                return Optional.empty();
+            }
+            String candidate = versionElement.getTextContent().trim();
+            return StrUtil.isBlank(candidate) ? Optional.empty() : Optional.of(candidate);
+        } catch (RuntimeException e) {
+            log.debug("ignore unreadable development pom: {}", e.getClass().getSimpleName());
+            return Optional.empty();
         }
     }
 

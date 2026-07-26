@@ -164,6 +164,7 @@ import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy, Download as DownloadIcon} from "@element-plus/icons-vue";
 import SafeImage from '@/other/SafeImage.vue'
 import {openHttpUrl} from '@/js/url.js'
+import {mikanSearchQuery} from '@/home/rssSelection.js'
 import * as http from "@/js/http.js";
 
 // The backend accepts at most 48 ids per score request. Two concurrent batches
@@ -357,7 +358,7 @@ let requestList = async (query, requestBody, controller) => {
   return response
 }
 
-let show = (name) => {
+let show = (selection) => {
   cancelMikanRequests()
   listRequestId += 1
   scoreRequestId += 1
@@ -369,6 +370,7 @@ let show = (name) => {
   listStateId += 1
   listEpoch.value += 1
   resetListInteractionState()
+  let name = typeof selection === 'string' ? selection : mikanSearchQuery(selection)
   if (name) {
     name = name.replace(/ ?\((19|20)\d{2}\)/g, "").trim()
     name = name.replace(/ ?\[tmdbid=(\d+)]/g, "").trim()

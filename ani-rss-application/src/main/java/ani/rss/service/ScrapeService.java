@@ -128,31 +128,7 @@ public class ScrapeService {
             nfoGenerator.generateMovieNfo(tmdb, outputPath);
         }
 
-        String posterPath = tmdb.getPosterPath();
-        String fanartPath = tmdb.getBackdropPath();
-
-        String posterExtName = FileUtil.extName(posterPath);
-        String fanartExtName = FileUtil.extName(fanartPath);
-
-        File posterFile = new File(downloadPath, "poster." + posterExtName);
-        File fanartFile = new File(downloadPath, "fanart." + fanartExtName);
-
-        // 封面、背景图
-        saveImages(posterPath, posterFile, force);
-        saveImages(fanartPath, fanartFile, force);
-
-        TmdbImages tmdbImages = TmdbUtils.getTmdbImages(tmdb, TmdbTypeEnum.MOVIE);
-        List<TmdbImage> logos = tmdbImages.getLogos();
-        if (logos.isEmpty()) {
-            return;
-        }
-
-        // 保存logo
-        TmdbImage tmdbImage = logos.get(0);
-        String logoPath = tmdbImage.getFilePath();
-        String extName = FileUtil.extName(logoPath);
-        File logoFile = new File(downloadPath, "clearlogo." + extName);
-        saveImages(logoPath, logoFile, force);
+        saveTmdbImages(tmdb, TmdbTypeEnum.MOVIE, downloadPath, force);
     }
 
     /**
@@ -185,29 +161,7 @@ public class ScrapeService {
             nfoGenerator.generateTvShowNfo(tmdb, tvShowNfoFile.toString());
         }
 
-        String posterPath = tmdb.getPosterPath();
-        String fanartPath = tmdb.getBackdropPath();
-
-        String posterExtName = FileUtil.extName(posterPath);
-        String fanartExtName = FileUtil.extName(fanartPath);
-
-        File posterFile = new File(downloadPath.getParent(), "poster." + posterExtName);
-        File fanartFile = new File(downloadPath.getParent(), "fanart." + fanartExtName);
-
-        // 封面、背景图
-        saveImages(posterPath, posterFile, force);
-        saveImages(fanartPath, fanartFile, force);
-
-        // 保存logo
-        TmdbImages tmdbImages = TmdbUtils.getTmdbImages(tmdb, TmdbTypeEnum.TV);
-        List<TmdbImage> logos = tmdbImages.getLogos();
-        if (!logos.isEmpty()) {
-            TmdbImage tmdbImage = logos.get(0);
-            String logoPath = tmdbImage.getFilePath();
-            String extName = FileUtil.extName(logoPath);
-            File logoFile = new File(downloadPath.getParent(), "clearlogo." + extName);
-            saveImages(logoPath, logoFile, force);
-        }
+        saveTmdbImages(tmdb, TmdbTypeEnum.TV, downloadPath.getParent(), force);
 
         Integer season = ani.getSeason();
 
@@ -222,7 +176,7 @@ public class ScrapeService {
 
         // 季封面
         String seasonPosterPath = tmdbSeason.getPosterPath();
-        seasonPosterPath = StrUtil.blankToDefault(seasonPosterPath, posterPath);
+        seasonPosterPath = StrUtil.blankToDefault(seasonPosterPath, tmdb.getPosterPath());
         String seasonPosterExtName = FileUtil.extName(seasonPosterPath);
         File seasonPosterFile = new File(downloadPath.getParent(), "season" + seasonFormat + "-poster." + seasonPosterExtName);
         saveImages(seasonPosterPath, seasonPosterFile, force);
@@ -305,6 +259,78 @@ public class ScrapeService {
                 nfoGenerator.generateEpisodeNfo(tmdbEpisode, episodeFile);
             }
         }
+    }
+
+    public void saveTmdbImages(Tmdb tmdb, String outputPath, Boolean force) {
+        if (tmdb == null || tmdb.getTmdbType() == null) {
+            return;
+        }
+        saveTmdbImages(tmdb, tmdb.getTmdbType(), outputPath, force);
+    }
+
+    private void saveTmdbImages(Tmdb tmdb, TmdbTypeEnum tmdbType, String outputPath, Boolean force) {
+        if (tmdb == null || StrUtil.isBlank(outputPath)) {
+            return;
+        }
+
+        saveNamedImage(tmdb.getPosterPath(), outputPath, "poster", force);
+        String primaryBackdrop = tmdb.getBackdropPath();
+        saveNamedImage(primaryBackdrop, outputPath, "fanart", force);
+
+        TmdbImages images = TmdbUtils.getTmdbImages(tmdb, tmdbType);
+        if (images == null) {
+            return;
+        }
+
+        List<TmdbImage> backdrops = selectAdditionalBackdrops(primaryBackdrop, images.getBackdrops());
+        for (int index = 0; index < backdrops.size(); index++) {
+            saveNamedImage(backdrops.get(index).getFilePath(), outputPath,
+                    "fanart" + (index + 1), force);
+        }
+
+        List<TmdbImage> logos = images.getLogos();
+        if (logos != null) {
+            logos.stream()
+                    .filter(Objects::nonNull)
+                    .map(TmdbImage::getFilePath)
+                    .filter(StrUtil::isNotBlank)
+                    .findFirst()
+                    .ifPresent(path -> saveNamedImage(path, outputPath, "clearlogo", force));
+        }
+    }
+
+    static List<TmdbImage> selectAdditionalBackdrops(String primaryBackdrop, List<TmdbImage> backdrops) {
+        if (backdrops == null || backdrops.isEmpty()) {
+            return List.of();
+        }
+        Set<String> selectedPaths = new LinkedHashSet<>();
+        List<TmdbImage> selected = new ArrayList<>();
+        for (TmdbImage backdrop : backdrops) {
+            if (backdrop == null || backdrop.getWidth() == null || backdrop.getWidth() < 1280) {
+                continue;
+            }
+            String path = backdrop.getFilePath();
+            if (StrUtil.isBlank(path) || StrUtil.isBlank(FileUtil.extName(path)) ||
+                    Objects.equals(primaryBackdrop, path) || !selectedPaths.add(path)) {
+                continue;
+            }
+            selected.add(backdrop);
+            if (selected.size() == 4) {
+                break;
+            }
+        }
+        return List.copyOf(selected);
+    }
+
+    private void saveNamedImage(String tmdbPath, String outputPath, String name, Boolean force) {
+        if (StrUtil.isBlank(tmdbPath)) {
+            return;
+        }
+        String extension = FileUtil.extName(tmdbPath);
+        if (StrUtil.isBlank(extension)) {
+            return;
+        }
+        saveImages(tmdbPath, new File(outputPath, name + "." + extension), force);
     }
 
     /**

@@ -11,6 +11,7 @@ import ani.rss.ownership.OwnershipState;
 import ani.rss.persistence.DatabaseManager;
 import ani.rss.util.other.ConfigUtil;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -121,6 +122,75 @@ class SubscriptionDeletionServiceTest {
         assertFalse(Files.exists(auxiliaryFile));
         assertFalse(Files.exists(subscriptionRoot));
         assertEquals(2, result.deletedFiles());
+    }
+
+    @Test
+    void deletesOnlyKnownScraperMetadataAfterOwnedMediaDeletion() throws Exception {
+        Path seasonDirectory = ownedFile.getParent();
+        List<Path> generated = List.of(
+                subscriptionRoot.resolve("poster.jpg"),
+                subscriptionRoot.resolve("fanart.jpg"),
+                subscriptionRoot.resolve("fanart1.jpg"),
+                subscriptionRoot.resolve("fanart2.png"),
+                subscriptionRoot.resolve("fanart3.webp"),
+                subscriptionRoot.resolve("fanart4.jpg"),
+                subscriptionRoot.resolve("clearlogo.svg"),
+                subscriptionRoot.resolve("season01-poster.jpg"),
+                subscriptionRoot.resolve("tvshow.nfo"),
+                seasonDirectory.resolve("season.nfo"),
+                seasonDirectory.resolve("bangumi.ini"),
+                seasonDirectory.resolve("episode.nfo"),
+                seasonDirectory.resolve("episode-thumb.jpg"));
+        for (Path path : generated) {
+            Files.writeString(path, "generated");
+        }
+        Path unknownImage = subscriptionRoot.resolve("cover.jpg");
+        Path unknownNfo = seasonDirectory.resolve("metadata.nfo");
+        Files.writeString(unknownImage, "user image");
+        Files.writeString(unknownNfo, "user nfo");
+
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), true);
+
+        assertFalse(Files.exists(ownedFile));
+        generated.forEach(path -> assertFalse(Files.exists(path), path.toString()));
+        assertTrue(Files.exists(unknownImage));
+        assertTrue(Files.exists(unknownNfo));
+        assertEquals(1 + generated.size(), result.deletedFiles());
+    }
+
+    @Test
+    void retainsScraperMetadataInADirectoryUsedByAnotherLiveOwnership() throws Exception {
+        Path poster = subscriptionRoot.resolve("poster.jpg");
+        Files.writeString(poster, "shared poster");
+        long now = System.currentTimeMillis();
+        repository.createPending(new DownloadOwnership(
+                "other-ownership", "qBittorrent", "other-task", "other-hash", "other-subscription",
+                1, "1.0", subscriptionRoot.toString(), OwnershipState.ACTIVE, now, now));
+        repository.replaceFiles("other-ownership", List.of(
+                new OwnedFile("other-ownership", "other-episode.mkv", "FILE", 5L)));
+
+        service.delete(List.of("subscription"), true);
+
+        assertFalse(Files.exists(ownedFile));
+        assertTrue(Files.exists(poster));
+    }
+
+    @Test
+    void retainsSymbolicLinkThatUsesAGeneratedMetadataName() throws Exception {
+        Path outside = tempDir.resolve("outside.jpg");
+        Files.writeString(outside, "outside");
+        Path linkedPoster = subscriptionRoot.resolve("poster.jpg");
+        try {
+            Files.createSymbolicLink(linkedPoster, outside);
+        } catch (UnsupportedOperationException | SecurityException | java.io.IOException e) {
+            Assumptions.abort("symbolic links are unavailable in this test environment: " + e.getMessage());
+        }
+
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), true);
+
+        assertTrue(Files.isSymbolicLink(linkedPoster));
+        assertEquals("outside", Files.readString(outside));
+        assertEquals(1, result.skippedFiles());
     }
 
     @Test

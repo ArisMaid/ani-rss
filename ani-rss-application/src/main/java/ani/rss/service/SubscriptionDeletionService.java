@@ -34,6 +34,7 @@ public final class SubscriptionDeletionService {
     private final RemoteTaskGateway remoteTasks;
     private final MissingEpisodeRecoveryService recoveryService;
     private final SubscriptionDownloadPathResolver downloadPathResolver;
+    private final ScrapeMetadataDeletionService metadataDeletionService;
     private final Object deletionLock = new Object();
 
     @Autowired
@@ -71,6 +72,7 @@ public final class SubscriptionDeletionService {
         this.remoteTasks = Objects.requireNonNull(remoteTasks, "remoteTasks");
         this.recoveryService = recoveryService;
         this.downloadPathResolver = downloadPathResolver == null ? ignored -> null : downloadPathResolver;
+        this.metadataDeletionService = new ScrapeMetadataDeletionService(ownershipService);
     }
 
     /** Removes subscription metadata only; owned media and remote tasks stay intact. */
@@ -145,6 +147,13 @@ public final class SubscriptionDeletionService {
             OwnershipService.FileDeletionResult fileDeletionResult = deleteFiles
                     ? ownershipService.deletePreparedFilesBestEffortWithDetails(fileDeletion.files())
                     : new OwnershipService.FileDeletionResult(List.of(), 0);
+            int ownedFileSkips = fileDeletion.skippedFiles() + fileDeletionResult.skippedFiles();
+            OwnershipService.FileDeletionOutcome metadataDeletion =
+                    new OwnershipService.FileDeletionOutcome(0, 0);
+            if (deleteFiles && ownedFileSkips == 0) {
+                metadataDeletion = metadataDeletionService.deleteBestEffort(
+                        deletableOwnerships, directoryCleanupBoundaries);
+            }
             // Explicit user deletion releases managed identities before the
             // subscription list is persisted. Completion finalization keeps
             // them active because its files and seeding tasks intentionally remain.
@@ -166,8 +175,8 @@ public final class SubscriptionDeletionService {
             return new DeletionResult(
                     ids.size(),
                     ownedTasks.size(),
-                    fileDeletionResult.deletedFiles().size(),
-                    fileDeletion.skippedFiles() + fileDeletionResult.skippedFiles());
+                    fileDeletionResult.deletedFiles().size() + metadataDeletion.deletedFiles(),
+                    ownedFileSkips + metadataDeletion.skippedFiles());
         }
     }
 

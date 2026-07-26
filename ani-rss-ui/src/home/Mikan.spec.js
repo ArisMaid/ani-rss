@@ -86,6 +86,27 @@ describe('Mikan season changes', () => {
     vi.useRealTimers()
   })
 
+  it('accepts an upstream-style subscription object and searches by bangumi id', async () => {
+    vi.mocked(http.mikan).mockResolvedValue(response('2026 spring', 'Object selection', 8.1))
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    wrapper.vm.show({
+      title: 'Fallback title',
+      mikanTitle: 'Preferred title',
+      url: 'https://mikanani.me/RSS/Bangumi?bangumiId=123'
+    })
+    await flushPromises()
+
+    expect(http.mikan).toHaveBeenCalledOnce()
+    expect(vi.mocked(http.mikan).mock.calls[0][0]).toBe('id: 123')
+    expect(vi.mocked(http.mikan).mock.calls[0][1]).toEqual({})
+  })
+
   it('renders the newest season score and ignores an older in-flight response', async () => {
     const initial = deferred()
     const spring = deferred()

@@ -68,7 +68,7 @@
                 </div>
                 <div style="justify-content: end;margin-top: 4px;" class="flex full-width">
                   <el-button bg text
-                             @click="mikanShow">
+                             @click="mikanRef?.show(props.ani)">
                     <template #icon>
                       <img src="@/icon/icon-Mikan.png" alt="mikan" class="icon"/>
                     </template>
@@ -319,7 +319,7 @@ import {getBgmTitle} from "@/js/http.js";
 import AniBT from "@/home/AniBT.vue";
 import AnimeGarden from "@/home/AnimeGarden.vue";
 import Disable from "@/other/Disable.vue";
-import {mikanSearchQuery, normalizeRssSelection, subgroupMatchRules} from "@/home/rssSelection.js";
+import {normalizeRssSelection, subgroupMatchRules} from "@/home/rssSelection.js";
 
 const activeName = ref('base')
 
@@ -447,10 +447,6 @@ let scrape = (force) => {
       .then(res => {
         ElMessage.success(res.message)
       })
-}
-
-let mikanShow = () => {
-  mikanRef.value?.show(mikanSearchQuery(props.ani))
 }
 
 let animeGardenShow = () => {

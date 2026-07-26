@@ -26,13 +26,15 @@ class ClearServiceTest {
     void doesNotTreatImagesMetadataOrPlatformFilesAsEmpty() throws Exception {
         Path directory = Files.createDirectories(tempDir.resolve("shared"));
         Files.writeString(directory.resolve("cover.jpg"), "cover");
+        Files.writeString(directory.resolve("fanart1.jpg"), "fanart");
         Files.writeString(directory.resolve("metadata.nfo"), "metadata");
+        Files.writeString(directory.resolve("bangumi.ini"), "bangumi");
         Files.writeString(directory.resolve(".DS_Store"), "platform");
 
         clearService.clearDir(directory.toFile(), true, true, 2);
 
         assertTrue(Files.exists(directory));
-        assertEquals(3, Files.list(directory).count());
+        assertEquals(5, Files.list(directory).count());
     }
 
     @Test

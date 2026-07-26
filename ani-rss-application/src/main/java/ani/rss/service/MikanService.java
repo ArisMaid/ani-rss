@@ -95,6 +95,10 @@ public class MikanService {
                 subscribedBgmIds(),
                 subscribedMikanIds()
         );
+        // Start bounded enrichment only after the list snapshot is ready. The
+        // HTTP response stays fast; the picker polls the score cache and shows
+        // completed entries as each Mikan mapping flows into its Bangumi score.
+        publicScoreService.warmMikanScores(mikanInfos);
 
         return mikan;
     }
@@ -115,7 +119,8 @@ public class MikanService {
         Set<String> retryableMikanIds = Set.of();
         if (!mikanInfos.isEmpty()) {
             try {
-                PublicScoreService.MikanScoreLookup lookup = publicScoreService.getMikanScoreLookup(mikanInfos);
+                PublicScoreService.MikanScoreLookup lookup =
+                        publicScoreService.getCachedMikanScoreLookupAndWarm(mikanInfos);
                 scores = lookup.scores();
                 retryableMikanIds = lookup.retryableMikanIds();
             } catch (RuntimeException e) {

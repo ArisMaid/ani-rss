@@ -194,7 +194,7 @@ describe('Mikan season changes', () => {
     expect(wrapper.text()).toContain('9.1')
   })
 
-  it('loads large-season score batches concurrently within the upstream-safe limit', async () => {
+  it('prioritizes the first visible score batches concurrently within the upstream-safe limit', async () => {
     const items = Array.from({length: 49}, (_, index) => ({
       url: `https://mikanani.me/Home/Bangumi/${index + 1}`,
       title: `作品 ${index + 1}`,
@@ -227,8 +227,12 @@ describe('Mikan season changes', () => {
     await flushPromises()
 
     expect(http.mikanScores).toHaveBeenCalledTimes(2)
-    expect(vi.mocked(http.mikanScores).mock.calls[0][0]).toHaveLength(48)
-    expect(vi.mocked(http.mikanScores).mock.calls[1][0]).toEqual(['49'])
+    expect(vi.mocked(http.mikanScores).mock.calls[0][0]).toEqual(
+        Array.from({length: 12}, (_, index) => String(index + 1))
+    )
+    expect(vi.mocked(http.mikanScores).mock.calls[1][0]).toEqual(
+        Array.from({length: 12}, (_, index) => String(index + 13))
+    )
 
     firstBatch.resolve({data: {scores: {}, subscribedBgmIds: []}})
     secondBatch.resolve({data: {scores: {}, subscribedBgmIds: []}})

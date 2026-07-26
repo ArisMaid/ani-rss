@@ -8,6 +8,7 @@ import ani.rss.entity.MikanInfo;
 import ani.rss.util.basic.HttpReq;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.SecureUtil;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -30,8 +31,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -47,6 +50,11 @@ public class PublicScoreService {
     static final long BGM_BATCH_TIMEOUT_MILLIS = 12_000;
     static final long MIKAN_MAPPING_BATCH_TIMEOUT_MILLIS = 12_000;
     static final int MAX_CONCURRENT_REQUESTS = 12;
+    /** Keep two upstream slots available so completed Mikan mappings can turn into scores immediately. */
+    private static final int MAX_MAPPING_WARMUP_WORKERS = MAX_CONCURRENT_REQUESTS - 2;
+    private static final int MAX_SCORE_WARMUP_WORKERS = 2;
+    private static final long WARMUP_QUEUE_TIMEOUT_MILLIS = 12_000;
+    private static final long WARMUP_FAILURE_RETRY_DELAY_MILLIS = 500;
     static final int MAX_SCORE_LOOKUPS_PER_BATCH = 64;
     static final int MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH = 48;
     private static final long SCORE_CACHE_TTL = TimeUnit.HOURS.toMillis(6);
@@ -70,6 +78,17 @@ public class PublicScoreService {
     private final ConcurrentMap<String, CompletableFuture<String>> mikanMappingFlights = new ConcurrentHashMap<>();
     /** Coalesces repeated cold Bangumi score lookups across score batches. */
     private final ConcurrentMap<String, CompletableFuture<Double>> bgmScoreFlights = new ConcurrentHashMap<>();
+    /**
+     * Detail mappings and score requests use distinct bounded queues.  This is
+     * intentional: a slow seasonal Mikan batch must leave room for the cheap
+     * Bangumi request that follows a mapping which has just completed.
+     */
+    private final ExecutorService mappingWarmupExecutor = newWarmupExecutor(
+            MAX_MAPPING_WARMUP_WORKERS, "public-score-mapping");
+    private final ExecutorService scoreWarmupExecutor = newWarmupExecutor(
+            MAX_SCORE_WARMUP_WORKERS, "public-score-rating");
+    /** Avoid restarting a failed optional lookup for every rapid client poll. */
+    private final ConcurrentMap<String, Long> warmupRetryAfterNanos = new ConcurrentHashMap<>();
 
     public PublicScoreService() {
         this(PublicScoreService::loadPublicBgmInfo, PublicScoreService::loadMikanBgmId);
@@ -155,6 +174,72 @@ public class PublicScoreService {
      */
     public Map<String, MikanBgm> getMikanScores(Collection<MikanInfo> mikanInfos) {
         return getMikanScoreLookup(mikanInfos).scores();
+    }
+
+    /**
+     * Returns the score cache immediately and starts any cold work in the
+     * background.  The caller receives unfinished entries in
+     * {@code retryableMikanIds}; a later, cheap poll reads the completed cache.
+     *
+     * <p>This is deliberately separate from {@link #getMikanScoreLookup(Collection)}:
+     * direct callers may still request a synchronous bounded lookup, while the
+     * Mikan picker can render and progressively enrich a cold season without a
+     * long-lived HTTP request.</p>
+     */
+    public MikanScoreLookup getCachedMikanScoreLookupAndWarm(Collection<MikanInfo> mikanInfos) {
+        Map<String, MikanBgm> scores = new LinkedHashMap<>();
+        Set<String> retryableMikanIds = new LinkedHashSet<>();
+        if (mikanInfos == null) {
+            return new MikanScoreLookup(scores, retryableMikanIds);
+        }
+
+        for (MikanInfo mikanInfo : mikanInfos) {
+            if (mikanInfo == null) {
+                continue;
+            }
+            String mikanId = extractMikanId(mikanInfo.getUrl());
+            if (StrUtil.isBlank(mikanId)) {
+                continue;
+            }
+
+            String bgmId = extractBgmSubjectId(mikanInfo.getBgmUrl());
+            if (StrUtil.isBlank(bgmId)) {
+                String mikanUrl = mikanInfo.getUrl();
+                String mappingCacheKey = MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanUrl);
+                String cachedMapping = CacheUtils.get(mappingCacheKey);
+                if (cachedMapping == null) {
+                    retryableMikanIds.add(mikanId);
+                    warmMikanMappingAndScore(mikanUrl);
+                    continue;
+                }
+                bgmId = extractBgmSubjectId(cachedMapping);
+                if (StrUtil.isBlank(bgmId)) {
+                    // A completed lookup with no Bangumi link is cached briefly
+                    // and is not an upstream outage worth polling again.
+                    continue;
+                }
+            }
+
+            Double cachedScore = CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId);
+            if (cachedScore != null) {
+                scores.put(mikanId, new MikanBgm(mikanId, bgmId, cachedScore));
+                continue;
+            }
+            retryableMikanIds.add(mikanId);
+            warmBgmScore(bgmId);
+        }
+        return new MikanScoreLookup(scores, retryableMikanIds);
+    }
+
+    /** Starts bounded background enrichment without retaining a mutable caller collection. */
+    public void warmMikanScores(Collection<MikanInfo> mikanInfos) {
+        if (mikanInfos == null) {
+            return;
+        }
+        getCachedMikanScoreLookupAndWarm(mikanInfos.stream()
+                .filter(java.util.Objects::nonNull)
+                .limit(MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH)
+                .toList());
     }
 
     /**
@@ -428,6 +513,133 @@ public class PublicScoreService {
                 score > 0 ? SCORE_CACHE_TTL : NEGATIVE_CACHE_TTL
         );
         return score;
+    }
+
+    /**
+     * Starts one Mikan detail lookup and queues its Bangumi rating as soon as
+     * the mapping completes.  The two work queues reserve score capacity, so
+     * a long list of detail pages cannot force completed entries to wait for
+     * every remaining mapping request.
+     */
+    private void warmMikanMappingAndScore(String mikanUrl) {
+        if (StrUtil.isBlank(mikanUrl)) {
+            return;
+        }
+        String cacheKey = MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanUrl);
+        String cached = CacheUtils.get(cacheKey);
+        if (cached != null) {
+            String bgmId = extractBgmSubjectId(cached);
+            if (StrUtil.isNotBlank(bgmId)) {
+                warmBgmScore(bgmId);
+            }
+            return;
+        }
+
+        String flightKey = MIKAN_BGM_CACHE_PREFIX + "flight:" + SecureUtil.sha256(mikanUrl);
+        startWarmupSingleFlight(
+                flightKey,
+                () -> loadAndCacheMikanMapping(mikanUrl, mikanBgmIdResolver::load),
+                mikanMappingFlights,
+                mappingWarmupExecutor
+        ).thenAccept(value -> {
+            String bgmId = extractBgmSubjectId(value);
+            if (StrUtil.isNotBlank(bgmId)) {
+                warmBgmScore(bgmId);
+            }
+        });
+    }
+
+    private void warmBgmScore(String bgmId) {
+        if (StrUtil.isBlank(bgmId) || CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId) != null) {
+            return;
+        }
+        String flightKey = BGM_SCORE_CACHE_PREFIX + "flight:" + bgmId;
+        startWarmupSingleFlight(
+                flightKey,
+                () -> loadAndCacheBgmScore(bgmId, subjectId -> Optional.ofNullable(bgmInfoLoader.load(subjectId))
+                        .map(BgmInfo::getRating)
+                        .map(BgmInfo.Rating::getScore)
+                        .filter(score -> score > 0)
+                        .orElse(0.0)),
+                bgmScoreFlights,
+                scoreWarmupExecutor
+        );
+    }
+
+    private <V> CompletableFuture<V> startWarmupSingleFlight(
+            String flightKey,
+            Callable<V> loader,
+            ConcurrentMap<String, CompletableFuture<V>> flights,
+            ExecutorService executor
+    ) {
+        CompletableFuture<V> existing = flights.get(flightKey);
+        if (existing != null) {
+            return existing;
+        }
+        if (!isWarmupRetryAllowed(flightKey)) {
+            return CompletableFuture.failedFuture(new TimeoutException("public score lookup is cooling down"));
+        }
+
+        CompletableFuture<V> created = new CompletableFuture<>();
+        CompletableFuture<V> shared = flights.putIfAbsent(flightKey, created);
+        if (shared != null) {
+            return shared;
+        }
+        try {
+            executor.execute(() -> {
+                try {
+                    V value = callUpstream(loader, deadlineAfter(WARMUP_QUEUE_TIMEOUT_MILLIS));
+                    warmupRetryAfterNanos.remove(flightKey);
+                    created.complete(value);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    warmupRetryAfterNanos.put(flightKey, warmupRetryAfter());
+                    created.completeExceptionally(e);
+                } catch (Exception e) {
+                    warmupRetryAfterNanos.put(flightKey, warmupRetryAfter());
+                    created.completeExceptionally(e);
+                } finally {
+                    flights.remove(flightKey, created);
+                }
+            });
+        } catch (RuntimeException e) {
+            warmupRetryAfterNanos.put(flightKey, warmupRetryAfter());
+            created.completeExceptionally(e);
+            flights.remove(flightKey, created);
+        }
+        return created;
+    }
+
+    private boolean isWarmupRetryAllowed(String flightKey) {
+        Long retryAfter = warmupRetryAfterNanos.get(flightKey);
+        if (retryAfter == null) {
+            return true;
+        }
+        if (retryAfter <= System.nanoTime()) {
+            warmupRetryAfterNanos.remove(flightKey, retryAfter);
+            return true;
+        }
+        return false;
+    }
+
+    private static long warmupRetryAfter() {
+        return System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WARMUP_FAILURE_RETRY_DELAY_MILLIS);
+    }
+
+    private static ExecutorService newWarmupExecutor(int threads, String namePrefix) {
+        AtomicInteger sequence = new AtomicInteger();
+        ThreadFactory factory = runnable -> {
+            Thread thread = new Thread(runnable, namePrefix + "-" + sequence.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+        return Executors.newFixedThreadPool(threads, factory);
+    }
+
+    @PreDestroy
+    void stopWarmupExecutors() {
+        mappingWarmupExecutor.shutdownNow();
+        scoreWarmupExecutor.shutdownNow();
     }
 
     private <K, V> List<LookupResult<K, V>> invokeBounded(

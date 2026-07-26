@@ -166,9 +166,11 @@ import SafeImage from '@/other/SafeImage.vue'
 import {openHttpUrl} from '@/js/url.js'
 import * as http from "@/js/http.js";
 
-const SCORE_BATCH_SIZE = 48
+// Small, ordered batches let the first visible weekday receive scores while
+// the rest of a cold season continues resolving in the background.
+const SCORE_BATCH_SIZE = 12
 const MAX_CONCURRENT_SCORE_BATCHES = 2
-const SCORE_RETRY_DELAYS_MILLIS = [0, 500, 1_500]
+const SCORE_RETRY_DELAYS_MILLIS = [0, 250, 500, 1_000, 2_000, 4_000]
 
 const emptyMikanData = () => ({
   seasons: [],

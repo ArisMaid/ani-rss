@@ -11,6 +11,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
@@ -255,6 +256,66 @@ class PublicScoreServiceTest {
         }
         assertEquals(1, mappingRequests.get());
         assertEquals(1, scoreRequests.get());
+    }
+
+    @Test
+    void progressivelyWarmsColdMikanScoresWithoutBlockingThePickerResponse() throws Exception {
+        String mikanId = uniqueNumericId();
+        String bgmId = uniqueNumericId();
+        CountDownLatch mappingStarted = new CountDownLatch(1);
+        CountDownLatch releaseMapping = new CountDownLatch(1);
+        CountDownLatch scoreStarted = new CountDownLatch(1);
+        PublicScoreService service = new PublicScoreService(
+                id -> {
+                    scoreStarted.countDown();
+                    return rated(id, 8.7);
+                },
+                url -> {
+                    mappingStarted.countDown();
+                    if (!releaseMapping.await(2, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("test mapping was not released");
+                    }
+                    return bgmId;
+                }
+        );
+        MikanInfo entry = new MikanInfo().setUrl(
+                "https://mikanani.me/Home/Bangumi/" + mikanId);
+
+        try {
+            PublicScoreService.MikanScoreLookup initial =
+                    service.getCachedMikanScoreLookupAndWarm(List.of(entry));
+
+            assertTrue(initial.scores().isEmpty());
+            assertTrue(initial.retryableMikanIds().contains(mikanId));
+            assertTrue(mappingStarted.await(1, TimeUnit.SECONDS),
+                    "the cold mapping should have started in the background");
+
+            releaseMapping.countDown();
+            assertTrue(scoreStarted.await(1, TimeUnit.SECONDS),
+                    "a completed mapping should immediately start its score lookup");
+
+            PublicScoreService.MikanScoreLookup completed = awaitCachedScore(service, entry, mikanId);
+            assertEquals(bgmId, completed.scores().get(mikanId).getBgmId());
+            assertEquals(8.7, completed.scores().get(mikanId).getScore());
+            assertFalse(completed.retryableMikanIds().contains(mikanId));
+        } finally {
+            releaseMapping.countDown();
+            service.stopWarmupExecutors();
+        }
+    }
+
+    private static PublicScoreService.MikanScoreLookup awaitCachedScore(
+            PublicScoreService service, MikanInfo entry, String mikanId) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        PublicScoreService.MikanScoreLookup latest = null;
+        while (System.nanoTime() < deadline) {
+            latest = service.getCachedMikanScoreLookupAndWarm(List.of(entry));
+            if (latest.scores().containsKey(mikanId)) {
+                return latest;
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError("timed out waiting for warmed Mikan score: " + latest);
     }
 
     private static BgmInfo rated(String id, double score) {

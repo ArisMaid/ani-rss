@@ -1,6 +1,8 @@
 package ani.rss.backup;
 
 import ani.rss.commons.GsonStatic;
+import cn.hutool.core.util.ZipUtil;
+import com.google.gson.JsonParser;
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 import org.junit.jupiter.api.Test;
@@ -50,6 +52,38 @@ class BackupArchiveTest {
         assertFalse(validation.legacy());
         assertEquals("3.1.75", validation.applicationVersion());
         assertEquals("media", Files.readString(extracted.resolve("files/episode.mkv")));
+    }
+
+    @Test
+    void generatedArchiveKeepsUpstreamConfigurationFilesReadableByLegacyImporter() throws Exception {
+        Path source = tempDir.resolve("fork-source");
+        Files.createDirectories(source);
+        String config = "{\"version\":\"3.1.75\",\"login\":{\"username\":\"legacy\"}}";
+        String subscriptions = "[{\"id\":\"subscription\",\"title\":\"Legacy subscription\"}]";
+        Files.writeString(source.resolve("config.v2.json"), config, StandardCharsets.UTF_8);
+        Files.writeString(source.resolve("ani.v2.json"), subscriptions, StandardCharsets.UTF_8);
+        Files.writeString(source.resolve("auth-state.v2.json"), "{\"schemaVersion\":2}", StandardCharsets.UTF_8);
+
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        BackupArchive.create(bytes, source, "3.1.75.18");
+        Path archive = tempDir.resolve("fork-backup.zip");
+        Files.write(archive, bytes.toByteArray());
+
+        // This is the unzip step used by the v3.1.75 importer. It ignores the
+        // fork-only sidecar and manifest while preserving upstream files.
+        Path legacyTarget = tempDir.resolve("legacy-target");
+        ZipUtil.unzip(archive.toFile(), legacyTarget.toFile());
+
+        assertEquals(config, Files.readString(legacyTarget.resolve("config.v2.json")));
+        assertEquals(subscriptions, Files.readString(legacyTarget.resolve("ani.v2.json")));
+        assertTrue(Files.exists(legacyTarget.resolve("auth-state.v2.json")));
+        assertTrue(Files.exists(legacyTarget.resolve("manifest.json")));
+        assertEquals("3.1.75", JsonParser.parseString(
+                Files.readString(legacyTarget.resolve("config.v2.json")))
+                .getAsJsonObject().get("version").getAsString());
+        assertEquals("Legacy subscription", JsonParser.parseString(
+                Files.readString(legacyTarget.resolve("ani.v2.json")))
+                .getAsJsonArray().get(0).getAsJsonObject().get("title").getAsString());
     }
 
     @Test

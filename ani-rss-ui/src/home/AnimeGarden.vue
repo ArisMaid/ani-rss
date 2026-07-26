@@ -152,26 +152,44 @@ let groupLoading = ref(false)
 let activeName = ref("")
 let dialogVisible = ref(false)
 let loading = ref(false)
+let listRequestId = 0
+let groupRequestId = 0
 let data = ref({
   'items': []
 })
 
+let resetListInteractionState = () => {
+  activeName.value = ''
+  selectName.value = ''
+  groups.value = {}
+  rssList.value = []
+  groupLoading.value = false
+  groupRequestId += 1
+}
+
 let show = (bgmUrl = '') => {
+  listRequestId += 1
   dialogVisible.value = true
   data.value = {
     'items': []
   }
-  rssList.value = []
+  resetListInteractionState()
   list(bgmUrl)
 }
 
 let list = async (bgmUrl = '') => {
+  let requestId = ++listRequestId
   loading.value = true
+  resetListInteractionState()
+  data.value.items = []
   return http.animeGardenList(bgmUrl)
       .then(res => {
-        let items = res.data;
+        if (requestId !== listRequestId) {
+          return
+        }
+        let items = Array.isArray(res?.data) ? res.data : []
 
-        if (!items || items.length < 1) {
+        if (items.length < 1) {
           ElMessage.warning("搜索结果为空")
         }
 
@@ -180,8 +198,15 @@ let list = async (bgmUrl = '') => {
           activeName.value = items[0].weekLabel
         }
       })
+      .catch(() => {
+        if (requestId === listRequestId) {
+          data.value.items = []
+        }
+      })
       .finally(() => {
-        loading.value = false
+        if (requestId === listRequestId) {
+          loading.value = false
+        }
       });
 }
 
@@ -190,19 +215,31 @@ let groups = ref({})
 
 let collapseChange = (v) => {
   if (!v) {
+    selectName.value = ''
+    groupRequestId += 1
     return
   }
   selectName.value = v
   if (groups.value[v]) {
     return;
   }
+  let requestId = ++groupRequestId
   groupLoading.value = true
   http.animeGardenGroup(v)
       .then(res => {
-        groups.value[v] = res.data
+        if (requestId === groupRequestId && selectName.value === v) {
+          groups.value[v] = Array.isArray(res?.data) ? res.data : []
+        }
+      })
+      .catch(() => {
+        if (requestId === groupRequestId && selectName.value === v) {
+          groups.value[v] = []
+        }
       })
       .finally(() => {
-        groupLoading.value = false
+        if (requestId === groupRequestId) {
+          groupLoading.value = false
+        }
       })
 }
 

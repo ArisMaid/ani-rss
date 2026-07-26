@@ -15,20 +15,25 @@ import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.util.StrUtil;
 import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import jakarta.annotation.Resource;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 public class AnimeGardenService {
     private static final String HOST = "https://api.animes.garden";
+    private static final int ANIME_GARDEN_REQUEST_TIMEOUT_MILLIS = 10_000;
 
     @Resource
     private CacheService cacheService;
+
+    @Resource
+    private PublicScoreService publicScoreService;
 
     public List<AnimeGarden.Week> list(String bgmUrl) {
         List<AnimeGarden.Week> weekList = new ArrayList<>();
@@ -40,12 +45,18 @@ public class AnimeGardenService {
             String bgmId = BgmUtil.getSubjectId(bgmUrl);
             BgmInfo bgmInfo = BgmUtil.getBgmInfo(bgmId);
             String name = BgmUtil.getFinalName(bgmInfo);
-            BgmInfo.Images images = bgmInfo.getImages();
+            String cover = Optional.ofNullable(bgmInfo.getImages())
+                    .map(BgmInfo.Images::getSmall)
+                    .orElse("");
+            double score = Optional.ofNullable(bgmInfo.getRating())
+                    .map(BgmInfo.Rating::getScore)
+                    .orElse(0.0);
 
             AnimeGarden.Subject subject = new AnimeGarden.Subject();
             subject.setName(name)
                     .setId(bgmId)
-                    .setCover(images.getSmall())
+                    .setCover(cover)
+                    .setScore(score)
                     .setExists(true);
 
             week.setWeekLabel("搜索")
@@ -53,7 +64,6 @@ public class AnimeGardenService {
             return weekList;
         }
 
-        JsonObject bgmScore = cacheService.getBgmScore();
         JsonObject bgmCover = cacheService.getBgmCover();
 
         List<String> bgmIdList = AniUtil.ANI_LIST
@@ -64,21 +74,40 @@ public class AnimeGardenService {
                 .distinct()
                 .toList();
 
-        List<AnimeGarden.Subject> subjectList = HttpReq.get(HOST + "/subjects")
-                .thenFunction(res -> {
-                    HttpReq.assertStatus(res);
-                    JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                    JsonArray subjects = jsonObject.getAsJsonArray("subjects");
-                    return GsonStatic.fromJsonList(subjects, AnimeGarden.Subject.class);
-                });
+        List<AnimeGarden.Subject> subjectList;
+        try {
+            subjectList = HttpReq.get(HOST + "/subjects")
+                    .timeout(ANIME_GARDEN_REQUEST_TIMEOUT_MILLIS)
+                    .thenFunction(res -> {
+                        HttpReq.assertStatus(res);
+                        JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
+                        JsonArray subjects = jsonObject.getAsJsonArray("subjects");
+                        return GsonStatic.fromJsonList(subjects, AnimeGarden.Subject.class);
+                    });
+        } catch (Exception e) {
+            log.warn("AnimeGarden subject request failed");
+            return weekList;
+        }
+
+        Map<String, Double> resolvedBgmScores;
+        try {
+            resolvedBgmScores = publicScoreService.getBgmScores(
+                    subjectList.stream()
+                            .map(AnimeGarden.Subject::getId)
+                            .filter(StrUtil::isNotBlank)
+                            .toList()
+            );
+        } catch (RuntimeException e) {
+            // Scores are optional; AnimeGarden itself must remain usable if an upstream score source is down.
+            resolvedBgmScores = Map.of();
+        }
+        final Map<String, Double> bgmScores = resolvedBgmScores;
 
         subjectList = subjectList.stream()
                 .peek(subject -> {
                     String id = subject.getId();
 
-                    Double score = Optional.ofNullable(bgmScore.get(id))
-                            .map(JsonElement::getAsDouble)
-                            .orElse(0.0);
+                    Double score = bgmScores.getOrDefault(id, 0.0);
 
                     String cover = Optional.ofNullable(bgmCover.get(id))
                             .map(it -> GsonStatic.fromJson(it, BgmInfo.Images.class))
@@ -127,16 +156,23 @@ public class AnimeGardenService {
     }
 
     public List<AnimeGarden.Group> group(String bgmId) {
-        List<AnimeGarden.Item> items = HttpReq.get(HOST + "/resources")
-                .form("subject", bgmId)
-                .form("pageSize", 200)
-                .form("duplicate", false)
-                .thenFunction(res -> {
-                    HttpReq.assertStatus(res);
-                    JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                    JsonArray resources = jsonObject.getAsJsonArray("resources");
-                    return GsonStatic.fromJsonList(resources, AnimeGarden.Item.class);
-                });
+        List<AnimeGarden.Item> items;
+        try {
+            items = HttpReq.get(HOST + "/resources")
+                    .timeout(ANIME_GARDEN_REQUEST_TIMEOUT_MILLIS)
+                    .form("subject", bgmId)
+                    .form("pageSize", 200)
+                    .form("duplicate", false)
+                    .thenFunction(res -> {
+                        HttpReq.assertStatus(res);
+                        JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
+                        JsonArray resources = jsonObject.getAsJsonArray("resources");
+                        return GsonStatic.fromJsonList(resources, AnimeGarden.Item.class);
+                    });
+        } catch (Exception e) {
+            log.warn("AnimeGarden group request failed");
+            return List.of();
+        }
 
         items = items
                 .stream()

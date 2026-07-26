@@ -24,17 +24,16 @@ import org.springframework.stereotype.Service;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 public class MikanService {
+    private static final int MIKAN_REQUEST_TIMEOUT_MILLIS = 10_000;
 
     @Resource
-    private CacheService cacheService;
+    private PublicScoreService publicScoreService;
 
     public static String getMikanHost() {
         Config config = ConfigUtil.CONFIG;
@@ -51,59 +50,79 @@ public class MikanService {
      * @return Mikan
      */
     public Mikan list(String text, Mikan.Season season) {
-        AtomicReference<Map<String, MikanBgm>> mikanBgmAtomicReference = new AtomicReference<>(new HashMap<>());
-        AtomicReference<Mikan> mikanAtomicReference = new AtomicReference<>();
+        Mikan mikan = search(text, season);
+        List<MikanInfo> mikanInfos = Optional.ofNullable(mikan.getWeeks())
+                .orElseGet(List::of)
+                .stream()
+                .filter(Objects::nonNull)
+                .map(Mikan.Week::getItems)
+                .filter(Objects::nonNull)
+                .flatMap(Collection::stream)
+                .filter(Objects::nonNull)
+                .toList();
 
-        // 并行获取 mikan 番剧列表及其评分
-        CompletableFuture.allOf(
-                CompletableFuture.runAsync(() -> {
-                    Map<String, MikanBgm> mikanBgm = cacheService.getMikanBgm();
-                    mikanBgmAtomicReference.set(mikanBgm);
-                }),
-                CompletableFuture.runAsync(() -> {
-                    Mikan mikan = search(text, season);
-                    mikanAtomicReference.set(mikan);
-                })
-        ).join();
+        Map<String, MikanBgm> mikanBgmMap = new HashMap<>();
+        try {
+            mikanBgmMap = publicScoreService.getMikanScores(mikanInfos);
+        } catch (RuntimeException e) {
+            // Scores are an enhancement. A public score source outage must not hide a Mikan season.
+            log.warn("Unable to enrich the Mikan list with public scores");
+        }
 
-        Map<String, MikanBgm> mikanBgmMap = mikanBgmAtomicReference.get();
-        Mikan mikan = mikanAtomicReference.get();
-
-        List<String> bgmIdList = AniUtil.ANI_LIST
+        Set<String> bgmIds = AniUtil.ANI_LIST
                 .stream()
                 .map(Ani::getBgmUrl)
                 .filter(StrUtil::isNotBlank)
                 .map(BgmUtil::getSubjectId)
-                .distinct()
-                .toList();
+                .collect(Collectors.toSet());
 
+        applyScores(mikan, mikanBgmMap, bgmIds);
+
+        return mikan;
+    }
+
+    static void applyScores(Mikan mikan, Map<String, MikanBgm> mikanBgmMap, Set<String> subscribedBgmIds) {
+        if (mikan == null || mikan.getWeeks() == null) {
+            return;
+        }
+        Map<String, MikanBgm> scores = Optional.ofNullable(mikanBgmMap).orElseGet(Map::of);
+        Set<String> subscriptions = Optional.ofNullable(subscribedBgmIds).orElseGet(Set::of);
         List<Mikan.Week> weeks = mikan.getWeeks();
         for (Mikan.Week week : weeks) {
             List<MikanInfo> mikanInfos = week.getItems();
+            if (mikanInfos == null) {
+                continue;
+            }
             for (MikanInfo mikanInfo : mikanInfos) {
+                if (mikanInfo == null) {
+                    continue;
+                }
+                mikanInfo.setScore(0.0);
                 String url = mikanInfo.getUrl();
-                String mikanId = ReUtil.get("\\d+(/)?$", url, 0);
+                String mikanId = PublicScoreService.extractMikanId(url);
                 if (StrUtil.isBlank(mikanId)) {
                     continue;
                 }
-                if (!mikanBgmMap.containsKey(mikanId)) {
+                MikanBgm mikanBgm = scores.get(mikanId);
+                if (mikanBgm == null) {
                     continue;
                 }
 
-                MikanBgm mikanBgm = mikanBgmMap.get(mikanId);
-                Double score = mikanBgm.getScore();
+                Double score = Optional.ofNullable(mikanBgm.getScore()).orElse(0.0);
                 String bgmId = mikanBgm.getBgmId();
                 mikanInfo.setScore(score)
                         .setBgmId(bgmId);
 
-                if (bgmIdList.contains(bgmId)) {
+                if (subscriptions.contains(bgmId)) {
                     mikanInfo.setExists(true);
                 }
             }
-            ListUtil.sort(mikanInfos, Comparator.comparingDouble(MikanInfo::getScore).reversed());
+            ListUtil.sort(
+                    mikanInfos,
+                    Comparator.comparingDouble((MikanInfo info) -> Optional.ofNullable(info.getScore()).orElse(0.0))
+                            .reversed()
+            );
         }
-
-        return mikan;
     }
 
     public Mikan search(String text, Mikan.Season season) {
@@ -149,8 +168,10 @@ public class MikanService {
             }
         }
 
-        HttpReq.get(url)
-                .then(res -> {
+        try {
+            HttpReq.get(url)
+                    .timeout(MIKAN_REQUEST_TIMEOUT_MILLIS)
+                    .then(res -> {
                     Document document = Jsoup.parse(res.body());
                     Elements dateSelects = document.select(".date-select");
                     if (!dateSelects.isEmpty()) {
@@ -238,7 +259,11 @@ public class MikanService {
                             weeks.add(week);
                         }
                     }
-                });
+                    });
+        } catch (Exception e) {
+            // Keep the Mikan picker responsive when its upstream is unavailable or stalls.
+            log.warn("Mikan list request failed");
+        }
 
         int totalItems = weeks
                 .stream()
@@ -259,6 +284,7 @@ public class MikanService {
      */
     public List<Mikan.Group> getGroups(String url) {
         List<Mikan.Group> groupList = HttpReq.get(url)
+                .timeout(MIKAN_REQUEST_TIMEOUT_MILLIS)
                 .thenFunction(res -> {
                     Document document = Jsoup.parse(res.body());
                     List<Mikan.Group> groups = new ArrayList<>();
@@ -343,6 +369,7 @@ public class MikanService {
         URI host = URLUtil.getHost(URLUtil.url(getMikanHost()));
         String url = host + "/Home/Bangumi/" + bangumiId;
         return HttpReq.get(url)
+                .timeout(MIKAN_REQUEST_TIMEOUT_MILLIS)
                 .thenFunction(res -> {
                     MikanInfo mikanInfo = new MikanInfo();
 

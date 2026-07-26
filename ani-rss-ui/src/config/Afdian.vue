@@ -30,13 +30,6 @@
     <a href="https://ifdian.net/a/wushuo894" target="_blank">
       <img :src="support_aifadian" alt="support_aifadian">
     </a>
-    <div class="afdian-unlock">
-      <h3>捐赠后解锁</h3>
-      <el-tag v-for="it in ['Mikan/AnimeGarden 番剧列表显示评分']" :key="it"
-              class="afdian-tag">
-        {{ it }}
-      </el-tag>
-    </div>
   </div>
   <div class="afdian-section" v-if="!props.config['verifyExpirationTime']">
     <el-text class="mx-1" size="small">
@@ -85,15 +78,6 @@
 
 .afdian-header {
   justify-content: space-between;
-}
-
-.afdian-unlock {
-  flex: 1;
-  padding-left: 8px;
-}
-
-.afdian-tag {
-  margin: 4px 4px 0 0;
 }
 
 .afdian-section {

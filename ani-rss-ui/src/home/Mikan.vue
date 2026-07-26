@@ -178,8 +178,21 @@ let data = ref({
 })
 
 let seasonSelect = ref('')
+let selectName = ref('')
+let groups = ref({})
+let listRequestId = 0
+let groupRequestId = 0
+
+let resetListInteractionState = () => {
+  activeName.value = ''
+  selectName.value = ''
+  groups.value = {}
+  rssList.value = []
+  groupRequestId += 1
+}
 
 let show = (name) => {
+  listRequestId += 1
   seasonSelect.value = ''
   dialogVisible.value = true
   text.value = ''
@@ -188,7 +201,7 @@ let show = (name) => {
     'items': [],
     'weeks': []
   }
-  rssList.value = []
+  resetListInteractionState()
   if (name) {
     name = name.replace(/ ?\((19|20)\d{2}\)/g, "").trim()
     name = name.replace(/ ?\[tmdbid=(\d+)]/g, "").trim()
@@ -216,18 +229,30 @@ let search = () => {
 }
 
 let list = async (body, text) => {
+  let requestId = ++listRequestId
   loading.value = true
   text = text ? text : ''
   body = body ? body : {}
+  resetListInteractionState()
+  data.value.weeks = []
+  if (text) {
+    data.value.seasons = []
+    seasonSelect.value = ''
+  }
   return http.mikan(text, body)
       .then(res => {
-        let {seasons, weeks, totalItems} = res.data;
+        if (requestId !== listRequestId) {
+          return
+        }
+        let {seasons = [], weeks = [], totalItems = 0} = res.data || {};
+        seasons = Array.isArray(seasons) ? seasons : []
+        weeks = Array.isArray(weeks) ? weeks : []
 
         if (totalItems < 1) {
           ElMessage.warning("搜索结果为空")
         }
 
-        if (seasons.length) {
+        if (seasons.length || text) {
           data.value.seasons = seasons
         }
         data.value.weeks = weeks
@@ -242,35 +267,41 @@ let list = async (body, text) => {
         }
       })
       .finally(() => {
-        loading.value = false
+        if (requestId === listRequestId) {
+          loading.value = false
+        }
       });
 }
 
 let change = (v) => {
-  let body = data.value.seasons.filter(item => item['seasonLabel'] === v)
-  if (body.length) {
-    list(body[0])
+  let body = data.value.seasons.find(item => item['seasonLabel'] === v)
+  if (body) {
+    list(body)
   }
 }
 
-let selectName = ref('')
-let groups = ref({})
-
 let collapseChange = (v) => {
   if (!v) {
+    selectName.value = ''
+    groupRequestId += 1
     return
   }
   selectName.value = v
   if (groups.value[v]) {
     return;
   }
+  let requestId = ++groupRequestId
   groupLoading.value = true
   http.mikanGroup(v)
       .then(res => {
-        groups.value[v] = res.data
+        if (requestId === groupRequestId && selectName.value === v) {
+          groups.value[v] = res.data
+        }
       })
       .finally(() => {
-        groupLoading.value = false
+        if (requestId === groupRequestId) {
+          groupLoading.value = false
+        }
       })
 }
 

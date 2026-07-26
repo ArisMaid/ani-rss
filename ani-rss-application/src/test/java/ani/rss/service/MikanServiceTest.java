@@ -1,5 +1,6 @@
 package ani.rss.service;
 
+import ani.rss.commons.CacheUtils;
 import ani.rss.entity.Config;
 import ani.rss.entity.Mikan;
 import ani.rss.entity.MikanBgm;
@@ -17,6 +18,8 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -123,6 +126,56 @@ class MikanServiceTest {
     }
 
     @Test
+    void prefetchesOneAdjacentSeasonWithoutRecursing() throws Exception {
+        int year = 100_000 + (int) Math.floorMod(System.nanoTime(), 100_000L);
+        Mikan.Season selected = new Mikan.Season()
+                .setYear(year)
+                .setSeason("summer")
+                .setSeasonLabel(year + " summer")
+                .setSelect(true);
+        Mikan.Season adjacent = new Mikan.Season()
+                .setYear(year)
+                .setSeason("spring")
+                .setSeasonLabel(year + " spring")
+                .setSelect(false);
+        String defaultCacheKey = MikanService.listCacheKey("", new Mikan.Season());
+        String adjacentCacheKey = MikanService.listCacheKey("", adjacent);
+        CacheUtils.remove(defaultCacheKey);
+        CacheUtils.remove(adjacentCacheKey);
+
+        AtomicInteger upstreamLoads = new AtomicInteger();
+        CountDownLatch adjacentLoaded = new CountDownLatch(1);
+        PublicScoreService scores = new PublicScoreService(id -> null, url -> "");
+        MikanService service = new MikanService(scores, (text, requestedSeason) -> {
+            upstreamLoads.incrementAndGet();
+            boolean isAdjacent = adjacent.getYear().equals(requestedSeason.getYear())
+                    && adjacent.getSeason().equals(requestedSeason.getSeason());
+            if (isAdjacent) {
+                adjacentLoaded.countDown();
+                // The background prefetch itself must not discover another
+                // neighbour and continue crawling the menu.
+                return mikanList("prefetched adjacent season", List.of(adjacent));
+            }
+            return mikanList("foreground season", List.of(selected, adjacent));
+        });
+        try {
+            Mikan foreground = service.list("", new Mikan.Season());
+            assertEquals("foreground season", foreground.getWeeks().get(0).getItems().get(0).getTitle());
+            assertTrue(adjacentLoaded.await(1, TimeUnit.SECONDS));
+
+            Mikan cachedAdjacent = service.list("", adjacent);
+            assertEquals("prefetched adjacent season",
+                    cachedAdjacent.getWeeks().get(0).getItems().get(0).getTitle());
+            assertEquals(2, upstreamLoads.get(), "the prefetch must not recursively crawl more seasons");
+        } finally {
+            service.stopStaleRefreshExecutor();
+            scores.stopWarmupExecutors();
+            CacheUtils.remove(defaultCacheKey);
+            CacheUtils.remove(adjacentCacheKey);
+        }
+    }
+
+    @Test
     void readsCachedScoresAndStartsWarmupInOneSeasonPass() {
         String mikanId = String.valueOf(System.nanoTime());
         CountingScoreService scores = new CountingScoreService(mikanId);
@@ -159,6 +212,19 @@ class MikanServiceTest {
                 new MikanInfo().setUrl("https://mikanani.me/Home/Bangumi/" + second)
         ));
         return new Mikan().setWeeks(List.of(new Mikan.Week().setItems(items)));
+    }
+
+    private static Mikan mikanList(String title, List<Mikan.Season> seasons) {
+        return new Mikan()
+                .setSeasons(seasons)
+                .setWeeks(List.of(new Mikan.Week()
+                        .setWeekLabel("Saturday")
+                        .setItems(List.of(new MikanInfo()
+                                .setUrl("https://mikanani.me/Home/Bangumi/not-a-number")
+                                .setTitle(title)
+                                .setScore(0.0)
+                                .setExists(false)))))
+                .setTotalItem(1);
     }
 
     private static final class CountingScoreService extends PublicScoreService {

@@ -109,7 +109,13 @@ public final class SubscriptionDeletionService {
             if (deleteFiles) {
                 fileDeletion = ownershipService.prepareSubscriptionFileDeletionBestEffort(ids);
             }
-            Map<String, Path> directoryCleanupBoundaries = deleteFiles
+            // A user may elect to keep local media, while the registered
+            // subscription directory is already empty (for example after a
+            // failed submission or an earlier manual move).  In that case an
+            // empty, template-scoped directory is still stale subscription
+            // scaffolding.  Completion finalization passes releaseOwnership
+            // as false, so it intentionally keeps its migrated directories.
+            Map<String, Path> directoryCleanupBoundaries = releaseOwnership
                     ? SubscriptionDirectoryCleanupPolicy.resolveBoundaries(
                             byId, deletableOwnerships, ConfigUtil.snapshot())
                     : Map.of();
@@ -124,7 +130,7 @@ public final class SubscriptionDeletionService {
             // subscription list is persisted. Completion finalization keeps
             // them active because its files and seeding tasks intentionally remain.
             ownershipService.markDeleted(deletableOwnerships);
-            if (deleteFiles) {
+            if (releaseOwnership) {
                 ownershipService.pruneEmptyDirectoriesAfterDeletion(
                         fileDeletionResult.deletedFiles(), deletableOwnerships, directoryCleanupBoundaries);
             }

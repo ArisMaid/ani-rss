@@ -641,6 +641,7 @@ public class OwnershipService {
                 }
                 try {
                     Path root = ownershipRoot(ownership);
+                    addManifestDirectoryCandidates(candidates, ownership, root);
                     cleanupBoundary(ownership, root, cleanupBoundaries)
                             .ifPresent(boundary -> addCandidatesWithinCleanupScope(
                                     candidates, root, boundary));
@@ -887,6 +888,26 @@ public class OwnershipService {
             candidates.add(current);
             if (current.equals(root)) {
                 return;
+            }
+        }
+    }
+
+    /**
+     * Adds only the parent directories named by the ownership manifest. This
+     * covers an already-missing file without scanning or recursively removing
+     * arbitrary descendants of the save root. Each resulting directory still
+     * has to be empty at deletion time before it can be removed.
+     */
+    private void addManifestDirectoryCandidates(
+            Set<Path> candidates, DownloadOwnership ownership, Path root) {
+        for (OwnedFile ownedFile : repository.listFiles(ownership.ownershipId())) {
+            try {
+                Path parent = safeOwnedPath(root, ownedFile).getParent();
+                if (parent != null) {
+                    addCandidatesWithinOwnedRoot(candidates, parent, root);
+                }
+            } catch (Exception ignored) {
+                // A malformed manifest must never expand directory cleanup.
             }
         }
     }

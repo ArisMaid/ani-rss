@@ -9,6 +9,7 @@ import ani.rss.ownership.OwnershipRepository;
 import ani.rss.ownership.OwnershipService;
 import ani.rss.ownership.OwnershipState;
 import ani.rss.persistence.DatabaseManager;
+import ani.rss.util.other.ConfigUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -35,11 +36,13 @@ class SubscriptionDeletionServiceTest {
     private FakeRemoteTasks remoteTasks;
     private SubscriptionDeletionService service;
     private Path ownedFile;
+    private String originalDownloadPathTemplate;
 
     @BeforeEach
     void setUp() throws Exception {
         System.setProperty("CONFIG", tempDir.resolve("config").toString());
         DatabaseManager.close();
+        originalDownloadPathTemplate = ConfigUtil.CONFIG.getDownloadPathTemplate();
         repository = new OwnershipRepository();
         ownershipService = new OwnershipService(repository);
         store = new FakeSubscriptionStore(List.of(subscription("subscription", "Example")));
@@ -48,6 +51,8 @@ class SubscriptionDeletionServiceTest {
                 ownershipService, store, remoteTasks);
 
         Path root = Files.createDirectories(tempDir.resolve("downloads").resolve("Example"));
+        ConfigUtil.CONFIG.setDownloadPathTemplate(
+                tempDir.resolve("downloads") + "/${title}/Season ${season}");
         ownedFile = root.resolve("season-1").resolve("episode.mkv");
         Files.createDirectories(ownedFile.getParent());
         Files.writeString(ownedFile, "episode");
@@ -65,6 +70,7 @@ class SubscriptionDeletionServiceTest {
     @AfterEach
     void tearDown() {
         DatabaseManager.close();
+        ConfigUtil.CONFIG.setDownloadPathTemplate(originalDownloadPathTemplate);
         System.clearProperty("CONFIG");
     }
 
@@ -118,6 +124,21 @@ class SubscriptionDeletionServiceTest {
         assertFalse(Files.exists(subscriptionRoot));
         assertTrue(Files.isDirectory(downloadBase));
         assertEquals(2, deletedDirectories);
+    }
+
+    @Test
+    void prunesAlreadyEmptySubscriptionDirectoriesWhenLocalFilesAreKept() throws Exception {
+        Path subscriptionRoot = ownedFile.getParent().getParent();
+        Path downloadBase = subscriptionRoot.getParent();
+        Files.delete(ownedFile);
+
+        SubscriptionDeletionService.DeletionResult result = service.delete(List.of("subscription"), false);
+
+        assertFalse(Files.exists(ownedFile.getParent()));
+        assertFalse(Files.exists(subscriptionRoot));
+        assertTrue(Files.isDirectory(downloadBase));
+        assertEquals(0, result.deletedFiles());
+        assertEquals(0, result.skippedFiles());
     }
 
     @Test

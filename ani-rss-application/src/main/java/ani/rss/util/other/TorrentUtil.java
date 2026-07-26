@@ -4,6 +4,8 @@ import ani.rss.commons.ExceptionUtils;
 import ani.rss.commons.FileUtils;
 import ani.rss.commons.PinyinUtils;
 import ani.rss.download.BaseDownload;
+import ani.rss.download.DownloaderClientFactory;
+import ani.rss.download.DownloaderClient;
 import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
 import ani.rss.entity.Item;
@@ -12,12 +14,10 @@ import ani.rss.enums.StringEnum;
 import ani.rss.enums.TorrentsStateEnum;
 import ani.rss.enums.TorrentsTagEnum;
 import ani.rss.ownership.OwnershipService;
-import ani.rss.service.ClearService;
 import ani.rss.util.basic.HttpReq;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.text.StrFormatter;
 import cn.hutool.core.thread.ThreadUtil;
-import cn.hutool.core.util.ClassUtil;
 import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.extra.spring.SpringUtil;
@@ -33,6 +33,7 @@ import java.util.List;
 @Slf4j
 public class TorrentUtil {
     public static BaseDownload DOWNLOAD;
+    public static DownloaderClient CLIENT;
 
     /**
      * 获取任务列表
@@ -41,7 +42,10 @@ public class TorrentUtil {
      */
     public static List<TorrentsInfo> getTorrentsInfos() {
         ThreadUtil.sleep(1000);
-        List<TorrentsInfo> tasks = DOWNLOAD.getTorrentsInfos();
+        List<TorrentsInfo> tasks = CLIENT.torrents().value();
+        if (tasks == null) {
+            return List.of();
+        }
         ownershipService().observeTasks(tasks);
         if ("Aria2".equals(ConfigUtil.CONFIG.getDownloadToolType())) {
             return tasks.stream().filter(task -> ownershipService().findOwned(task).isPresent()).toList();
@@ -163,7 +167,7 @@ public class TorrentUtil {
             return false;
         }
         try {
-            return DOWNLOAD.login(ConfigUtil.CONFIG);
+            return CLIENT.connect(false).isSuccess();
         } catch (Exception e) {
             return false;
         }
@@ -203,7 +207,8 @@ public class TorrentUtil {
      * @param deleteFiles  删除本地文件
      */
     public static Boolean delete(TorrentsInfo torrentsInfo, Boolean forcedDelete, Boolean deleteFiles) {
-        ownershipService().requireOwned(torrentsInfo);
+        OwnershipService ownershipService = ownershipService();
+        ani.rss.ownership.DownloadOwnership ownership = ownershipService.requireManagedTask(torrentsInfo);
         String name = torrentsInfo.getName();
 
         if (!forcedDelete) {
@@ -222,18 +227,19 @@ public class TorrentUtil {
         log.info("删除任务 title:{} forcedDelete:{} deleteFiles:{}", name, forcedDelete, deleteFiles);
 
         ThreadUtil.sleep(500);
-        Boolean b = DOWNLOAD.delete(torrentsInfo, deleteFiles);
+        String quarantineOperation = null;
+        if (deleteFiles) {
+            quarantineOperation = quarantineService().quarantineOwnership(ownership.ownershipId());
+        }
+        Boolean b = CLIENT.delete(torrentsInfo, false).isSuccess();
         if (!b) {
+            if (quarantineOperation != null) {
+                quarantineService().restore(quarantineOperation);
+            }
             log.error("删除任务失败 {}", name);
             return false;
         }
         log.info("删除任务成功 {}", name);
-        if (!deleteFiles) {
-            return true;
-        }
-        // 清理空文件夹
-        ClearService clearService = SpringUtil.getBean(ClearService.class);
-        clearService.clearDir(torrentsInfo.getSavePath());
         return true;
     }
 
@@ -267,7 +273,7 @@ public class TorrentUtil {
         }
 
         ThreadUtil.sleep(1000);
-        Boolean renamed = DOWNLOAD.rename(torrentsInfo);
+        Boolean renamed = CLIENT.rename(torrentsInfo).isSuccess();
         if (renamed) {
             addTags(torrentsInfo, TorrentsTagEnum.RENAME.getValue());
         }
@@ -289,7 +295,7 @@ public class TorrentUtil {
         log.debug("添加标签 {} {}", name, tags);
         boolean b = false;
         try {
-            b = DOWNLOAD.addTags(torrentsInfo, tags);
+            b = CLIENT.addTags(torrentsInfo, tags).isSuccess();
         } catch (Exception e) {
             log.error(e.getMessage(), e);
         }
@@ -311,7 +317,9 @@ public class TorrentUtil {
         ownershipService.requireOwned(torrentsInfo);
         try {
             log.info("修改保存位置 {} ==> {}", torrentsInfo.getName(), path);
-            DOWNLOAD.setSavePath(torrentsInfo, path);
+            if (!CLIENT.setSavePath(torrentsInfo, path).isSuccess()) {
+                throw new IllegalStateException("下载器拒绝修改保存位置");
+            }
         } catch (Exception e) {
             log.error(e.getMessage(), e);
         }
@@ -330,12 +338,17 @@ public class TorrentUtil {
             ConfigUtil.sync();
         }
 
-        DOWNLOAD = SpringUtil.getBean(ClassUtil.loadClass("ani.rss.download." + download));
+        CLIENT = DownloaderClientFactory.createClient(config);
+        DOWNLOAD = CLIENT.adapter();
         log.info("下载工具 {}", download);
     }
 
     private static OwnershipService ownershipService() {
         return SpringUtil.getBean(OwnershipService.class);
+    }
+
+    private static ani.rss.ownership.QuarantineService quarantineService() {
+        return SpringUtil.getBean(ani.rss.ownership.QuarantineService.class);
     }
 
     /**

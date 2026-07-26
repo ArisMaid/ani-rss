@@ -38,15 +38,22 @@ public class QuarantineService {
 
         String operationId = UUID.randomUUID().toString();
         Path root = Path.of(ownership.saveRoot()).toAbsolutePath().normalize();
-        Path operationRoot = root.resolve(".ani-rss-trash").resolve(operationId);
+        Path trashRoot = root.resolve(".ani-rss-trash");
+        Path operationRoot = trashRoot.resolve(operationId);
         List<MovedFile> moved = new ArrayList<>();
         try {
+            if (Files.exists(trashRoot) && Files.isSymbolicLink(trashRoot)) {
+                throw new IllegalStateException("隔离目录不能是符号链接");
+            }
+            Files.createDirectories(operationRoot);
+            PathPolicy.realPathWithin(root, operationRoot);
             for (OwnedFile ownedFile : files) {
-                Path source = PathPolicy.requireSafeDeletionTarget(root,
+                Path sourceCandidate = PathPolicy.requireSafeDeletionTarget(root,
                         PathPolicy.resolveWithin(root, ownedFile.relativePath()));
-                if (!Files.exists(source)) {
+                if (!Files.exists(sourceCandidate)) {
                     continue;
                 }
+                Path source = PathPolicy.realPathWithin(root, sourceCandidate);
                 if (!Files.isRegularFile(source) || Files.isSymbolicLink(source)) {
                     throw new IllegalStateException("仅允许隔离清单中的普通文件");
                 }
@@ -55,6 +62,7 @@ public class QuarantineService {
                     throw new IllegalStateException("隔离目标已存在");
                 }
                 Files.createDirectories(target.getParent());
+                PathPolicy.realPathWithin(root, target.getParent());
                 Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
                 moved.add(new MovedFile(source, target));
             }
@@ -103,12 +111,19 @@ public class QuarantineService {
                 if (!"QUARANTINED".equals(entry.state())) {
                     continue;
                 }
-                Path source = Path.of(entry.quarantinePath()).toAbsolutePath().normalize();
-                Path target = Path.of(entry.originalPath()).toAbsolutePath().normalize();
+                DownloadOwnership ownership = repository.find(entry.ownershipId())
+                        .orElseThrow(() -> new IllegalStateException("归属记录不存在"));
+                Path root = Path.of(ownership.saveRoot()).toAbsolutePath().normalize();
+                Path expectedOperationRoot = root.resolve(".ani-rss-trash").resolve(operationId).normalize();
+                Path source = PathPolicy.realPathWithin(expectedOperationRoot,
+                        Path.of(entry.quarantinePath()).toAbsolutePath().normalize());
+                Path target = PathPolicy.requireSafeDeletionTarget(root,
+                        Path.of(entry.originalPath()).toAbsolutePath().normalize());
                 if (Files.exists(target)) {
                     throw new IllegalStateException("原始位置已有同名文件，拒绝覆盖");
                 }
                 Files.createDirectories(target.getParent());
+                PathPolicy.realPathWithin(root, target.getParent());
                 Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
                 restored.add(new MovedFile(source, target));
             }
@@ -125,7 +140,13 @@ public class QuarantineService {
         for (QuarantineEntry entry : entries) {
             Path path = Path.of(entry.quarantinePath()).toAbsolutePath().normalize();
             try {
+                DownloadOwnership ownership = repository.find(entry.ownershipId())
+                        .orElseThrow(() -> new IllegalStateException("归属记录不存在"));
+                Path expectedOperationRoot = Path.of(ownership.saveRoot()).toAbsolutePath().normalize()
+                        .resolve(".ani-rss-trash").resolve(entry.operationId()).normalize();
+                PathPolicy.requireWithin(expectedOperationRoot, path);
                 if (Files.exists(path)) {
+                    path = PathPolicy.realPathWithin(expectedOperationRoot, path);
                     if (!Files.isRegularFile(path) || Files.isSymbolicLink(path)) {
                         throw new IllegalStateException("隔离项不是普通文件");
                     }

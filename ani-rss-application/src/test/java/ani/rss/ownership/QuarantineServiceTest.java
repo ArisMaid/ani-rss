@@ -14,6 +14,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class QuarantineServiceTest {
     @TempDir
@@ -63,5 +64,27 @@ class QuarantineServiceTest {
         assertTrue(Files.exists(owned));
         assertEquals("owned", Files.readString(owned));
         assertEquals(OwnershipState.ACTIVE, repository.find(ownershipId).orElseThrow().state());
+    }
+
+    @Test
+    void refusesFilesReachedThroughEscapingSymbolicLink() throws Exception {
+        Path root = Files.createDirectories(tempDir.resolve("downloads"));
+        Path outside = Files.createDirectories(tempDir.resolve("outside"));
+        Path outsideFile = outside.resolve("episode.mkv");
+        Files.writeString(outsideFile, "outside");
+        Files.createSymbolicLink(root.resolve("linked"), outside);
+
+        String ownershipId = UUID.randomUUID().toString();
+        long now = System.currentTimeMillis();
+        repository.createPending(new DownloadOwnership(
+                ownershipId, "qBittorrent", "remote", "symbolic-hash", "subscription",
+                1, "1.0", root.toString(), OwnershipState.ACTIVE, now, now));
+        repository.replaceFiles(ownershipId,
+                List.of(new OwnedFile(ownershipId, "linked/episode.mkv", "FILE", 7L)));
+
+        assertThrows(IllegalStateException.class,
+                () -> quarantineService.quarantineOwnership(ownershipId));
+        assertTrue(Files.exists(outsideFile));
+        assertEquals("outside", Files.readString(outsideFile));
     }
 }

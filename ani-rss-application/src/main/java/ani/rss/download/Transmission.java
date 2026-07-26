@@ -19,88 +19,85 @@ import cn.hutool.core.text.StrFormatter;
 import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.crypto.SecureUtil;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import com.google.gson.JsonObject;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Transmission
+ * Transmission RPC client with protocol negotiation for 3.x/4.0 and 4.1.
  */
 @Slf4j
-@Service
-@RequiredArgsConstructor
 public class Transmission implements BaseDownload {
-    private static String SESSION_ID = "";
+    private final ConcurrentMap<String, SessionState> sessions = new ConcurrentHashMap<>();
+    private final AtomicLong requestIds = new AtomicLong(1);
+    /** The last explicitly tested configuration, kept as an immutable snapshot. */
+    private volatile Config activeConfig;
+
+    public Transmission() {
+    }
+
+    public Transmission(Config config) {
+        this.activeConfig = ConfigUtil.copy(config);
+    }
 
     @Override
     public Boolean login(Boolean test, Config config) {
-        String username = config.getDownloadToolUsername();
-        String password = config.getDownloadToolPassword();
-        String downloadToolHost = config.getDownloadToolHost();
-
-        if (StrUtil.isBlank(downloadToolHost) ||
-                StrUtil.isBlank(username) ||
-                StrUtil.isBlank(password)
-        ) {
-            log.warn("Transmission 未配置完成");
+        try {
+            this.activeConfig = ConfigUtil.copy(config);
+            ensureSession(config);
+            if (!test) {
+                getTorrentsInfos(config);
+            }
+            return true;
+        } catch (Exception e) {
+            log.warn("Transmission 连接失败: {}", e.getMessage());
             return false;
         }
-
-        String authorization = StrFormatter.format("Basic {}", Base64.encode(username + ":" + password));
-        Boolean isOk = HttpReq.get(downloadToolHost)
-                .header(Header.AUTHORIZATION, authorization)
-                .thenFunction(HttpResponse::isOk);
-        if (!isOk) {
-            log.error("登录 Transmission 失败");
-            return false;
-        }
-        getTorrentsInfos();
-        return true;
     }
 
     @Override
     public List<TorrentsInfo> getTorrentsInfos() {
-        try {
-            TransmissionRpcBody transmissionRpcBody = TransmissionRpcBody.torrentGet();
-            return rpc(transmissionRpcBody)
-                    .thenFunction(res -> {
-                        String sessionId = res.header("X-Transmission-Session-Id");
-                        if (StrUtil.isNotBlank(sessionId)) {
-                            SESSION_ID = sessionId;
-                            return getTorrentsInfos();
-                        }
-                        TransmissionTorrentsInfo transmissionTorrentsInfo = GsonStatic.fromJson(res.body(), TransmissionTorrentsInfo.class);
+        return getTorrentsInfos(configuration());
+    }
 
-                        List<TransmissionTorrentsInfo.Torrent> torrentsInfoList = transmissionTorrentsInfo
-                                .getArguments()
-                                .getTorrents();
-                        return torrentsInfoList
-                                .stream()
-                                .map(TransmissionTorrentsInfo.Torrent::toTorrentsInfo)
-                                .filter(torrentsInfo -> {
-                                    List<String> tagList = torrentsInfo.getTagList();
-                                    return tagList.contains(TorrentsTagEnum.ANI_RSS.getValue());
-                                })
-                                .toList();
-                    });
+    private List<TorrentsInfo> getTorrentsInfos(Config config) {
+        try {
+            SessionState state = ensureSession(config);
+            RpcResponse response = rpc(config, TransmissionRpcBody.torrentGet(), state);
+            JsonObject payload = TransmissionRpcCodec.payload(response.body(), state.dialect());
+            TransmissionTorrentsInfo.Arguments arguments = GsonStatic.fromJson(
+                    payload.toString(), TransmissionTorrentsInfo.Arguments.class);
+            List<TransmissionTorrentsInfo.Torrent> torrents = arguments.getTorrents();
+            if (torrents == null) {
+                return List.of();
+            }
+            return torrents.stream()
+                    .map(TransmissionTorrentsInfo.Torrent::toTorrentsInfo)
+                    .filter(torrentsInfo -> Optional.ofNullable(torrentsInfo.getTagList())
+                            .orElseGet(List::of)
+                            .contains(TorrentsTagEnum.ANI_RSS.getValue()))
+                    .toList();
         } catch (Exception e) {
-            log.error(e.getMessage(), e);
+            log.error("读取 Transmission 任务失败: {}", e.getMessage());
+            return new ArrayList<>();
         }
-        return new ArrayList<>();
     }
 
     public TransmissionRpcBody getTorrentAddBody(Ani ani, Item item, String savePath, File torrentFile) {
         String extName = FileUtil.extName(torrentFile);
-        List<String> tags = newTags(ani, item);
+        List<String> tags = newTags(ani, item, configuration());
 
         if ("txt".equals(extName)) {
             String magnet = FileUtil.readUtf8String(torrentFile);
@@ -115,50 +112,42 @@ public class Transmission implements BaseDownload {
 
     @Override
     public Boolean download(Ani ani, Item item, String savePath, File torrentFile) {
-        String name = item.getReName();
+        Config config = configuration();
+        SessionState state = ensureSession(config);
+        TransmissionRpcBody body = getTorrentAddBody(ani, item, savePath, torrentFile);
+        RpcResponse response = rpc(config, body, state);
+        JsonObject payload = TransmissionRpcCodec.payload(response.body(), state.dialect());
+        JsonObject added = payload.has("torrent-added")
+                ? payload.getAsJsonObject("torrent-added")
+                : payload.getAsJsonObject("torrent_added");
+        Assert.notNull(added, "Transmission 未返回 torrent-added");
+        String id = added.get("id").getAsString();
+        log.info("Transmission 添加下载 name:{} id:{}", item.getReName(), id);
 
-        TransmissionRpcBody transmissionRpcBody = getTorrentAddBody(ani, item, savePath, torrentFile);
-
-        String id = rpc(transmissionRpcBody)
-                .thenFunction(res -> {
-                    JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                    return jsonObject.getAsJsonObject("arguments")
-                            .getAsJsonObject("torrent-added")
-                            .get("id").getAsString();
-                });
-
-        log.info("tr 添加下载 => name: {} id: {}", name, id);
-
-        Boolean ova = ani.getOva();
-        if (!ova) {
-            RenameCacheUtil.put(id, name);
+        if (!ani.getOva()) {
+            RenameCacheUtil.put(id, item.getReName());
         }
 
         for (int i = 0; i < 3; i++) {
             ThreadUtil.sleep(1000 * 10);
-            List<TorrentsInfo> torrentsInfos = getTorrentsInfos();
-            Optional<TorrentsInfo> optionalTorrentsInfo = torrentsInfos
-                    .stream()
-                    .filter(torrentsInfo -> torrentsInfo.getId().equals(id))
-                    .findFirst();
-            if (optionalTorrentsInfo.isEmpty()) {
-                continue;
+            if (getTorrentsInfos(config).stream().anyMatch(info -> id.equals(info.getId()))) {
+                return true;
             }
-            return true;
         }
-
         return false;
     }
 
     @Override
     public Boolean delete(TorrentsInfo torrentsInfo, Boolean deleteFiles) {
-        String id = torrentsInfo.getId();
-        TransmissionRpcBody transmissionRpcBody = TransmissionRpcBody.torrentRemove(id, deleteFiles);
         try {
-            return rpc(transmissionRpcBody)
-                    .thenFunction(HttpResponse::isOk);
+            Config config = configuration();
+            SessionState state = ensureSession(config);
+            return TransmissionRpcCodec.success(
+                    rpc(config,
+                            TransmissionRpcBody.torrentRemove(torrentsInfo.getId(), false), state).body(),
+                    state.dialect());
         } catch (Exception e) {
-            log.error(e.getMessage(), e);
+            log.error("Transmission 删除任务失败: {}", e.getMessage());
             return false;
         }
     }
@@ -167,90 +156,197 @@ public class Transmission implements BaseDownload {
     public Boolean rename(TorrentsInfo torrentsInfo) {
         String id = torrentsInfo.getId();
         String name = torrentsInfo.getName();
-
         if (ReUtil.contains("^\\w{40}$", name)) {
-            log.debug("{} 磁力链接还在获取原数据中", name);
             return false;
         }
-
         String reName = RenameCacheUtil.get(id);
         if (StrUtil.isBlank(reName)) {
-            log.debug("未获取到重命名 => id: {}", id);
             return false;
         }
-
         String extName = FileUtil.extName(name);
         if (StrUtil.isNotBlank(extName)) {
             reName = reName + "." + extName;
         }
 
-        TransmissionRpcBody transmissionRpcBody = TransmissionRpcBody.torrentRenamePath(id, name, reName);
-
-        log.info("重命名 {} ==> {}", name, reName);
-
-        Boolean ok = rpc(transmissionRpcBody)
-                .thenFunction(HttpResponse::isOk);
-        Assert.isTrue(ok, "重命名失败 {} ==> {}", name, reName);
-        RenameCacheUtil.remove(id);
-
-        for (int i = 0; i < 10; i++) {
-            ThreadUtil.sleep(1000);
-            Optional<TorrentsInfo> first = getTorrentsInfos()
-                    .stream()
-                    .filter(info -> info.getId().equals(id))
-                    .findFirst();
-            if (first.isEmpty()) {
-                break;
-            }
-            if (first.get().getName().equals(reName)) {
-                return true;
-            }
+        try {
+            Config config = configuration();
+            SessionState state = ensureSession(config);
+            boolean ok = TransmissionRpcCodec.success(
+                    rpc(config, TransmissionRpcBody.torrentRenamePath(id, name, reName), state).body(),
+                    state.dialect());
+            Assert.isTrue(ok, "重命名失败 {} ==> {}", name, reName);
+            RenameCacheUtil.remove(id);
+            return true;
+        } catch (Exception e) {
+            log.error("Transmission 重命名失败: {}", e.getMessage());
+            return false;
         }
-
-        log.warn("重命名貌似出现了问题？{}", reName);
-        return false;
     }
 
     @Override
     public Boolean addTags(TorrentsInfo torrentsInfo, String tag) {
-        String id = torrentsInfo.getId();
-        List<String> tags = new ArrayList<>(torrentsInfo.getTagList());
-        tags.add(tag);
-
-        TransmissionRpcBody transmissionRpcBody = TransmissionRpcBody.torrentSet(id, tags);
-        return rpc(transmissionRpcBody)
-                .thenFunction(HttpResponse::isOk);
+        try {
+            List<String> tags = new ArrayList<>(Optional.ofNullable(torrentsInfo.getTagList()).orElseGet(List::of));
+            if (!tags.contains(tag)) {
+                tags.add(tag);
+            }
+            Config config = configuration();
+            SessionState state = ensureSession(config);
+            return TransmissionRpcCodec.success(
+                    rpc(config, TransmissionRpcBody.torrentSet(torrentsInfo.getId(), tags), state).body(),
+                    state.dialect());
+        } catch (Exception e) {
+            log.error("Transmission 添加标签失败: {}", e.getMessage());
+            return false;
+        }
     }
 
     @Override
     public void updateTrackers(Set<String> trackers) {
-        log.info("Transmission暂时还不支持 自动更新Trackers");
+        log.info("Transmission 暂不支持自动更新 Trackers");
     }
 
     @Override
     public void setSavePath(TorrentsInfo torrentsInfo, String path) {
-        String id = torrentsInfo.getId();
-        TransmissionRpcBody transmissionRpcBody = TransmissionRpcBody.torrentSetLocation(id, path);
-        rpc(transmissionRpcBody)
-                .thenFunction(HttpResponse::isOk);
+        Config config = configuration();
+        SessionState state = ensureSession(config);
+        boolean ok = TransmissionRpcCodec.success(
+                rpc(config, TransmissionRpcBody.torrentSetLocation(torrentsInfo.getId(), path), state).body(),
+                state.dialect());
+        Assert.isTrue(ok, "Transmission 修改保存位置失败");
     }
 
-    /**
-     * rpc请求
-     *
-     * @param transmissionRpcBody 请求体
-     * @return HttpRequest
-     */
-    private HttpRequest rpc(TransmissionRpcBody transmissionRpcBody) {
-        Config config = ConfigUtil.CONFIG;
-        String downloadToolHost = config.getDownloadToolHost();
-        String username = config.getDownloadToolUsername();
-        String password = config.getDownloadToolPassword();
-        String authorization = StrFormatter.format("Basic {}", Base64.encode(username + ":" + password));
+    private SessionState ensureSession(Config config) {
+        String key = fingerprint(config);
+        SessionState cached = sessions.get(key);
+        if (cached != null) {
+            return cached;
+        }
 
-        return HttpReq.post(downloadToolHost + "/transmission/rpc")
-                .header(Header.AUTHORIZATION, authorization)
-                .header("X-Transmission-Session-Id", SESSION_ID)
-                .body(GsonStatic.toJson(transmissionRpcBody));
+        long id = requestIds.getAndIncrement();
+        RpcResponse modern = send(config, TransmissionRpcBody.sessionGet(), TransmissionDialect.JSON_RPC_2, "", id);
+        if (modern.status() >= 200 && modern.status() < 300 &&
+                TransmissionRpcCodec.looksLikeJsonRpc2(modern.body()) &&
+                TransmissionRpcCodec.success(modern.body(), TransmissionDialect.JSON_RPC_2)) {
+            SessionState state = new SessionState(TransmissionDialect.JSON_RPC_2, modern.sessionId());
+            sessions.putIfAbsent(key, state);
+            return sessions.get(key);
+        }
+
+        if (modern.status() == 401 || modern.status() == 403 || modern.status() >= 500) {
+            throw new IllegalStateException("Transmission RPC 协议探测失败 HTTP " + modern.status());
+        }
+
+        RpcResponse legacy = send(config, TransmissionRpcBody.sessionGet(), TransmissionDialect.LEGACY,
+                modern.sessionId(), requestIds.getAndIncrement());
+        if (legacy.status() < 200 || legacy.status() >= 300 ||
+                !TransmissionRpcCodec.success(legacy.body(), TransmissionDialect.LEGACY)) {
+            throw new IllegalStateException("Transmission RPC 协议探测失败");
+        }
+        SessionState state = new SessionState(TransmissionDialect.LEGACY,
+                StrUtil.blankToDefault(legacy.sessionId(), modern.sessionId()));
+        sessions.putIfAbsent(key, state);
+        return sessions.get(key);
+    }
+
+    private RpcResponse rpc(Config config, TransmissionRpcBody body, SessionState state) {
+        RpcResponse response = send(config, body, state.dialect(), state.sessionId(), requestIds.getAndIncrement());
+        if (response.sessionId() != null && !response.sessionId().equals(state.sessionId())) {
+            state.sessionId(response.sessionId());
+        }
+        if (response.status() < 200 || response.status() >= 300 ||
+                !TransmissionRpcCodec.success(response.body(), state.dialect())) {
+            throw new IllegalStateException("Transmission RPC 请求失败");
+        }
+        return response;
+    }
+
+    private RpcResponse send(Config config, TransmissionRpcBody body, TransmissionDialect dialect,
+                             String sessionId, long id) {
+        String currentSession = sessionId;
+        int sessionRetries = 0;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            String username = config.getDownloadToolUsername();
+            String password = config.getDownloadToolPassword();
+            HttpRequest request = HttpReq.post(config.getDownloadToolHost() + "/transmission/rpc", config)
+                    .header("Content-Type", "application/json")
+                    .header("X-Transmission-Session-Id", StrUtil.blankToDefault(currentSession, ""))
+                    .body(TransmissionRpcCodec.encode(body, dialect, id).toString());
+            if (StrUtil.isAllNotBlank(username, password)) {
+                request.header(Header.AUTHORIZATION,
+                        StrFormatter.format("Basic {}", Base64.encode(username + ":" + password)));
+            }
+            try (HttpResponse response = request.execute()) {
+                int status = response.getStatus();
+                String responseSession = response.header("X-Transmission-Session-Id");
+                if (status == 409 && StrUtil.isNotBlank(responseSession) && sessionRetries++ == 0) {
+                    currentSession = responseSession;
+                    attempt--;
+                    continue;
+                }
+                if (status >= 500 && status < 600 && attempt < 2) {
+                    ThreadUtil.sleep(250L * (1L << attempt));
+                    continue;
+                }
+                return new RpcResponse(status, response.body(),
+                        StrUtil.blankToDefault(responseSession, currentSession));
+            } catch (RuntimeException e) {
+                if (!retryable(e) || attempt == 2) {
+                    throw e;
+                }
+                ThreadUtil.sleep(250L * (1L << attempt));
+            }
+        }
+        throw new IllegalStateException("Transmission RPC 重试次数已耗尽");
+    }
+
+    private static String fingerprint(Config config) {
+        return SecureUtil.sha256(StrUtil.blankToDefault(config.getDownloadToolHost(), "") + "\0" +
+                StrUtil.blankToDefault(config.getDownloadToolUsername(), "") + "\0" +
+                StrUtil.blankToDefault(config.getDownloadToolPassword(), "") + "\0" +
+                String.valueOf(config.getProxy()) + "\0" +
+                StrUtil.blankToDefault(config.getProxyHost(), "") + "\0" +
+                String.valueOf(config.getProxyPort()));
+    }
+
+    private static boolean retryable(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof IOException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private Config configuration() {
+        Config configured = activeConfig;
+        return configured == null ? ConfigUtil.copy(ConfigUtil.CONFIG) : configured;
+    }
+
+    private static final class SessionState {
+        private final TransmissionDialect dialect;
+        private volatile String sessionId;
+
+        private SessionState(TransmissionDialect dialect, String sessionId) {
+            this.dialect = dialect;
+            this.sessionId = sessionId;
+        }
+
+        private TransmissionDialect dialect() {
+            return dialect;
+        }
+
+        private String sessionId() {
+            return sessionId;
+        }
+
+        private void sessionId(String value) {
+            this.sessionId = value;
+        }
+    }
+
+    private record RpcResponse(int status, String body, String sessionId) {
     }
 }

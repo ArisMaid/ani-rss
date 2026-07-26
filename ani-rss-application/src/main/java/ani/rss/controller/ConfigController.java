@@ -87,7 +87,10 @@ public class ConfigController extends BaseController {
     @Operation(summary = "代理测试")
     @PostMapping("/testProxy")
     public Result<ProxyTest> testProxy(@RequestParam("url") String url, @RequestBody Config config) {
-        return Result.success(configService.testProxy(url, config));
+        ProxyTest proxyTest = configService.testProxy(url, config);
+        return Boolean.TRUE.equals(proxyTest.getSuccess())
+                ? Result.success(proxyTest)
+                : Result.error(proxyTest);
     }
 
     @Auth

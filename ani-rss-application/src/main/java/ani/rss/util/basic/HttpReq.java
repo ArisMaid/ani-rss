@@ -46,16 +46,24 @@ public class HttpReq {
     }
 
     public static HttpRequest post(String url) {
+        return post(url, ConfigUtil.CONFIG);
+    }
+
+    public static HttpRequest post(String url, Config config) {
         HttpRequest req = HttpRequestPlus.post(url);
         config(req);
-        setProxy(req);
+        setProxy(req, config);
         return req;
     }
 
     public static HttpRequest get(String url) {
+        return get(url, ConfigUtil.CONFIG);
+    }
+
+    public static HttpRequest get(String url, Config config) {
         HttpRequest req = HttpRequestPlus.get(url);
         config(req);
-        setProxy(req);
+        setProxy(req, config);
         return req;
     }
 
@@ -90,13 +98,14 @@ public class HttpReq {
      */
     public static void setProxy(HttpRequest req, Config config) {
         String url = req.getUrl();
+        String safeUrl = sanitizeUrl(url);
         Boolean proxy = config.getProxy();
-        if (!proxy) {
-            log.debug("代理未开启 {}", url);
+        if (!Boolean.TRUE.equals(proxy)) {
+            log.debug("代理未开启 {}", safeUrl);
             return;
         }
 
-        if (!isProxy(url)) {
+        if (!isProxy(url, config)) {
             // 不进行代理
             return;
         }
@@ -104,7 +113,7 @@ public class HttpReq {
         String proxyHost = config.getProxyHost();
         Integer proxyPort = config.getProxyPort();
         if (StrUtil.isBlank(proxyHost) || Objects.isNull(proxyPort)) {
-            log.debug("代理参数不全 {}", url);
+            log.debug("代理参数不全 {}", safeUrl);
             return;
         }
 
@@ -112,21 +121,12 @@ public class HttpReq {
         String proxyPassword = config.getProxyPassword();
         try {
             req.setHttpProxy(proxyHost, proxyPort);
-            Authenticator.setDefault(
-                    new Authenticator() {
-                        @Override
-                        public PasswordAuthentication getPasswordAuthentication() {
-                            if (StrUtil.isAllNotBlank(proxyUsername, proxyPassword)) {
-                                return new PasswordAuthentication(proxyUsername, proxyPassword.toCharArray());
-                            }
-                            return null;
-                        }
-                    }
-            );
-            log.debug("使用代理 {}", url);
+            if (StrUtil.isAllNotBlank(proxyUsername, proxyPassword)) {
+                req.basicProxyAuth(proxyUsername, proxyPassword);
+            }
+            log.debug("使用代理 {}", safeUrl);
         } catch (Exception e) {
-            log.error("设置代理出现问题 {}", url);
-            log.error(e.getMessage(), e);
+            log.error("设置代理失败 {} type:{}", safeUrl, e.getClass().getSimpleName());
         }
     }
 
@@ -138,12 +138,12 @@ public class HttpReq {
     public static void assertStatus(HttpResponse response) {
         boolean ok = response.isOk();
         int status = response.getStatus();
-        String url = getUrl(response);
+        String url = sanitizeUrl(getUrl(response));
         Assert.isTrue(ok, "url: {}, status: {}", url, status);
     }
 
     public static void assertXml(HttpResponse response) {
-        String url = getUrl(response);
+        String url = sanitizeUrl(getUrl(response));
         String contentType = response.header(Header.CONTENT_TYPE);
         Assert.notBlank(contentType, "ContentType 为空, {}", url);
 
@@ -161,10 +161,16 @@ public class HttpReq {
      * @return 是否使用代理
      */
     public static Boolean isProxy(String url) {
-        String host = URLUtil.url(url).getHost();
+        return isProxy(url, ConfigUtil.CONFIG);
+    }
 
-        Config config = ConfigUtil.CONFIG;
+    public static Boolean isProxy(String url, Config config) {
+        String host = URLUtil.url(url).getHost();
         String proxyList = config.getProxyList();
+
+        if (StrUtil.isBlank(host) || StrUtil.isBlank(proxyList)) {
+            return false;
+        }
 
         String key = StrFormatter.format("proxyList:{}", SecureUtil.md5(proxyList));
 
@@ -189,6 +195,16 @@ public class HttpReq {
             }
         }
         return false;
+    }
+
+    public static String sanitizeUrl(String value) {
+        try {
+            URI uri = URI.create(value);
+            return new URI(uri.getScheme(), null, uri.getHost(), uri.getPort(),
+                    uri.getPath(), null, null).toString();
+        } catch (Exception ignored) {
+            return "<invalid-url>";
+        }
     }
 
 }

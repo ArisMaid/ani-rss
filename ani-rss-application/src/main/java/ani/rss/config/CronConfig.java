@@ -1,6 +1,7 @@
 package ani.rss.config;
 
 import ani.rss.download.BaseDownload;
+import ani.rss.download.DownloaderClientFactory;
 import ani.rss.entity.About;
 import ani.rss.entity.Config;
 import ani.rss.entity.web.ContentType;
@@ -10,7 +11,6 @@ import ani.rss.service.UpdateService;
 import ani.rss.util.basic.HttpReq;
 import ani.rss.util.other.ConfigUtil;
 import cn.hutool.core.lang.Assert;
-import cn.hutool.core.util.ClassUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.extra.spring.SpringUtil;
 import jakarta.annotation.Resource;
@@ -123,8 +123,7 @@ public class CronConfig {
         Assert.isTrue(!trackers.isEmpty(), "获取到0个trackers, 不进行更新");
 
         String download = config.getDownloadToolType();
-        Class<BaseDownload> loadClass = ClassUtil.loadClass("ani.rss.download." + download);
-        BaseDownload baseDownload = SpringUtil.getBean(loadClass);
+        BaseDownload baseDownload = DownloaderClientFactory.create(config);
         Boolean login = baseDownload.login(config);
         Assert.isTrue(login, "{} 登录失败", download);
         baseDownload.updateTrackers(trackers);

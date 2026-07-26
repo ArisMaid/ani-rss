@@ -24,4 +24,13 @@ public class ProxyTest implements Serializable {
      */
     @Schema(description = "耗时")
     private Long time;
+
+    @Schema(description = "是否成功")
+    private Boolean success;
+
+    @Schema(description = "失败类型")
+    private String failureType;
+
+    @Schema(description = "操作 ID")
+    private String operationId;
 }

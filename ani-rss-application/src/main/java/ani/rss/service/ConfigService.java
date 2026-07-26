@@ -2,13 +2,12 @@ package ani.rss.service;
 
 import ani.rss.commons.FileUtils;
 import ani.rss.commons.MavenUtils;
-import ani.rss.download.BaseDownload;
+import ani.rss.download.DownloaderClientFactory;
+import ani.rss.download.DownloaderClient;
 import ani.rss.entity.Config;
 import ani.rss.entity.GitInfo;
 import ani.rss.entity.Login;
 import ani.rss.entity.ProxyTest;
-import ani.rss.entity.web.Result;
-import ani.rss.entity.web.ResultCode;
 import ani.rss.start.BaseStart;
 import ani.rss.util.basic.HttpReq;
 import ani.rss.util.basic.LogUtil;
@@ -19,20 +18,17 @@ import cn.hutool.core.bean.copier.CopyOptions;
 import cn.hutool.core.codec.Base64;
 import cn.hutool.core.date.LocalDateTimeUtil;
 import cn.hutool.core.io.FileUtil;
-import cn.hutool.core.text.StrFormatter;
-import cn.hutool.core.util.ClassUtil;
 import cn.hutool.core.util.ObjectUtil;
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.extra.spring.SpringUtil;
 import cn.hutool.http.HttpRequest;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
-import org.jsoup.Jsoup;
 import org.springframework.boot.info.GitProperties;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.util.Objects;
+import java.util.UUID;
 
 @Slf4j
 @Service
@@ -152,29 +148,23 @@ public class ConfigService {
 
     public ProxyTest testProxy(String url, Config config) {
         url = Base64.decodeStr(url);
+        String operationId = UUID.randomUUID().toString();
 
-        log.info(url);
+        log.info("代理测试 operationId:{} url:{}", operationId, HttpReq.sanitizeUrl(url));
 
-        HttpRequest httpRequest = HttpReq.get(url);
-        HttpReq.setProxy(httpRequest, config);
+        HttpRequest httpRequest = HttpReq.get(url, config);
 
-        ProxyTest proxyTest = new ProxyTest();
-        Result<ProxyTest> result = Result.success(proxyTest);
+        ProxyTest proxyTest = new ProxyTest().setOperationId(operationId);
 
         long start = LocalDateTimeUtil.toEpochMilli(LocalDateTimeUtil.now());
-        try {
-            httpRequest
-                    .then(res -> {
-                        int status = res.getStatus();
-                        proxyTest.setStatus(status);
-
-                        String title = Jsoup.parse(res.body())
-                                .title();
-                        result.setMessage(StrFormatter.format("测试成功 {}", title));
-                    });
+        try (var response = httpRequest.execute()) {
+            int status = response.getStatus();
+            proxyTest.setStatus(status).setSuccess(status >= 200 && status < 300);
+            if (!proxyTest.getSuccess()) {
+                proxyTest.setFailureType("HTTP_" + status);
+            }
         } catch (Exception e) {
-            result.setMessage(e.getMessage())
-                    .setCode(ResultCode.HTTP_INTERNAL_ERROR);
+            proxyTest.setSuccess(false).setFailureType(e.getClass().getSimpleName());
         }
 
         long end = LocalDateTimeUtil.toEpochMilli(LocalDateTimeUtil.now());
@@ -184,10 +174,8 @@ public class ConfigService {
 
     public Boolean downloadLoginTest(Config config) {
         ConfigUtil.format(config);
-        String download = config.getDownloadToolType();
-        Class<BaseDownload> loadClass = ClassUtil.loadClass("ani.rss.download." + download);
-        BaseDownload baseDownload = SpringUtil.getBean(loadClass);
-        return baseDownload.login(true, config);
+        DownloaderClient client = DownloaderClientFactory.createTestClient(config);
+        return client.connect(true).isSuccess();
     }
 
 

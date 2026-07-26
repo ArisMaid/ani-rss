@@ -1,6 +1,5 @@
 package ani.rss.util.basic;
 
-import ani.rss.commons.ExceptionUtils;
 import cn.hutool.core.net.url.UrlBuilder;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
@@ -46,8 +45,8 @@ public class HttpRequestPlus extends HttpRequest {
         try {
             return super.execute(isAsync);
         } catch (Exception e) {
-            String message = ExceptionUtils.getMessage(e);
-            log.error("url: {}, error: {}", url, message);
+            log.error("HTTP request failed url:{} type:{}", HttpReq.sanitizeUrl(url),
+                    e.getClass().getSimpleName());
             throw e;
         }
     }

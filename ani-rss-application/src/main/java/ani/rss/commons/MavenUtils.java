@@ -45,8 +45,15 @@ public class MavenUtils {
         if (Objects.nonNull(version)) {
             return version;
         }
-        BuildProperties buildProperties = SpringUtil.getBean(BuildProperties.class);
-        version = buildProperties.getVersion();
+        try {
+            BuildProperties buildProperties = SpringUtil.getBean(BuildProperties.class);
+            version = buildProperties.getVersion();
+        } catch (RuntimeException ignored) {
+            Package packageInfo = MavenUtils.class.getPackage();
+            String implementationVersion = packageInfo == null ? null : packageInfo.getImplementationVersion();
+            version = StrUtil.blankToDefault(implementationVersion,
+                    System.getProperty("ani-rss.version", "dev"));
+        }
         return version;
     }
 

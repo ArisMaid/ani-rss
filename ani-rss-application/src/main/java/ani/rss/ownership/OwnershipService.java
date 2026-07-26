@@ -13,7 +13,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -59,6 +61,11 @@ public class OwnershipService {
     }
 
     public Optional<DownloadOwnership> findOwned(TorrentsInfo task) {
+        return findManaged(task).filter(ownership -> ownership.state() == OwnershipState.ACTIVE ||
+                ownership.state() == OwnershipState.LEGACY_ADOPTED);
+    }
+
+    public Optional<DownloadOwnership> findManaged(TorrentsInfo task) {
         if (task == null) {
             return Optional.empty();
         }
@@ -68,6 +75,7 @@ public class OwnershipService {
                         task.getHash())
                 .filter(ownership -> ownership.state() == OwnershipState.ACTIVE ||
                         ownership.state() == OwnershipState.LEGACY_ADOPTED ||
+                        ownership.state() == OwnershipState.PENDING ||
                         ownership.state() == OwnershipState.QUARANTINED);
     }
 
@@ -107,6 +115,11 @@ public class OwnershipService {
     public DownloadOwnership requireOwned(TorrentsInfo task) {
         return findOwned(task).orElseThrow(() ->
                 new IllegalStateException("任务未通过 ANI-RSS 归属验证，已拒绝破坏性操作"));
+    }
+
+    public DownloadOwnership requireManagedTask(TorrentsInfo task) {
+        return findManaged(task).orElseThrow(() ->
+                new IllegalStateException("任务未通过 ANI-RSS 归属验证，已拒绝远端操作"));
     }
 
     public List<DownloadOwnership> listBySubscription(String subscriptionId) {
@@ -152,6 +165,7 @@ public class OwnershipService {
     public void moveSubscriptionFiles(String subscriptionId, String newRootValue) {
         Path newRoot = Path.of(newRootValue).toAbsolutePath().normalize();
         List<MovedFile> moved = new ArrayList<>();
+        Map<String, String> newRoots = new LinkedHashMap<>();
         try {
             for (DownloadOwnership ownership : repository.listBySubscription(subscriptionId)) {
                 if (ownership.state() != OwnershipState.ACTIVE && ownership.state() != OwnershipState.LEGACY_ADOPTED) {
@@ -174,8 +188,9 @@ public class OwnershipService {
                     Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
                     moved.add(new MovedFile(source, target));
                 }
-                repository.updateSaveRoot(ownership.ownershipId(), newRoot.toString());
+                newRoots.put(ownership.ownershipId(), newRoot.toString());
             }
+            repository.updateSaveRoots(newRoots);
         } catch (Exception e) {
             for (int i = moved.size() - 1; i >= 0; i--) {
                 MovedFile file = moved.get(i);

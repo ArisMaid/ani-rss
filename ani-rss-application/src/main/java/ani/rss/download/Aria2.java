@@ -9,6 +9,7 @@ import ani.rss.entity.torrent.Aria2RpcBody;
 import ani.rss.entity.torrent.Aria2TorrentsInfo;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.enums.TorrentsStateEnum;
+import ani.rss.ownership.OwnershipService;
 import ani.rss.util.basic.HttpReq;
 import ani.rss.util.basic.RenameCacheUtil;
 import ani.rss.util.other.ConfigUtil;
@@ -17,12 +18,10 @@ import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.lang.Assert;
 import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.extra.spring.SpringUtil;
 import cn.hutool.http.HttpRequest;
-import cn.hutool.http.HttpResponse;
 import com.google.gson.JsonObject;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.util.*;
@@ -31,12 +30,19 @@ import java.util.*;
  * Aria2
  */
 @Slf4j
-@Service
-@RequiredArgsConstructor
 public class Aria2 implements BaseDownload {
+    private volatile Config config;
+
+    public Aria2() {
+    }
+
+    public Aria2(Config config) {
+        this.config = ani.rss.util.other.ConfigUtil.copy(config);
+    }
 
     @Override
     public Boolean login(Boolean test, Config config) {
+        this.config = ani.rss.util.other.ConfigUtil.copy(config);
         String host = config.getDownloadToolHost();
         String password = config.getDownloadToolPassword();
 
@@ -51,8 +57,7 @@ public class Aria2 implements BaseDownload {
         params.remove(0);
         params.add("token:" + password);
 
-        return rpc(aria2RpcBody)
-                .thenFunction(HttpResponse::isOk);
+        return rpcSuccess(aria2RpcBody, this.config);
     }
 
     @Override
@@ -64,18 +69,21 @@ public class Aria2 implements BaseDownload {
             torrentsInfos.addAll(getTorrentsInfos(Aria2RpcBody.tellWaiting()));
             torrentsInfos.addAll(getTorrentsInfos(Aria2RpcBody.tellStopped()));
         } catch (Exception e) {
-            log.error(e.getMessage(), e);
+            log.warn("读取 Aria2 任务失败 type:{}", e.getClass().getSimpleName());
         }
-        return torrentsInfos;
+        return ownedTasks(torrentsInfos);
     }
 
     public List<TorrentsInfo> getTorrentsInfos(Aria2RpcBody aria2RpcBody) {
-        return rpc(aria2RpcBody)
+        return rpc(aria2RpcBody, configuration())
                 .thenFunction(res -> {
                     HttpReq.assertStatus(res);
                     Aria2TorrentsInfo aria2TorrentsInfo = GsonStatic.fromJson(res.body(), Aria2TorrentsInfo.class);
 
                     List<Aria2TorrentsInfo.Torrent> result = aria2TorrentsInfo.getResult();
+                    if (result == null) {
+                        return List.of();
+                    }
 
                     return result
                             .stream()
@@ -112,7 +120,7 @@ public class Aria2 implements BaseDownload {
 
         Aria2RpcBody aria2RpcBody = Aria2RpcBody.addTorrent(torrentFile, savePath);
 
-        String id = rpc(aria2RpcBody)
+        String id = rpc(aria2RpcBody, configuration())
                 .thenFunction(res ->
                         GsonStatic.fromJson(res.body(), JsonObject.class)
                                 .get("result").getAsString()
@@ -142,13 +150,14 @@ public class Aria2 implements BaseDownload {
     public Boolean delete(TorrentsInfo torrentsInfo, Boolean deleteFiles) {
         String id = torrentsInfo.getId();
 
-        Aria2RpcBody aria2RpcBody = Aria2RpcBody.removeDownloadResult(id);
+        Aria2RpcBody aria2RpcBody = torrentsInfo.getState() == TorrentsStateEnum.stoppedUP
+                ? Aria2RpcBody.removeDownloadResult(id)
+                : Aria2RpcBody.remove(id);
 
         try {
-            return rpc(aria2RpcBody)
-                    .thenFunction(HttpResponse::isOk);
+            return rpcSuccess(aria2RpcBody, configuration());
         } catch (Exception e) {
-            log.error(e.getMessage(), e);
+            log.warn("删除 Aria2 任务失败 type:{}", e.getClass().getSimpleName());
             return false;
         }
     }
@@ -215,14 +224,7 @@ public class Aria2 implements BaseDownload {
 
         Aria2RpcBody aria2RpcBody = Aria2RpcBody.changeGlobalOption(trackersStr);
 
-        rpc(aria2RpcBody)
-                .then(res -> {
-                    if (res.isOk()) {
-                        log.info("Aria2 更新Trackers完成 共{}条", trackers.size());
-                        return;
-                    }
-                    log.error("Aria2 更新Trackers失败 {}", res.getStatus());
-                });
+        Assert.isTrue(rpcSuccess(aria2RpcBody, configuration()), "Aria2 更新 Trackers 失败");
     }
 
     @Override
@@ -236,10 +238,39 @@ public class Aria2 implements BaseDownload {
      * @param aria2RpcBody 请求体
      * @return HttpRequest
      */
-    private HttpRequest rpc(Aria2RpcBody aria2RpcBody) {
-        Config config = ConfigUtil.CONFIG;
+    private HttpRequest rpc(Aria2RpcBody aria2RpcBody, Config config) {
+        aria2RpcBody.setId(StrUtil.blankToDefault(config.getUuid(), UUID.randomUUID().toString()));
+        List<Object> params = aria2RpcBody.getParams();
+        String token = "token:" + StrUtil.blankToDefault(config.getDownloadToolPassword(), "");
+        if (params.isEmpty()) {
+            params.add(token);
+        } else {
+            params.set(0, token);
+        }
         String host = config.getDownloadToolHost();
-        return HttpReq.post(host + "/jsonrpc")
+        return HttpReq.post(host + "/jsonrpc", config)
                 .body(GsonStatic.toJson(aria2RpcBody));
+    }
+
+    private boolean rpcSuccess(Aria2RpcBody body, Config config) {
+        return rpc(body, config).thenFunction(response -> {
+            HttpReq.assertStatus(response);
+            JsonObject json = GsonStatic.fromJson(response.body(), JsonObject.class);
+            return !json.has("error") && json.has("result");
+        });
+    }
+
+    private List<TorrentsInfo> ownedTasks(List<TorrentsInfo> tasks) {
+        try {
+            OwnershipService ownershipService = SpringUtil.getBean(OwnershipService.class);
+            return tasks.stream().filter(task -> ownershipService.findManaged(task).isPresent()).toList();
+        } catch (RuntimeException ignored) {
+            return List.of();
+        }
+    }
+
+    private Config configuration() {
+        Config configured = config;
+        return configured == null ? ConfigUtil.copy(ConfigUtil.CONFIG) : configured;
     }
 }

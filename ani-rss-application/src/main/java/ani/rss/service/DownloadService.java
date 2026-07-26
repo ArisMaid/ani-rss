@@ -9,6 +9,7 @@ import ani.rss.entity.Config;
 import ani.rss.entity.Item;
 import ani.rss.entity.StandbyRss;
 import ani.rss.entity.torrent.TorrentsInfo;
+import ani.rss.download.DownloaderResult;
 import ani.rss.enums.NotificationStatusEnum;
 import ani.rss.enums.StringEnum;
 import ani.rss.enums.TorrentsStateEnum;
@@ -381,22 +382,26 @@ public class DownloadService {
         Config config = ConfigUtil.CONFIG;
         DownloadOwnership ownership = ownershipService.registerPending(ani, item, savePath);
 
-        Integer downloadRetry = config.getDownloadRetry();
+        Integer downloadRetry = ObjectUtil.defaultIfNull(config.getDownloadRetry(), 1);
         for (int i = 1; i <= downloadRetry; i++) {
-            try {
-                if (TorrentUtil.DOWNLOAD.download(ani, item, savePath, torrentFile)) {
-                    TorrentsInfo task = TorrentUtil.DOWNLOAD.getTorrentsInfos().stream()
-                            .filter(info -> StrUtil.equalsIgnoreCase(info.getHash(), item.getInfoHash()))
-                            .findFirst()
-                            .orElse(null);
-                    ownershipService.activate(ownership.ownershipId(), task);
-                    return;
-                }
-            } catch (Exception e) {
-                String message = ExceptionUtils.getMessage(e);
-                log.error(message, e);
+            DownloaderResult<Void> result = TorrentUtil.CLIENT.download(ani, item, savePath, torrentFile);
+            if (result.isSuccess()) {
+                DownloaderResult<List<TorrentsInfo>> tasksResult = TorrentUtil.CLIENT.torrents();
+                List<TorrentsInfo> observedTasks = tasksResult.value() == null ? List.of() : tasksResult.value();
+                TorrentsInfo task = observedTasks.stream()
+                        .filter(info -> StrUtil.equalsIgnoreCase(info.getHash(), item.getInfoHash()) ||
+                                StrUtil.equals(info.getId(), result.remoteTaskId()))
+                        .findFirst()
+                        .orElse(null);
+                ownershipService.activate(ownership.ownershipId(), task);
+                return;
             }
-            log.error("{} 下载失败将进行重试, 当前重试次数为{}次", name, i);
+            log.error("{} 下载失败 code:{} retryable:{}", name, result.errorCode(), result.retryable());
+            if (!result.retryable()) {
+                break;
+            }
+            long backoffSeconds = Math.min(30L, 1L << Math.min(i - 1, 5));
+            ThreadUtil.sleep(backoffSeconds * 1000L);
         }
 
         ownershipService.markFailed(ownership.ownershipId());

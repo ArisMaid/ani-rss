@@ -81,6 +81,12 @@ public class Aria2RpcBody implements Serializable {
         return aria2RpcBody;
     }
 
+    public static Aria2RpcBody remove(String id) {
+        Aria2RpcBody aria2RpcBody = getInstance(Aria2MethodEnum.remove);
+        aria2RpcBody.getParams().add(id);
+        return aria2RpcBody;
+    }
+
     public static Aria2RpcBody tellActive() {
         Aria2RpcBody aria2RpcBody = getInstance(Aria2MethodEnum.tellActive);
         List<Object> params = aria2RpcBody.getParams();

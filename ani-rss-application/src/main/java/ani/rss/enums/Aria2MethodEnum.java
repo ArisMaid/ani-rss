@@ -5,6 +5,7 @@ public enum Aria2MethodEnum {
     addUri,
     changeGlobalOption,
     getGlobalStat,
+    remove,
     removeDownloadResult,
     tellActive,
     tellStopped,

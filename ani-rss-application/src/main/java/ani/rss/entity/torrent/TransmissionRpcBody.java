@@ -14,14 +14,12 @@ import java.util.Map;
 @Data
 @Accessors(chain = true)
 public class TransmissionRpcBody implements Serializable {
-    private String tag;
-    private String method;
+    private TransmissionMethodEnum method;
     private Map<String, Object> arguments;
 
     public static TransmissionRpcBody getInstance(TransmissionMethodEnum method) {
         TransmissionRpcBody transmissionRpcBody = new TransmissionRpcBody();
-        transmissionRpcBody.setTag("");
-        transmissionRpcBody.setMethod(method.getValue());
+        transmissionRpcBody.setMethod(method);
         transmissionRpcBody.setArguments(new HashMap<>());
         return transmissionRpcBody;
     }
@@ -61,11 +59,15 @@ public class TransmissionRpcBody implements Serializable {
     }
 
     public static TransmissionRpcBody torrentRemove(String id, Boolean deleteLocalData) {
-        TransmissionRpcBody transmissionRpcBody = getInstance(TransmissionMethodEnum.torrentAdd);
+        TransmissionRpcBody transmissionRpcBody = getInstance(TransmissionMethodEnum.torrentRemove);
         Map<String, Object> arguments = transmissionRpcBody.getArguments();
         arguments.put("ids", List.of(id));
         arguments.put("delete-local-data", deleteLocalData);
         return transmissionRpcBody;
+    }
+
+    public static TransmissionRpcBody sessionGet() {
+        return getInstance(TransmissionMethodEnum.sessionGet);
     }
 
     public static TransmissionRpcBody torrentRenamePath(String id, String path, String name) {

@@ -8,6 +8,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 @Repository
@@ -109,6 +110,24 @@ public class OwnershipRepository {
                 statement.executeUpdate();
                 return null;
             }
+        });
+    }
+
+    public void updateSaveRoots(Map<String, String> roots) {
+        DatabaseManager.transaction(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE download_ownership SET save_root = ?, updated_at = ? WHERE ownership_id = ?
+                    """)) {
+                long now = System.currentTimeMillis();
+                for (Map.Entry<String, String> entry : roots.entrySet()) {
+                    statement.setString(1, entry.getValue());
+                    statement.setLong(2, now);
+                    statement.setString(3, entry.getKey());
+                    statement.addBatch();
+                }
+                statement.executeBatch();
+            }
+            return null;
         });
     }
 

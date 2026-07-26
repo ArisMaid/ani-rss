@@ -1,13 +1,11 @@
 package ani.rss.download;
 
-import ani.rss.commons.ExceptionUtils;
 import ani.rss.commons.FileUtils;
 import ani.rss.commons.GsonStatic;
 import ani.rss.entity.*;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.entity.web.Header;
 import ani.rss.enums.NotificationStatusEnum;
-import ani.rss.enums.StringEnum;
 import ani.rss.util.basic.HttpReq;
 import ani.rss.util.other.NotificationUtil;
 import ani.rss.util.other.TorrentUtil;
@@ -17,34 +15,33 @@ import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.lang.Assert;
 import cn.hutool.core.text.StrFormatter;
-import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ObjectUtil;
 import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
-import cn.hutool.http.Method;
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
 
 import java.io.File;
-import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Stream;
 
 @Slf4j
-@Service
-@RequiredArgsConstructor
 public class OpenList implements BaseDownload {
     private Config config;
 
+    public OpenList() {
+    }
+
+    public OpenList(Config config) {
+        this.config = ani.rss.util.other.ConfigUtil.copy(config);
+    }
+
     @Override
     public Boolean login(Boolean test, Config config) {
-        this.config = config;
+        this.config = ani.rss.util.other.ConfigUtil.copy(config);
         String host = config.getDownloadToolHost();
         String password = config.getDownloadToolPassword();
         if (StrUtil.isBlank(host) || StrUtil.isBlank(password)) {
@@ -56,24 +53,10 @@ public class OpenList implements BaseDownload {
         String provider = config.getProvider();
         Assert.notBlank(provider, "请选择 Driver");
         try {
-            return postApi("me")
-                    .setMethod(Method.GET)
-                    .thenFunction(res -> {
-                        if (!res.isOk()) {
-                            log.error("登录 OpenList 失败");
-                            return false;
-                        }
-                        JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                        if (jsonObject.get("code").getAsInt() != 200) {
-                            log.error("登录 OpenList 失败");
-                            return false;
-                        }
-                        return true;
-                    });
+            executeApi(getApi("me"), "login");
+            return true;
         } catch (Exception e) {
-            String message = ExceptionUtils.getMessage(e);
-            log.error(e.getMessage(), e);
-            log.error("登录 OpenList 失败 {}", message);
+            log.warn("登录 OpenList 失败 type:{}", e.getClass().getSimpleName());
         }
         return false;
     }
@@ -92,28 +75,9 @@ public class OpenList implements BaseDownload {
         String magnet = TorrentUtil.getMagnet(torrentFile);
         String reName = item.getReName();
         String path = savePath + "/" + reName;
-        Boolean standbyRss = config.getStandbyRss();
         Boolean delete = config.getDelete();
-        Boolean coexist = config.getCoexist();
         try {
             mkdir(path);
-
-            // 删除残留任务
-            deleteResidualTasks(magnet);
-
-            // 洗版，删除备 用RSS 所下载的视频
-            if (standbyRss && delete && !coexist) {
-                String s = ReUtil.get(StringEnum.SEASON_REG, reName, 0);
-                String finalSavePath = savePath;
-                fsList(savePath, true)
-                        .stream()
-                        .map(OpenListFileInfo::getName)
-                        .filter(name -> name.contains(s))
-                        .forEach(name -> {
-                            fsRemove(finalSavePath, List.of(name));
-                            log.info("已开启备用RSS, 自动删除 {}/{}", finalSavePath, name);
-                        });
-            }
             String tid;
             try {
                 tid = fsAddOfflineDownload(magnet, path);
@@ -264,7 +228,7 @@ public class OpenList implements BaseDownload {
             );
             return true;
         } catch (Exception e) {
-            log.error(e.getMessage(), e);
+            log.warn("OpenList 下载流程失败 type:{}", e.getClass().getSimpleName());
         }
         return false;
     }
@@ -300,36 +264,10 @@ public class OpenList implements BaseDownload {
      * @param path 路径
      */
     public void mkdir(String path) {
-        postApi("fs/mkdir")
-                .body(GsonStatic.toJson(Map.of(
-                        "path", path
-                )))
-                .then(res -> {
-                    JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                    int code = jsonObject.get("code").getAsInt();
-                    String message = jsonObject.get("message").getAsString();
-                    if (code == 200) {
-                        log.info("创建文件夹: {}", path);
-                        return;
-                    }
-
-                    if (!message.startsWith("failed to check if dir exists")) {
-                        return;
-                    }
-
-                    Path pathObj = Path.of(path);
-
-                    if (pathObj.getNameCount() <= 1) {
-                        return;
-                    }
-
-                    String parentPath = pathObj
-                            .getParent()
-                            .toString()
-                            .replace('\\', '/');
-                    mkdir(parentPath);
-                    mkdir(path);
-                });
+        HttpRequest request = postApi("fs/mkdir")
+                .body(GsonStatic.toJson(Map.of("path", path)));
+        executeApi(request, "fs/mkdir");
+        log.info("创建 OpenList 文件夹");
     }
 
     /**
@@ -340,12 +278,13 @@ public class OpenList implements BaseDownload {
      * @param names  文件名
      */
     public void fsMove(String srcDir, String dstDir, List<String> names) {
-        postApi("fs/move")
+        HttpRequest request = postApi("fs/move")
                 .body(GsonStatic.toJson(Map.of(
                         "src_dir", srcDir,
                         "dst_dir", dstDir,
                         "names", names
-                ))).then(res -> log.info(res.body()));
+                )));
+        executeApi(request, "fs/move");
     }
 
     /**
@@ -355,11 +294,12 @@ public class OpenList implements BaseDownload {
      * @param names 文件名
      */
     public void fsRemove(String dir, List<String> names) {
-        postApi("fs/remove")
+        HttpRequest request = postApi("fs/remove")
                 .body(GsonStatic.toJson(Map.of(
                         "dir", dir,
                         "names", names
-                ))).then(HttpResponse::isOk);
+                )));
+        executeApi(request, "fs/remove");
     }
 
     /**
@@ -369,11 +309,12 @@ public class OpenList implements BaseDownload {
      * @param srcDir  目录
      */
     public void fsBatchRename(List<Map<String, String>> mapList, String srcDir) {
-        postApi("fs/batch_rename")
+        HttpRequest request = postApi("fs/batch_rename")
                 .body(GsonStatic.toJson(Map.of(
                         "src_dir", srcDir,
                         "rename_objects", mapList
-                ))).then(res -> log.info(res.body()));
+                )));
+        executeApi(request, "fs/batch_rename");
     }
 
     /**
@@ -384,23 +325,18 @@ public class OpenList implements BaseDownload {
      * @return tid
      */
     public String fsAddOfflineDownload(String magnet, String path) {
-        return postApi("fs/add_offline_download")
+        HttpRequest request = postApi("fs/add_offline_download")
                 .body(GsonStatic.toJson(Map.of(
                         "path", path,
                         "urls", List.of(magnet),
                         "tool", config.getProvider(),
                         "delete_policy", "delete_on_upload_succeed"
-                )))
-                .thenFunction(res -> {
-                    HttpReq.assertStatus(res);
-                    JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                    log.debug(jsonObject.toString());
-                    Assert.isTrue(jsonObject.get("code").getAsInt() == 200);
-                    return jsonObject.getAsJsonObject("data")
-                            .getAsJsonArray("tasks")
-                            .get(0).getAsJsonObject()
-                            .get("id").getAsString();
-                });
+                )));
+        JsonObject jsonObject = executeApi(request, "fs/add_offline_download");
+        return jsonObject.getAsJsonObject("data")
+                .getAsJsonArray("tasks")
+                .get(0).getAsJsonObject()
+                .get("id").getAsString();
     }
 
     /**
@@ -410,42 +346,30 @@ public class OpenList implements BaseDownload {
      * @return 文件列表
      */
     public List<OpenListFileInfo> fsList(String path, Boolean refresh) {
-        try {
-            return postApi("fs/list")
+        HttpRequest request = postApi("fs/list")
                     .body(GsonStatic.toJson(Map.of(
                             "path", path,
                             "page", 1,
                             "per_page", 0,
                             "refresh", refresh
-                    )))
-                    .thenFunction(res -> {
-                        JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                        int code = jsonObject.get("code").getAsInt();
-                        if (code != 200) {
-                            return List.of();
-                        }
-                        JsonElement data = jsonObject.get("data");
-                        if (Objects.isNull(data) || data.isJsonNull()) {
-                            return List.of();
-                        }
-                        JsonElement content = data.getAsJsonObject()
-                                .get("content");
-                        if (Objects.isNull(content) || content.isJsonNull()) {
-                            return List.of();
-                        }
-                        List<OpenListFileInfo> infos = GsonStatic.fromJsonList(content.getAsJsonArray(), OpenListFileInfo.class);
-                        for (OpenListFileInfo info : infos) {
-                            info.setPath(path);
-                        }
-                        return ListUtil.sort(new ArrayList<>(infos), Comparator.comparing(fileInfo -> {
-                            Long size = fileInfo.getSize();
-                            return Long.MAX_VALUE - ObjectUtil.defaultIfNull(size, 0L);
-                        }));
-                    });
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
+                    )));
+        JsonObject jsonObject = executeApi(request, "fs/list");
+        JsonElement data = jsonObject.get("data");
+        if (Objects.isNull(data) || data.isJsonNull()) {
+            return List.of();
         }
-        return List.of();
+        JsonElement content = data.getAsJsonObject().get("content");
+        if (Objects.isNull(content) || content.isJsonNull()) {
+            return List.of();
+        }
+        List<OpenListFileInfo> infos = GsonStatic.fromJsonList(content.getAsJsonArray(), OpenListFileInfo.class);
+        for (OpenListFileInfo info : infos) {
+            info.setPath(path);
+        }
+        return ListUtil.sort(new ArrayList<>(infos), Comparator.comparing(fileInfo -> {
+            Long size = fileInfo.getSize();
+            return Long.MAX_VALUE - ObjectUtil.defaultIfNull(size, 0L);
+        }));
     }
 
     /**
@@ -455,18 +379,14 @@ public class OpenList implements BaseDownload {
      * @return 任务信息
      */
     public Optional<OpenListTaskInfo> taskInfo(String tid) {
-        try {
-            OpenListTaskInfo taskInfo = postApi("task/offline_download/info?tid=" + tid)
-                    .thenFunction(res -> {
-                        JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                        JsonObject data = jsonObject.get("data").getAsJsonObject();
-                        return GsonStatic.fromJson(data, OpenListTaskInfo.class);
-                    });
-            return Optional.of(taskInfo);
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
+        JsonObject jsonObject = executeApi(
+                postApi("task/offline_download/info").form("tid", tid),
+                "task/offline_download/info");
+        JsonElement data = jsonObject.get("data");
+        if (data == null || data.isJsonNull()) {
+            return Optional.empty();
         }
-        return Optional.empty();
+        return Optional.of(GsonStatic.fromJson(data, OpenListTaskInfo.class));
     }
 
     /**
@@ -498,12 +418,9 @@ public class OpenList implements BaseDownload {
      * @return 任务列表
      */
     public List<OpenListTaskInfo> taskUnDoneList() {
-        return getApi("task/offline_download/undone")
-                .thenFunction(res -> {
-                    JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                    JsonArray jsonArray = jsonObject.get("data").getAsJsonArray();
-                    return GsonStatic.fromJsonList(jsonArray, OpenListTaskInfo.class);
-                });
+        JsonObject response = executeApi(getApi("task/offline_download/undone"),
+                "task/offline_download/undone");
+        return taskList(response);
     }
 
     /**
@@ -512,12 +429,9 @@ public class OpenList implements BaseDownload {
      * @return 任务列表
      */
     public List<OpenListTaskInfo> taskDoneList() {
-        return getApi("task/offline_download/done")
-                .thenFunction(res -> {
-                    JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                    JsonArray jsonArray = jsonObject.get("data").getAsJsonArray();
-                    return GsonStatic.fromJsonList(jsonArray, OpenListTaskInfo.class);
-                });
+        JsonObject response = executeApi(getApi("task/offline_download/done"),
+                "task/offline_download/done");
+        return taskList(response);
     }
 
     /**
@@ -526,9 +440,8 @@ public class OpenList implements BaseDownload {
      * @param tid 任务id
      */
     public void taskRetry(String tid) {
-        postApi("task/offline_download/retry")
-                .form("tid", tid)
-                .thenFunction(HttpResponse::isOk);
+        executeApi(postApi("task/offline_download/retry").form("tid", tid),
+                "task/offline_download/retry");
     }
 
     /**
@@ -537,9 +450,8 @@ public class OpenList implements BaseDownload {
      * @param tid 任务id
      */
     public void taskDelete(String tid) {
-        postApi("task/offline_download/delete_some")
-                .body(GsonStatic.toJson(List.of(tid)))
-                .thenFunction(HttpResponse::isOk);
+        executeApi(postApi("task/offline_download/delete_some")
+                .body(GsonStatic.toJson(List.of(tid))), "task/offline_download/delete_some");
     }
 
     /**
@@ -571,10 +483,9 @@ public class OpenList implements BaseDownload {
      * @return HttpRequest
      */
     public HttpRequest getApi(String action) {
-        ThreadUtil.sleep(2000);
         String host = config.getDownloadToolHost();
         String password = config.getDownloadToolPassword();
-        return HttpReq.get(host + "/api/" + action)
+        return HttpReq.get(host + "/api/" + action, config)
                 .header(Header.AUTHORIZATION, password);
     }
 
@@ -585,11 +496,33 @@ public class OpenList implements BaseDownload {
      * @return HttpRequest
      */
     public HttpRequest postApi(String action) {
-        ThreadUtil.sleep(2000);
         String host = config.getDownloadToolHost();
         String password = config.getDownloadToolPassword();
-        return HttpReq.post(host + "/api/" + action)
+        return HttpReq.post(host + "/api/" + action, config)
                 .header(Header.AUTHORIZATION, password);
+    }
+
+    private JsonObject executeApi(HttpRequest request, String action) {
+        try (HttpResponse response = request.execute()) {
+            int status = response.getStatus();
+            if (status < 200 || status >= 300) {
+                throw new IllegalStateException("OpenList " + action + " HTTP " + status);
+            }
+            JsonObject json = GsonStatic.fromJson(response.body(), JsonObject.class);
+            if (json == null || !json.has("code") || json.get("code").getAsInt() != 200) {
+                int code = json != null && json.has("code") ? json.get("code").getAsInt() : -1;
+                throw new IllegalStateException("OpenList " + action + " code " + code);
+            }
+            return json;
+        }
+    }
+
+    private static List<OpenListTaskInfo> taskList(JsonObject response) {
+        JsonElement data = response.get("data");
+        if (data == null || data.isJsonNull()) {
+            return List.of();
+        }
+        return GsonStatic.fromJsonList(data.getAsJsonArray(), OpenListTaskInfo.class);
     }
 
 }

@@ -133,15 +133,21 @@ public interface BaseDownload {
      * @return tags
      */
     default List<String> newTags(Ani ani, Item item) {
+        return newTags(ani, item, ConfigUtil.copy(ConfigUtil.CONFIG));
+    }
+
+    /** Build tags from the immutable configuration snapshot owned by this client. */
+    default List<String> newTags(Ani ani, Item item, Config config) {
         Boolean master = item.getMaster();
         String subgroup = item.getSubgroup();
         subgroup = StrUtil.blankToDefault(subgroup, "未知字幕组");
 
-        Config config = ConfigUtil.CONFIG;
-
         List<String> tags = new ArrayList<>();
 
         tags.add(TorrentsTagEnum.ANI_RSS.getValue());
+        if (StrUtil.isNotBlank(ani.getId())) {
+            tags.add(ani.getId());
+        }
         tags.add(subgroup);
         if (!master) {
             tags.add(TorrentsTagEnum.STANDBY_RSS.getValue());

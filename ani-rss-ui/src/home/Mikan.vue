@@ -77,7 +77,7 @@
                                       :key="`${listEpoch}:${it.url}:${itemIndex}`" :name="it.url">
                       <template #title>
                         <div class="flex collapse-title">
-                          <SafeImage :src-url="it['cover']" class="cover" @click.stop="open(it.url)"/>
+                          <SafeImage :src-url="it['cover']" :lazy="true" class="cover" @click.stop="open(it.url)"/>
                           <div class="flex collapse-title">
                             <el-text :truncated="false" line-clamp="1" size="small"
                                      class="title-text">

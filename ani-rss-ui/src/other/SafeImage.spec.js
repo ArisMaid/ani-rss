@@ -37,4 +37,41 @@ describe('SafeImage', () => {
 
     expect(wrapper.find('img').exists()).toBe(false)
   })
+
+  it('defers a lazy cache request until its cover enters the viewport', async () => {
+    let intersect = () => {}
+    const observe = vi.fn()
+    const disconnect = vi.fn()
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(callback) {
+        intersect = () => callback([{isIntersecting: true}])
+      }
+
+      observe(...args) {
+        observe(...args)
+      }
+
+      disconnect(...args) {
+        disconnect(...args)
+      }
+    })
+    try {
+      const wrapper = mount(SafeImage, {
+        props: {srcUrl: 'https://example.test/cover.png', lazy: true}
+      })
+
+      await flushPromises()
+      expect(observe).toHaveBeenCalledTimes(1)
+      expect(http.cacheImage).not.toHaveBeenCalled()
+
+      intersect()
+      await flushPromises()
+
+      expect(http.cacheImage).toHaveBeenCalledWith('https://example.test/cover.png')
+      expect(disconnect).toHaveBeenCalledTimes(1)
+      expect(wrapper.get('img').attributes('src')).toContain('/api/v2/images/cached-image-id')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

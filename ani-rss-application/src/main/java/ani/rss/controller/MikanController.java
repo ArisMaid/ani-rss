@@ -2,6 +2,7 @@ package ani.rss.controller;
 
 import ani.rss.annotation.Auth;
 import ani.rss.entity.Mikan;
+import ani.rss.entity.dto.MikanScoreResponse;
 import ani.rss.entity.web.Result;
 import ani.rss.service.MikanService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -25,6 +26,13 @@ public class MikanController extends BaseController {
     public Result<Mikan> mikan(@RequestParam("text") String text, @RequestBody Mikan.Season season) {
         Mikan list = mikanService.list(text, season);
         return Result.success(list);
+    }
+
+    @Auth
+    @Operation(summary = "补充 Mikan 番剧公开评分")
+    @PostMapping("/mikanScores")
+    public Result<MikanScoreResponse> mikanScores(@RequestBody List<String> mikanIds) {
+        return Result.success(mikanService.scores(mikanIds));
     }
 
     @Auth

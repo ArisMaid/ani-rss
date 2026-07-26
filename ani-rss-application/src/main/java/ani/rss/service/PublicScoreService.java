@@ -165,6 +165,42 @@ public class PublicScoreService {
         return result;
     }
 
+    /**
+     * Reads only already-resolved Mikan scores. This is used by the primary
+     * season-list request so an uncached public score lookup cannot delay the
+     * list itself.
+     */
+    public Map<String, MikanBgm> getCachedMikanScores(Collection<MikanInfo> mikanInfos) {
+        Map<String, MikanBgm> result = new LinkedHashMap<>();
+        if (mikanInfos == null) {
+            return result;
+        }
+
+        for (MikanInfo mikanInfo : mikanInfos) {
+            if (mikanInfo == null) {
+                continue;
+            }
+            String mikanId = extractMikanId(mikanInfo.getUrl());
+            if (StrUtil.isBlank(mikanId)) {
+                continue;
+            }
+
+            String bgmId = extractBgmSubjectId(mikanInfo.getBgmUrl());
+            if (StrUtil.isBlank(bgmId) && StrUtil.isNotBlank(mikanInfo.getUrl())) {
+                bgmId = CacheUtils.get(MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanInfo.getUrl()));
+            }
+            if (StrUtil.isBlank(bgmId)) {
+                continue;
+            }
+
+            Double score = CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId);
+            if (score != null) {
+                result.put(mikanId, new MikanBgm(mikanId, bgmId, score));
+            }
+        }
+        return result;
+    }
+
     static String extractMikanId(String url) {
         if (StrUtil.isBlank(url)) {
             return "";

@@ -1,6 +1,7 @@
 package ani.rss.service;
 
 import ani.rss.commons.FileUtils;
+import ani.rss.commons.RegexRuleMatcher;
 import ani.rss.download.DownloaderClient;
 import ani.rss.download.qBittorrent;
 import ani.rss.entity.Ani;
@@ -229,21 +230,24 @@ public class CollectionService {
 
                     // 排除
                     if (!exclude.isEmpty()) {
-                        if (exclude.stream().map(map).filter(StrUtil::isNotBlank).anyMatch(s -> ReUtil.contains(s, name))) {
+                        if (exclude.stream().map(map).filter(StrUtil::isNotBlank)
+                                .anyMatch(s -> RegexRuleMatcher.matches(s, name, "collection-exclude"))) {
                             return false;
                         }
                     }
 
                     // 匹配
                     if (!match.isEmpty()) {
-                        if (match.stream().map(map).filter(StrUtil::isNotBlank).anyMatch(s -> !ReUtil.contains(s, name))) {
+                        if (match.stream().map(map).filter(StrUtil::isNotBlank)
+                                .anyMatch(s -> RegexRuleMatcher.doesNotMatch(s, name, "collection-match"))) {
                             return false;
                         }
                     }
 
                     // 全局排除
                     if (globalExclude) {
-                        return globalExcludeList.stream().map(map).filter(StrUtil::isNotBlank).noneMatch(s -> ReUtil.contains(s, name));
+                        return globalExcludeList.stream().map(map).filter(StrUtil::isNotBlank)
+                                .noneMatch(s -> RegexRuleMatcher.matches(s, name, "collection-global-exclude"));
                     }
                     return true;
                 })

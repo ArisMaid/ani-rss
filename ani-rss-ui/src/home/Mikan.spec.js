@@ -1,10 +1,12 @@
 import {flushPromises, mount} from '@vue/test-utils'
-import {describe, expect, it, vi} from 'vitest'
+import {beforeEach, describe, expect, it, vi} from 'vitest'
 import Mikan from './Mikan.vue'
 import * as http from '@/js/http.js'
+import {ElMessage} from 'element-plus'
 
 vi.mock('@/js/http.js', () => ({
   mikan: vi.fn(),
+  mikanScores: vi.fn(),
   mikanGroup: vi.fn(),
   rssToAni: vi.fn(),
   addAni: vi.fn()
@@ -43,7 +45,7 @@ const response = (seasonLabel, title, score) => ({
         exists: false
       }]
     }],
-    totalItems: 1
+    totalItem: 1
   }
 })
 
@@ -71,6 +73,13 @@ const stubs = {
 }
 
 describe('Mikan season changes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(http.mikanScores).mockResolvedValue({
+      data: {scores: {}, subscribedBgmIds: []}
+    })
+  })
+
   it('renders the newest season score and ignores an older in-flight response', async () => {
     const initial = deferred()
     const spring = deferred()
@@ -105,5 +114,36 @@ describe('Mikan season changes', () => {
     expect(wrapper.text()).toContain('9.2')
     expect(wrapper.text()).not.toContain('过期春季结果')
     expect(http.mikan).toHaveBeenCalledTimes(3)
+    expect(ElMessage.warning).not.toHaveBeenCalled()
+  })
+
+  it('uses the backend totalItem field and enriches scores after rendering the list', async () => {
+    const scores = deferred()
+    vi.mocked(http.mikan).mockResolvedValue(response('2026 春', '先显示的番剧', 0))
+    vi.mocked(http.mikanScores).mockReturnValue(scores.promise)
+
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    wrapper.vm.show()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('先显示的番剧')
+    expect(ElMessage.warning).not.toHaveBeenCalled()
+    expect(http.mikanScores).toHaveBeenCalledWith(['0'])
+
+    scores.resolve({
+      data: {
+        scores: {'0': {bgmId: '42', score: 8.6}},
+        subscribedBgmIds: ['42']
+      }
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('8.6')
   })
 })

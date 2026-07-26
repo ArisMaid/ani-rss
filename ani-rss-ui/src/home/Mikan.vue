@@ -182,6 +182,7 @@ let selectName = ref('')
 let groups = ref({})
 let listRequestId = 0
 let groupRequestId = 0
+let scoreRequestId = 0
 
 let resetListInteractionState = () => {
   activeName.value = ''
@@ -230,6 +231,7 @@ let search = () => {
 
 let list = async (body, text) => {
   let requestId = ++listRequestId
+  let currentScoreRequestId = ++scoreRequestId
   loading.value = true
   text = text ? text : ''
   body = body ? body : {}
@@ -244,11 +246,16 @@ let list = async (body, text) => {
         if (requestId !== listRequestId) {
           return
         }
-        let {seasons = [], weeks = [], totalItems = 0} = res.data || {};
+        let {seasons = [], weeks = [], totalItem, totalItems} = res.data || {};
         seasons = Array.isArray(seasons) ? seasons : []
         weeks = Array.isArray(weeks) ? weeks : []
+        const itemCount = Number.isFinite(totalItem)
+            ? totalItem
+            : Number.isFinite(totalItems)
+                ? totalItems
+                : weeks.reduce((count, week) => count + (Array.isArray(week?.items) ? week.items.length : 0), 0)
 
-        if (totalItems < 1) {
+        if (itemCount < 1) {
           ElMessage.warning("搜索结果为空")
         }
 
@@ -256,6 +263,7 @@ let list = async (body, text) => {
           data.value.seasons = seasons
         }
         data.value.weeks = weeks
+        enrichScores(requestId, currentScoreRequestId)
         if (weeks.length) {
           activeName.value = weeks[0].weekLabel
         }
@@ -271,6 +279,49 @@ let list = async (body, text) => {
           loading.value = false
         }
       });
+}
+
+let enrichScores = (requestId, currentScoreRequestId) => {
+  const mikanIds = [...new Set(
+    data.value.weeks
+        .flatMap(week => Array.isArray(week?.items) ? week.items : [])
+        .map(item => String(item?.url || '').match(/\/Home\/Bangumi\/(\d+)\/?$/)?.[1])
+        .filter(Boolean)
+  )]
+  if (!mikanIds.length) {
+    return
+  }
+
+  http.mikanScores(mikanIds)
+      .then(res => {
+        if (requestId !== listRequestId || currentScoreRequestId !== scoreRequestId) {
+          return
+        }
+        const scores = res?.data?.scores || {}
+        const subscribedBgmIds = new Set(res?.data?.subscribedBgmIds || [])
+        for (const week of data.value.weeks) {
+          if (!Array.isArray(week?.items)) {
+            continue
+          }
+          for (const item of week.items) {
+            const mikanId = String(item?.url || '').match(/\/Home\/Bangumi\/(\d+)\/?$/)?.[1]
+            const score = mikanId ? scores[mikanId] : null
+            if (!score) {
+              continue
+            }
+            item.score = Number(score.score) || 0
+            item.bgmId = score.bgmId || item.bgmId
+            if (item.bgmId && subscribedBgmIds.has(item.bgmId)) {
+              item.exists = true
+            }
+          }
+          week.items.sort((left, right) => Number(right.score || 0) - Number(left.score || 0))
+        }
+        data.value.weeks = [...data.value.weeks]
+      })
+      .catch(() => {
+        // Scores are an optional enhancement; leave the season list usable.
+      })
 }
 
 let change = (v) => {

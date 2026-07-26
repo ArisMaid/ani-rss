@@ -2,6 +2,7 @@ package ani.rss.service;
 
 import ani.rss.commons.GroupRegexUtils;
 import ani.rss.entity.*;
+import ani.rss.entity.dto.MikanScoreResponse;
 import ani.rss.util.basic.HttpReq;
 import ani.rss.util.other.AniUtil;
 import ani.rss.util.other.BgmUtil;
@@ -25,12 +26,15 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.function.Function;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 public class MikanService {
     private static final int MIKAN_REQUEST_TIMEOUT_MILLIS = 10_000;
+    private static final int MAX_SCORE_LOOKUP_IDS = 48;
+    private static final Pattern MIKAN_ID = Pattern.compile("\\d+");
 
     @Resource
     private PublicScoreService publicScoreService;
@@ -61,24 +65,51 @@ public class MikanService {
                 .filter(Objects::nonNull)
                 .toList();
 
-        Map<String, MikanBgm> mikanBgmMap = new HashMap<>();
-        try {
-            mikanBgmMap = publicScoreService.getMikanScores(mikanInfos);
-        } catch (RuntimeException e) {
-            // Scores are an enhancement. A public score source outage must not hide a Mikan season.
-            log.warn("Unable to enrich the Mikan list with public scores");
-        }
+        // A season must be usable even when the public score cache is cold.
+        // Uncached enrichment is requested separately by the UI after this
+        // response is rendered.
+        applyScores(mikan, publicScoreService.getCachedMikanScores(mikanInfos), subscribedBgmIds());
 
-        Set<String> bgmIds = AniUtil.ANI_LIST
+        return mikan;
+    }
+
+    public MikanScoreResponse scores(Collection<String> mikanIds) {
+        List<MikanInfo> mikanInfos = Optional.ofNullable(mikanIds)
+                .orElseGet(List::of)
+                .stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(id -> MIKAN_ID.matcher(id).matches())
+                .distinct()
+                .limit(MAX_SCORE_LOOKUP_IDS)
+                .map(id -> new MikanInfo().setUrl(mikanBangumiUrl(id)))
+                .toList();
+
+        Map<String, MikanBgm> scores = Map.of();
+        if (!mikanInfos.isEmpty()) {
+            try {
+                scores = publicScoreService.getMikanScores(mikanInfos);
+            } catch (RuntimeException e) {
+                // Scores are optional and must never turn a usable list into an error.
+                log.warn("Unable to enrich the Mikan list with public scores");
+            }
+        }
+        return new MikanScoreResponse()
+                .setScores(scores)
+                .setSubscribedBgmIds(subscribedBgmIds());
+    }
+
+    private static String mikanBangumiUrl(String id) {
+        return StrUtil.removeSuffix(getMikanHost().trim(), "/") + "/Home/Bangumi/" + id;
+    }
+
+    private static Set<String> subscribedBgmIds() {
+        return AniUtil.ANI_LIST
                 .stream()
                 .map(Ani::getBgmUrl)
                 .filter(StrUtil::isNotBlank)
                 .map(BgmUtil::getSubjectId)
                 .collect(Collectors.toSet());
-
-        applyScores(mikan, mikanBgmMap, bgmIds);
-
-        return mikan;
     }
 
     static void applyScores(Mikan mikan, Map<String, MikanBgm> mikanBgmMap, Set<String> subscribedBgmIds) {

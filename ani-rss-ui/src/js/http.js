@@ -97,6 +97,13 @@ export let update = () => api.post('api/v2/update')
 export let mikan = (text, season) => api.post(withQuery('api/mikan', {text}), season)
 
 /**
+ * Loads public scores after the Mikan season list is rendered.
+ * @param {string[]} mikanIds Mikan bangumi ids from the trusted list response
+ * @returns {Promise<any>}
+ */
+export let mikanScores = (mikanIds) => api.post('api/mikanScores', mikanIds)
+
+/**
  * 获取Mikan番剧的字幕组列表
  * @param url 番剧url
  * @returns {Promise<any>}

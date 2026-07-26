@@ -2,6 +2,7 @@ package ani.rss.util.other;
 
 import ani.rss.commons.CacheUtils;
 import ani.rss.commons.FileUtils;
+import ani.rss.commons.RegexRuleMatcher;
 import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
 import ani.rss.entity.Item;
@@ -229,21 +230,24 @@ public class ItemsUtil {
 
             // 排除
             if (!exclude.isEmpty()) {
-                if (exclude.stream().map(map).filter(StrUtil::isNotBlank).anyMatch(s -> ReUtil.contains(s, addNewItem.getTitle()))) {
+                if (exclude.stream().map(map).filter(StrUtil::isNotBlank)
+                        .anyMatch(s -> RegexRuleMatcher.matches(s, addNewItem.getTitle(), "subscription-exclude"))) {
                     continue;
                 }
             }
 
             // 匹配
             if (!match.isEmpty()) {
-                if (match.stream().map(map).filter(StrUtil::isNotBlank).anyMatch(s -> !ReUtil.contains(s, addNewItem.getTitle()))) {
+                if (match.stream().map(map).filter(StrUtil::isNotBlank)
+                        .anyMatch(s -> RegexRuleMatcher.doesNotMatch(s, addNewItem.getTitle(), "subscription-match"))) {
                     continue;
                 }
             }
 
             // 全局排除
             if (globalExclude) {
-                if (globalExcludeList.stream().map(map).filter(StrUtil::isNotBlank).anyMatch(s -> ReUtil.contains(s, addNewItem.getTitle()))) {
+                if (globalExcludeList.stream().map(map).filter(StrUtil::isNotBlank)
+                        .anyMatch(s -> RegexRuleMatcher.matches(s, addNewItem.getTitle(), "global-exclude"))) {
                     continue;
                 }
             }

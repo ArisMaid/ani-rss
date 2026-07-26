@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 /**
@@ -17,6 +18,8 @@ import java.util.regex.Pattern;
 public class MikanListCacheRepository {
     private static final Pattern CACHE_KEY = Pattern.compile("mikan:list:[a-f0-9]{64}");
     private static final int MAX_SNAPSHOT_BYTES = 512 * 1024;
+    /** Keep expired seasonal snapshots briefly for stale-while-revalidate. */
+    private static final long EXPIRED_SNAPSHOT_RETENTION_MILLIS = TimeUnit.DAYS.toMillis(1);
 
     public Optional<Snapshot> findValid(String cacheKey, long now) {
         if (!validKey(cacheKey)) {
@@ -30,6 +33,36 @@ public class MikanListCacheRepository {
                     """)) {
                 statement.setString(1, cacheKey);
                 statement.setLong(2, now);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    if (!resultSet.next()) {
+                        return Optional.empty();
+                    }
+                    String snapshot = resultSet.getString("snapshot_json");
+                    if (!validSnapshot(snapshot)) {
+                        return Optional.empty();
+                    }
+                    return Optional.of(new Snapshot(snapshot, resultSet.getLong("expires_at")));
+                }
+            }
+        });
+    }
+
+    /**
+     * Returns the latest valid snapshot regardless of freshness. The caller
+     * decides the permitted stale window, so search results never use this
+     * path and seasonal-list semantics remain explicit in MikanService.
+     */
+    public Optional<Snapshot> findLatest(String cacheKey) {
+        if (!validKey(cacheKey)) {
+            return Optional.empty();
+        }
+        return DatabaseManager.withConnection(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT snapshot_json, expires_at
+                    FROM mikan_list_cache
+                    WHERE cache_key = ?
+                    """)) {
+                statement.setString(1, cacheKey);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     if (!resultSet.next()) {
                         return Optional.empty();
@@ -65,7 +98,7 @@ public class MikanListCacheRepository {
             }
             try (PreparedStatement cleanup = connection.prepareStatement(
                     "DELETE FROM mikan_list_cache WHERE expires_at <= ?")) {
-                cleanup.setLong(1, System.currentTimeMillis());
+                cleanup.setLong(1, System.currentTimeMillis() - EXPIRED_SNAPSHOT_RETENTION_MILLIS);
                 cleanup.executeUpdate();
             }
             return null;

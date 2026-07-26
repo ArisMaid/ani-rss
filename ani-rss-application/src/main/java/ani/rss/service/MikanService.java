@@ -19,6 +19,7 @@ import cn.hutool.core.util.StrUtil;
 import cn.hutool.core.util.URLUtil;
 import cn.hutool.crypto.SecureUtil;
 import cn.hutool.http.HttpUtil;
+import jakarta.annotation.PreDestroy;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
@@ -30,9 +31,15 @@ import org.springframework.stereotype.Service;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -52,16 +59,36 @@ public class MikanService {
     static final int MAX_BACKGROUND_SCORE_WARMUPS_PER_LIST = 96;
     /** A seasonal schedule changes slowly enough to safely reuse it across a short service restart. */
     private static final long SEASON_LIST_CACHE_TTL = TimeUnit.MINUTES.toMillis(10);
+    /**
+     * A stale seasonal schedule is usable while one bounded background request
+     * refreshes it. This avoids making the picker wait on Mikan every time the
+     * normal ten-minute cache expires, without presenting yesterday's schedule.
+     */
+    private static final long STALE_SEASON_LIST_MAX_AGE = TimeUnit.HOURS.toMillis(1);
+    private static final long STALE_LIST_MEMORY_TTL = TimeUnit.SECONDS.toMillis(1);
+    private static final int STALE_REFRESH_QUEUE_CAPACITY = 8;
     private static final long SEARCH_LIST_CACHE_TTL = TimeUnit.SECONDS.toMillis(45);
     private static final String LIST_CACHE_PREFIX = "mikan:list:";
     private static final Pattern MIKAN_ID = Pattern.compile("\\d+");
 
     @Resource
     private PublicScoreService publicScoreService;
+    @Resource
+    private TaskCoordinator taskCoordinator;
     /** Nullable only in isolated unit tests that deliberately avoid SQLite I/O. */
     @Resource
     private MikanListCacheRepository persistentListCache;
     private final ConcurrentMap<String, Object> listLoadLocks = new ConcurrentHashMap<>();
+    private final Set<String> staleListRefreshes = ConcurrentHashMap.newKeySet();
+    private final ExecutorService staleListRefreshExecutor = new ThreadPoolExecutor(
+            1,
+            1,
+            0L,
+            TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(STALE_REFRESH_QUEUE_CAPACITY),
+            newDaemonThreadFactory("mikan-list-refresh"),
+            new ThreadPoolExecutor.AbortPolicy()
+    );
     private final MikanListLoader listLoader;
 
     public MikanService() {
@@ -272,30 +299,83 @@ public class MikanService {
             return copyMikan(snapshot);
         }
 
+        CachedMikanList stale = loadStalePersistentSeasonList(cacheKey, normalizedText);
+        if (stale != null) {
+            Mikan snapshot = copyMikan(stale.list());
+            // Keep the stale entry only long enough to coalesce rapid callers.
+            // The refresh itself replaces it with a normal fresh-cache entry.
+            CacheUtils.put(cacheKey, snapshot, STALE_LIST_MEMORY_TTL);
+            refreshStaleSeasonListAsync(cacheKey, normalizedText, copySeason(season));
+            return copyMikan(snapshot);
+        }
+
+        return loadListSynchronously(cacheKey, normalizedText, season);
+    }
+
+    private Mikan loadListSynchronously(String cacheKey, String text, Mikan.Season season) {
         Object lock = listLoadLocks.computeIfAbsent(cacheKey, ignored -> new Object());
         try {
             synchronized (lock) {
-                cached = CacheUtils.get(cacheKey);
+                Mikan cached = CacheUtils.get(cacheKey);
                 if (cached != null) {
                     return copyMikan(cached);
                 }
-                persisted = loadPersistentList(cacheKey, normalizedText);
+                CachedMikanList persisted = loadPersistentList(cacheKey, text);
                 if (persisted != null) {
                     long remaining = Math.max(1, persisted.expiresAt() - System.currentTimeMillis());
                     Mikan snapshot = copyMikan(persisted.list());
                     CacheUtils.put(cacheKey, snapshot, remaining);
                     return copyMikan(snapshot);
                 }
-                Mikan loaded = listLoader.load(normalizedText, copySeason(season));
-                Mikan snapshot = copyMikan(loaded);
-                long ttl = listCacheTtl(normalizedText);
-                CacheUtils.put(
-                        cacheKey,
-                        snapshot,
-                        ttl
-                );
-                persistSeasonList(cacheKey, normalizedText, snapshot, ttl);
-                return copyMikan(snapshot);
+                return loadAndCacheList(cacheKey, text, season);
+            }
+        } finally {
+            listLoadLocks.remove(cacheKey, lock);
+        }
+    }
+
+    private Mikan loadAndCacheList(String cacheKey, String text, Mikan.Season season) {
+        Mikan loaded = listLoader.load(text, copySeason(season));
+        Mikan snapshot = copyMikan(loaded);
+        long ttl = listCacheTtl(text);
+        CacheUtils.put(cacheKey, snapshot, ttl);
+        persistSeasonList(cacheKey, text, snapshot, ttl);
+        return copyMikan(snapshot);
+    }
+
+    private void refreshStaleSeasonListAsync(String cacheKey, String text, Mikan.Season season) {
+        if (!backgroundWorkAllowed() || !staleListRefreshes.add(cacheKey)) {
+            return;
+        }
+        try {
+            staleListRefreshExecutor.execute(() -> {
+                try {
+                    refreshStaleSeasonList(cacheKey, text, season);
+                } catch (RuntimeException e) {
+                    // The stale snapshot stays available for the next request.
+                    // Do not expose upstream URLs or bodies in logs.
+                    log.debug("Unable to refresh stale Mikan season list cache");
+                } finally {
+                    staleListRefreshes.remove(cacheKey);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            staleListRefreshes.remove(cacheKey);
+            log.debug("Mikan season list refresh queue is full");
+        }
+    }
+
+    private void refreshStaleSeasonList(String cacheKey, String text, Mikan.Season season) {
+        Object lock = listLoadLocks.computeIfAbsent(cacheKey, ignored -> new Object());
+        try {
+            synchronized (lock) {
+                CachedMikanList fresh = loadPersistentList(cacheKey, text);
+                if (fresh != null) {
+                    long remaining = Math.max(1, fresh.expiresAt() - System.currentTimeMillis());
+                    CacheUtils.put(cacheKey, copyMikan(fresh.list()), remaining);
+                    return;
+                }
+                loadAndCacheList(cacheKey, text, season);
             }
         } finally {
             listLoadLocks.remove(cacheKey, lock);
@@ -320,6 +400,27 @@ public class MikanService {
         }
     }
 
+    private CachedMikanList loadStalePersistentSeasonList(String cacheKey, String text) {
+        if (StrUtil.isNotBlank(text) || persistentListCache == null) {
+            return null;
+        }
+        try {
+            long now = System.currentTimeMillis();
+            return persistentListCache.findLatest(cacheKey)
+                    .filter(snapshot -> snapshot.expiresAt() <= now)
+                    .filter(snapshot -> snapshot.expiresAt() >= now - STALE_SEASON_LIST_MAX_AGE)
+                    .map(snapshot -> new CachedMikanList(
+                            copyMikan(GsonStatic.GSON.fromJson(snapshot.snapshotJson(), Mikan.class)),
+                            snapshot.expiresAt()))
+                    .orElse(null);
+        } catch (RuntimeException e) {
+            // A stale cache is an optional fast path. A corrupt record must
+            // never prevent the normal synchronous list request.
+            log.debug("Unable to read stale Mikan season list cache");
+            return null;
+        }
+    }
+
     private void persistSeasonList(String cacheKey, String text, Mikan snapshot, long ttl) {
         if (StrUtil.isNotBlank(text) || persistentListCache == null || ttl <= 0) {
             return;
@@ -334,6 +435,32 @@ public class MikanService {
 
     private static long listCacheTtl(String text) {
         return StrUtil.isBlank(text) ? SEASON_LIST_CACHE_TTL : SEARCH_LIST_CACHE_TTL;
+    }
+
+    private boolean backgroundWorkAllowed() {
+        if (taskCoordinator == null) {
+            return true;
+        }
+        try {
+            taskCoordinator.requireStartAllowed();
+            return true;
+        } catch (IllegalStateException ignored) {
+            return false;
+        }
+    }
+
+    private static ThreadFactory newDaemonThreadFactory(String namePrefix) {
+        AtomicInteger sequence = new AtomicInteger();
+        return runnable -> {
+            Thread thread = new Thread(runnable, namePrefix + "-" + sequence.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
+    @PreDestroy
+    void stopStaleRefreshExecutor() {
+        staleListRefreshExecutor.shutdownNow();
     }
 
     static String listCacheKey(String text, Mikan.Season season) {

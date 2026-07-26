@@ -1,6 +1,8 @@
 package ani.rss.service;
 
 import ani.rss.commons.GroupRegexUtils;
+import ani.rss.commons.CacheUtils;
+import ani.rss.commons.GsonStatic;
 import ani.rss.entity.*;
 import ani.rss.entity.dto.MikanScoreResponse;
 import ani.rss.exception.UpstreamServiceException;
@@ -14,6 +16,7 @@ import cn.hutool.core.lang.Assert;
 import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.core.util.URLUtil;
+import cn.hutool.crypto.SecureUtil;
 import cn.hutool.http.HttpUtil;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +29,9 @@ import org.springframework.stereotype.Service;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -35,10 +41,24 @@ import java.util.stream.Collectors;
 public class MikanService {
     private static final int MIKAN_REQUEST_TIMEOUT_MILLIS = 10_000;
     private static final int MAX_SCORE_LOOKUP_IDS = 48;
+    private static final long SEASON_LIST_CACHE_TTL = TimeUnit.MINUTES.toMillis(2);
+    private static final long SEARCH_LIST_CACHE_TTL = TimeUnit.SECONDS.toMillis(45);
+    private static final String LIST_CACHE_PREFIX = "mikan:list:";
     private static final Pattern MIKAN_ID = Pattern.compile("\\d+");
 
     @Resource
     private PublicScoreService publicScoreService;
+    private final ConcurrentMap<String, Object> listLoadLocks = new ConcurrentHashMap<>();
+    private final MikanListLoader listLoader;
+
+    public MikanService() {
+        this.listLoader = this::search;
+    }
+
+    MikanService(PublicScoreService publicScoreService, MikanListLoader listLoader) {
+        this.publicScoreService = publicScoreService;
+        this.listLoader = listLoader;
+    }
 
     public static String getMikanHost() {
         Config config = ConfigUtil.CONFIG;
@@ -55,7 +75,7 @@ public class MikanService {
      * @return Mikan
      */
     public Mikan list(String text, Mikan.Season season) {
-        Mikan mikan = search(text, season);
+        Mikan mikan = loadCachedList(text, season);
         List<MikanInfo> mikanInfos = Optional.ofNullable(mikan.getWeeks())
                 .orElseGet(List::of)
                 .stream()
@@ -69,7 +89,12 @@ public class MikanService {
         // A season must be usable even when the public score cache is cold.
         // Uncached enrichment is requested separately by the UI after this
         // response is rendered.
-        applyScores(mikan, publicScoreService.getCachedMikanScores(mikanInfos), subscribedBgmIds());
+        applyScores(
+                mikan,
+                publicScoreService.getCachedMikanScores(mikanInfos),
+                subscribedBgmIds(),
+                subscribedMikanIds()
+        );
 
         return mikan;
     }
@@ -139,12 +164,29 @@ public class MikanService {
                 .collect(Collectors.toSet());
     }
 
+    private static Set<String> subscribedMikanIds() {
+        return AniUtil.ANI_LIST
+                .stream()
+                .map(AniUtil::getBangumiId)
+                .filter(StrUtil::isNotBlank)
+                .collect(Collectors.toSet());
+    }
+
     static void applyScores(Mikan mikan, Map<String, MikanBgm> mikanBgmMap, Set<String> subscribedBgmIds) {
+        applyScores(mikan, mikanBgmMap, subscribedBgmIds, null);
+    }
+
+    static void applyScores(
+            Mikan mikan,
+            Map<String, MikanBgm> mikanBgmMap,
+            Set<String> subscribedBgmIds,
+            Set<String> subscribedMikanIds) {
         if (mikan == null || mikan.getWeeks() == null) {
             return;
         }
         Map<String, MikanBgm> scores = Optional.ofNullable(mikanBgmMap).orElseGet(Map::of);
         Set<String> subscriptions = Optional.ofNullable(subscribedBgmIds).orElseGet(Set::of);
+        Set<String> mikanSubscriptions = Optional.ofNullable(subscribedMikanIds).orElseGet(Set::of);
         List<Mikan.Week> weeks = mikan.getWeeks();
         for (Mikan.Week week : weeks) {
             List<MikanInfo> mikanInfos = week.getItems();
@@ -155,9 +197,12 @@ public class MikanService {
                 if (mikanInfo == null) {
                     continue;
                 }
-                mikanInfo.setScore(0.0);
                 String url = mikanInfo.getUrl();
                 String mikanId = PublicScoreService.extractMikanId(url);
+                if (subscribedMikanIds != null) {
+                    mikanInfo.setExists(mikanSubscriptions.contains(mikanId));
+                }
+                mikanInfo.setScore(0.0);
                 if (StrUtil.isBlank(mikanId)) {
                     continue;
                 }
@@ -181,6 +226,62 @@ public class MikanService {
                             .reversed()
             );
         }
+    }
+
+    private Mikan loadCachedList(String text, Mikan.Season season) {
+        String normalizedText = StrUtil.blankToDefault(text, "").trim();
+        String cacheKey = listCacheKey(normalizedText, season);
+        Mikan cached = CacheUtils.get(cacheKey);
+        if (cached != null) {
+            return copyMikan(cached);
+        }
+
+        Object lock = listLoadLocks.computeIfAbsent(cacheKey, ignored -> new Object());
+        try {
+            synchronized (lock) {
+                cached = CacheUtils.get(cacheKey);
+                if (cached != null) {
+                    return copyMikan(cached);
+                }
+                Mikan loaded = listLoader.load(normalizedText, copySeason(season));
+                Mikan snapshot = copyMikan(loaded);
+                CacheUtils.put(
+                        cacheKey,
+                        snapshot,
+                        StrUtil.isBlank(normalizedText) ? SEASON_LIST_CACHE_TTL : SEARCH_LIST_CACHE_TTL
+                );
+                return copyMikan(snapshot);
+            }
+        } finally {
+            listLoadLocks.remove(cacheKey, lock);
+        }
+    }
+
+    private static String listCacheKey(String text, Mikan.Season season) {
+        String seasonKey = season == null
+                ? ""
+                : String.valueOf(season.getYear()) + "\u0000" + StrUtil.blankToDefault(season.getSeason(), "");
+        String source = StrUtil.removeSuffix(getMikanHost().trim(), "/")
+                + "\u0000" + text + "\u0000" + seasonKey;
+        return LIST_CACHE_PREFIX + SecureUtil.sha256(source);
+    }
+
+    private static Mikan.Season copySeason(Mikan.Season season) {
+        if (season == null) {
+            return new Mikan.Season();
+        }
+        return new Mikan.Season()
+                .setYear(season.getYear())
+                .setSeason(season.getSeason())
+                .setSeasonLabel(season.getSeasonLabel())
+                .setSelect(season.getSelect());
+    }
+
+    private static Mikan copyMikan(Mikan mikan) {
+        if (mikan == null) {
+            throw new IllegalStateException("Mikan list response must not be null");
+        }
+        return GsonStatic.GSON.fromJson(GsonStatic.toJson(mikan), Mikan.class);
     }
 
     public Mikan search(String text, Mikan.Season season) {
@@ -565,6 +666,11 @@ public class MikanService {
             }
         }
         return "";
+    }
+
+    @FunctionalInterface
+    interface MikanListLoader {
+        Mikan load(String text, Mikan.Season season);
     }
 
 }

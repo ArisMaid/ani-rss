@@ -194,7 +194,7 @@ describe('Mikan season changes', () => {
     expect(wrapper.text()).toContain('9.1')
   })
 
-  it('splits a large season into backend-safe score batches', async () => {
+  it('loads large-season score batches concurrently within the upstream-safe limit', async () => {
     const items = Array.from({length: 49}, (_, index) => ({
       url: `https://mikanani.me/Home/Bangumi/${index + 1}`,
       title: `作品 ${index + 1}`,
@@ -209,6 +209,11 @@ describe('Mikan season changes', () => {
         totalItem: items.length
       }
     })
+    const firstBatch = deferred()
+    const secondBatch = deferred()
+    vi.mocked(http.mikanScores)
+        .mockReturnValueOnce(firstBatch.promise)
+        .mockReturnValueOnce(secondBatch.promise)
 
     const wrapper = mount(Mikan, {
       global: {
@@ -224,6 +229,29 @@ describe('Mikan season changes', () => {
     expect(http.mikanScores).toHaveBeenCalledTimes(2)
     expect(vi.mocked(http.mikanScores).mock.calls[0][0]).toHaveLength(48)
     expect(vi.mocked(http.mikanScores).mock.calls[1][0]).toEqual(['49'])
+
+    firstBatch.resolve({data: {scores: {}, subscribedBgmIds: []}})
+    secondBatch.resolve({data: {scores: {}, subscribedBgmIds: []}})
+    await flushPromises()
+  })
+
+  it('does not re-request scores already supplied by the cached list response', async () => {
+    const cached = response('2026 春', '已缓存评分作品', 8.4)
+    cached.data.weeks[0].items[0].bgmId = 'cached-bgm-id'
+    vi.mocked(http.mikan).mockResolvedValue(cached)
+
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    wrapper.vm.show()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('8.4')
+    expect(http.mikanScores).not.toHaveBeenCalled()
   })
 
   it('shows an upstream error instead of presenting a failed list as empty', async () => {

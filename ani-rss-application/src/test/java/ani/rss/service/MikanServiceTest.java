@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -91,6 +92,33 @@ class MikanServiceTest {
         assertEquals("https://cdn.example/cover.webp",
                 MikanService.resolveMikanUrl("//cdn.example/cover.webp"));
         assertEquals("", MikanService.resolveMikanUrl("javascript:alert(1)"));
+    }
+
+    @Test
+    void reusesARecentListSnapshotWithoutLeakingMutableResponseState() {
+        AtomicInteger upstreamRequests = new AtomicInteger();
+        PublicScoreService scores = new PublicScoreService(id -> null, url -> "");
+        MikanService service = new MikanService(scores, (text, season) -> {
+            upstreamRequests.incrementAndGet();
+            return new Mikan()
+                    .setSeasons(List.of())
+                    .setWeeks(List.of(new Mikan.Week()
+                            .setWeekLabel("Search")
+                            .setItems(List.of(new MikanInfo()
+                                    .setUrl("https://mikanani.me/Home/Bangumi/" + text)
+                                    .setTitle("原始标题")
+                                    .setScore(0.0)
+                                    .setExists(false)))))
+                    .setTotalItem(1);
+        });
+        String uniqueQuery = String.valueOf(System.nanoTime());
+
+        Mikan first = service.list(uniqueQuery, new Mikan.Season());
+        first.getWeeks().get(0).getItems().get(0).setTitle("被调用方修改");
+        Mikan second = service.list(uniqueQuery, new Mikan.Season());
+
+        assertEquals(1, upstreamRequests.get());
+        assertEquals("原始标题", second.getWeeks().get(0).getItems().get(0).getTitle());
     }
 
     private static Mikan season(String first, String second) {

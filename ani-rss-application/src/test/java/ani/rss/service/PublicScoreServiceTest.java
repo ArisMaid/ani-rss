@@ -7,6 +7,10 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
@@ -209,6 +213,48 @@ class PublicScoreServiceTest {
 
         assertEquals(PublicScoreService.MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH, detailRequests.get());
         assertEquals(PublicScoreService.MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH, scores.size());
+    }
+
+    @Test
+    void coalescesConcurrentColdMikanAndBangumiLookups() throws Exception {
+        String mikanId = uniqueNumericId();
+        String bgmId = uniqueNumericId();
+        AtomicInteger mappingRequests = new AtomicInteger();
+        AtomicInteger scoreRequests = new AtomicInteger();
+        PublicScoreService service = new PublicScoreService(
+                id -> {
+                    scoreRequests.incrementAndGet();
+                    Thread.sleep(80);
+                    return rated(id, 9.4);
+                },
+                url -> {
+                    mappingRequests.incrementAndGet();
+                    Thread.sleep(80);
+                    return bgmId;
+                }
+        );
+        MikanInfo entry = new MikanInfo().setUrl(
+                "https://mikanani.me/Home/Bangumi/" + mikanId);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<PublicScoreService.MikanScoreLookup> first = executor.submit(() -> {
+                start.await();
+                return service.getMikanScoreLookup(List.of(entry));
+            });
+            Future<PublicScoreService.MikanScoreLookup> second = executor.submit(() -> {
+                start.await();
+                return service.getMikanScoreLookup(List.of(entry));
+            });
+            start.countDown();
+
+            assertEquals(9.4, first.get().scores().get(mikanId).getScore());
+            assertEquals(9.4, second.get().scores().get(mikanId).getScore());
+        } finally {
+            executor.shutdownNow();
+        }
+        assertEquals(1, mappingRequests.get());
+        assertEquals(1, scoreRequests.get());
     }
 
     private static BgmInfo rated(String id, double score) {

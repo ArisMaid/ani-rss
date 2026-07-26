@@ -167,6 +167,7 @@ import {openHttpUrl} from '@/js/url.js'
 import * as http from "@/js/http.js";
 
 const SCORE_BATCH_SIZE = 48
+const MAX_CONCURRENT_SCORE_BATCHES = 2
 const SCORE_RETRY_DELAYS_MILLIS = [0, 500, 1_500]
 
 const emptyMikanData = () => ({
@@ -417,6 +418,7 @@ let enrichScores = async (requestId, currentScoreRequestId, currentListStateId, 
   const mikanIds = [...new Set(
     initialListState.weeks
         .flatMap(week => week.items)
+        .filter(item => !String(item?.bgmId || '').trim())
         .map(item => mikanIdFromUrl(item.url))
         .filter(Boolean)
   )]
@@ -427,38 +429,59 @@ let enrichScores = async (requestId, currentScoreRequestId, currentListStateId, 
   const controller = new AbortController()
   scoreAbortController = controller
   let listState = initialListState
-  try {
-    for (const batch of scoreBatches(mikanIds)) {
-      let retryIds = [...batch]
-      for (let attempt = 0;
-           retryIds.length && attempt < SCORE_RETRY_DELAYS_MILLIS.length;
-           attempt += 1) {
-        if (attempt > 0) {
-          await waitForScoreRetry(SCORE_RETRY_DELAYS_MILLIS[attempt], controller.signal)
+  const isCurrentScoreRequest = () =>
+      !controller.signal.aborted
+      && isCurrentList(requestId, currentScoreRequestId)
+      && currentListStateId === listStateId
+
+  const enrichScoreBatch = async batch => {
+    let retryIds = [...batch]
+    for (let attempt = 0;
+         retryIds.length && attempt < SCORE_RETRY_DELAYS_MILLIS.length;
+         attempt += 1) {
+      if (attempt > 0) {
+        await waitForScoreRetry(SCORE_RETRY_DELAYS_MILLIS[attempt], controller.signal)
+      }
+      const requestedIds = [...retryIds]
+      try {
+        const res = await http.mikanScores(requestedIds, {signal: controller.signal, silent: true})
+        if (!isCurrentScoreRequest()) {
+          return false
         }
-        const requestedIds = [...retryIds]
-        try {
-          const res = await http.mikanScores(requestedIds, {signal: controller.signal, silent: true})
-          if (!isCurrentList(requestId, currentScoreRequestId) || currentListStateId !== listStateId) {
-            return
-          }
-          const scores = res?.data?.scores || {}
-          const subscribedBgmIds = new Set(res?.data?.subscribedBgmIds || [])
-          listState = applyScoreBatch(listState, scores, subscribedBgmIds)
-          data.value = listState
-          const retryableMikanIds = new Set(res?.data?.retryableMikanIds || [])
-          retryIds = requestedIds.filter(id => retryableMikanIds.has(id))
-        } catch (error) {
-          if (isAborted(error)) {
-            return
-          }
-          if (!isRetryableScoreError(error)) {
-            console.debug('Mikan public score enrichment failed')
-            break
-          }
+        const scores = res?.data?.scores || {}
+        const subscribedBgmIds = new Set(res?.data?.subscribedBgmIds || [])
+        listState = applyScoreBatch(listState, scores, subscribedBgmIds)
+        data.value = listState
+        const retryableMikanIds = new Set(res?.data?.retryableMikanIds || [])
+        retryIds = requestedIds.filter(id => retryableMikanIds.has(id))
+      } catch (error) {
+        if (isAborted(error)) {
+          return false
+        }
+        if (!isRetryableScoreError(error)) {
+          console.debug('Mikan public score enrichment failed')
+          return true
         }
       }
     }
+    return isCurrentScoreRequest()
+  }
+
+  try {
+    const batches = scoreBatches(mikanIds)
+    let nextBatchIndex = 0
+    const workers = Array.from(
+        {length: Math.min(MAX_CONCURRENT_SCORE_BATCHES, batches.length)},
+        async () => {
+          while (isCurrentScoreRequest() && nextBatchIndex < batches.length) {
+            const batch = batches[nextBatchIndex++]
+            if (!await enrichScoreBatch(batch)) {
+              return
+            }
+          }
+        }
+    )
+    await Promise.all(workers)
   } catch (error) {
     // Scores are optional. Requests superseded by a season change are silent.
     if (!isAborted(error)) {

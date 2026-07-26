@@ -23,10 +23,15 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -41,7 +46,7 @@ public class PublicScoreService {
     private static final int REQUEST_TIMEOUT_MILLIS = 4_000;
     static final long BGM_BATCH_TIMEOUT_MILLIS = 12_000;
     static final long MIKAN_MAPPING_BATCH_TIMEOUT_MILLIS = 12_000;
-    static final int MAX_CONCURRENT_REQUESTS = 8;
+    static final int MAX_CONCURRENT_REQUESTS = 12;
     static final int MAX_SCORE_LOOKUPS_PER_BATCH = 64;
     static final int MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH = 48;
     private static final long SCORE_CACHE_TTL = TimeUnit.HOURS.toMillis(6);
@@ -59,6 +64,12 @@ public class PublicScoreService {
 
     private final BgmInfoLoader bgmInfoLoader;
     private final MikanBgmIdResolver mikanBgmIdResolver;
+    /** Limits all concurrent score-related upstream calls for this service instance. */
+    private final Semaphore upstreamRequests = new Semaphore(MAX_CONCURRENT_REQUESTS, true);
+    /** Coalesces repeated cold Mikan detail-page lookups across score batches. */
+    private final ConcurrentMap<String, CompletableFuture<String>> mikanMappingFlights = new ConcurrentHashMap<>();
+    /** Coalesces repeated cold Bangumi score lookups across score batches. */
+    private final ConcurrentMap<String, CompletableFuture<Double>> bgmScoreFlights = new ConcurrentHashMap<>();
 
     public PublicScoreService() {
         this(PublicScoreService::loadPublicBgmInfo, PublicScoreService::loadMikanBgmId);
@@ -315,13 +326,14 @@ public class PublicScoreService {
     ) {
         List<Callable<LookupResult<K, String>>> tasks = new ArrayList<>();
         for (Map.Entry<K, String> entry : values.entrySet()) {
-            tasks.add(() -> {
-                try {
-                    return new LookupResult<>(entry.getKey(), loader.load(entry.getValue()), true);
-                } catch (Exception ignored) {
-                    return new LookupResult<>(entry.getKey(), null, false);
-                }
-            });
+            String flightKey = MIKAN_BGM_CACHE_PREFIX + "flight:" + SecureUtil.sha256(entry.getValue());
+            tasks.add(() -> loadSingleFlight(
+                    entry.getKey(),
+                    flightKey,
+                    () -> loadAndCacheMikanMapping(entry.getValue(), loader),
+                    mikanMappingFlights,
+                    deadlineNanos
+            ));
         }
         return invokeBounded(tasks, deadlineNanos);
     }
@@ -333,15 +345,89 @@ public class PublicScoreService {
     ) {
         List<Callable<LookupResult<K, Double>>> tasks = new ArrayList<>();
         for (Map.Entry<K, String> entry : values.entrySet()) {
-            tasks.add(() -> {
-                try {
-                    return new LookupResult<>(entry.getKey(), loader.load(entry.getValue()), true);
-                } catch (Exception ignored) {
-                    return new LookupResult<>(entry.getKey(), null, false);
-                }
-            });
+            String flightKey = BGM_SCORE_CACHE_PREFIX + "flight:" + entry.getValue();
+            tasks.add(() -> loadSingleFlight(
+                    entry.getKey(),
+                    flightKey,
+                    () -> loadAndCacheBgmScore(entry.getValue(), loader),
+                    bgmScoreFlights,
+                    deadlineNanos
+            ));
         }
         return invokeBounded(tasks, deadlineNanos);
+    }
+
+    private <K, V> LookupResult<K, V> loadSingleFlight(
+            K key,
+            String flightKey,
+            Callable<V> loader,
+            ConcurrentMap<String, CompletableFuture<V>> flights,
+            long deadlineNanos
+    ) {
+        CompletableFuture<V> created = new CompletableFuture<>();
+        CompletableFuture<V> shared = flights.putIfAbsent(flightKey, created);
+        if (shared == null) {
+            try {
+                V value = callUpstream(loader, deadlineNanos);
+                created.complete(value);
+                return new LookupResult<>(key, value, true);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                created.completeExceptionally(e);
+                return new LookupResult<>(key, null, false);
+            } catch (Exception e) {
+                created.completeExceptionally(e);
+                return new LookupResult<>(key, null, false);
+            } finally {
+                flights.remove(flightKey, created);
+            }
+        }
+
+        try {
+            long remainingNanos = deadlineNanos - System.nanoTime();
+            if (remainingNanos <= 0) {
+                return new LookupResult<>(key, null, false);
+            }
+            return new LookupResult<>(key, shared.get(remainingNanos, TimeUnit.NANOSECONDS), true);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new LookupResult<>(key, null, false);
+        } catch (Exception ignored) {
+            return new LookupResult<>(key, null, false);
+        }
+    }
+
+    private <V> V callUpstream(Callable<V> loader, long deadlineNanos) throws Exception {
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0 || !upstreamRequests.tryAcquire(remainingNanos, TimeUnit.NANOSECONDS)) {
+            throw new TimeoutException("public score lookup queue timed out");
+        }
+        try {
+            return loader.call();
+        } finally {
+            upstreamRequests.release();
+        }
+    }
+
+    private String loadAndCacheMikanMapping(String mikanUrl, StringLoader loader) throws Exception {
+        String value = loader.load(mikanUrl);
+        String bgmId = extractBgmSubjectId(value);
+        CacheUtils.put(
+                MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanUrl),
+                bgmId,
+                StrUtil.isNotBlank(bgmId) ? SCORE_CACHE_TTL : NEGATIVE_CACHE_TTL
+        );
+        return value;
+    }
+
+    private Double loadAndCacheBgmScore(String subjectId, ScoreLoader loader) throws Exception {
+        double score = Optional.ofNullable(loader.load(subjectId)).filter(value -> value > 0).orElse(0.0);
+        CacheUtils.put(
+                BGM_SCORE_CACHE_PREFIX + subjectId,
+                score,
+                score > 0 ? SCORE_CACHE_TTL : NEGATIVE_CACHE_TTL
+        );
+        return score;
     }
 
     private <K, V> List<LookupResult<K, V>> invokeBounded(

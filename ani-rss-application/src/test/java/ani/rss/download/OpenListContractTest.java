@@ -13,7 +13,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OpenListContractTest {
     private HttpServer server;
@@ -39,9 +41,13 @@ class OpenListContractTest {
         applicationCode = 500;
         OpenList client = new OpenList(config());
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(DownloaderOperationException.class,
                 () -> client.fsMove("/source", "/target", List.of("episode.mkv")));
         assertFalse(client.login(true, config()));
+
+        DownloaderResult<Void> result = new DownloaderClient(client, config()).connect(true);
+        assertEquals("OPENLIST_APPLICATION_REJECTED", result.errorCode());
+        assertFalse(result.retryable());
     }
 
     @Test
@@ -49,8 +55,12 @@ class OpenListContractTest {
         httpStatus = 503;
         OpenList client = new OpenList(config());
 
-        assertThrows(IllegalStateException.class,
+        assertThrows(DownloaderOperationException.class,
                 () -> client.fsRemove("/source", List.of("episode.mkv")));
+
+        DownloaderResult<Void> result = new DownloaderClient(client, config()).connect(true);
+        assertEquals("OPENLIST_HTTP_503", result.errorCode());
+        assertTrue(result.retryable());
     }
 
     private Config config() {

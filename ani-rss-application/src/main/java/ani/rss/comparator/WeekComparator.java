@@ -14,10 +14,10 @@ public class WeekComparator implements Comparator<String>, Serializable {
             "(星期|周)日", "(星期|周)一", "(星期|周)二", "(星期|周)三", "(星期|周)四", "(星期|周)五", "(星期|周)六"
     );
 
-    private static List<String> WEEK_SORT = new ArrayList<>();
+    private final List<String> weekSort;
 
     public WeekComparator() {
-        WEEK_SORT = getIndexList();
+        weekSort = getIndexList();
     }
 
     private List<String> getIndexList() {
@@ -39,8 +39,8 @@ public class WeekComparator implements Comparator<String>, Serializable {
     }
 
     private int getIndexOf(String s) {
-        for (int i = 0; i < WEEK_SORT.size(); i++) {
-            if (ReUtil.contains(WEEK_SORT.get(i), s)) {
+        for (int i = 0; i < weekSort.size(); i++) {
+            if (ReUtil.contains(weekSort.get(i), s)) {
                 return i;
             }
         }

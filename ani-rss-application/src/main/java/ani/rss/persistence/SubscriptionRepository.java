@@ -56,6 +56,11 @@ public final class SubscriptionRepository {
         }
     }
 
+    /** Validates a candidate without changing disk or runtime state. */
+    public List<Ani> validateCandidate(List<Ani> candidate) {
+        return validate(candidate);
+    }
+
     public List<Ani> readFromDisk() throws IOException {
         Path path = path();
         if (!Files.exists(path)) {

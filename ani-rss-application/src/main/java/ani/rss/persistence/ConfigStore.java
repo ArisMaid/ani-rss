@@ -65,6 +65,22 @@ public final class ConfigStore {
         }
     }
 
+    /** Validates and normalizes a candidate without changing disk or runtime state. */
+    public Config validateCandidate(Config candidate) {
+        Config next = copy(candidate);
+        prepare(next);
+        return copy(next);
+    }
+
+    /** Validates an older partial document using the same overlay rules as load(). */
+    public Config validateOverlay(Config candidate, Config defaults) {
+        Config next = copy(defaults);
+        BeanUtil.copyProperties(copy(candidate), next,
+                CopyOptions.create().setIgnoreNullValue(true));
+        prepare(next);
+        return copy(next);
+    }
+
     /** Loads a file over the supplied defaults without exposing a mutable parse result. */
     public void load(Config defaults) {
         Config candidate = copy(defaults);

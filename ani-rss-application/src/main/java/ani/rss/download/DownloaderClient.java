@@ -7,9 +7,6 @@ import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.util.other.ConfigUtil;
 
 import java.io.File;
-import java.io.IOException;
-import java.net.ConnectException;
-import java.net.SocketTimeoutException;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -25,58 +22,35 @@ public final class DownloaderClient {
     }
 
     public DownloaderResult<Void> connect(boolean test) {
-        return booleanOperation(() -> adapter.login(test, configuration), "CONNECTION_REJECTED");
+        return operation(() -> adapter.connectResult(test, configuration));
     }
 
     public DownloaderResult<List<TorrentsInfo>> torrents() {
-        return operation(() -> DownloaderResult.success(adapter.getTorrentsInfos()));
+        return operation(adapter::torrentsResult);
     }
 
     public DownloaderResult<Void> download(Ani ani, Item item, String savePath, File torrentFile) {
-        return operation(() -> {
-            if (!Boolean.TRUE.equals(adapter.download(ani, item, savePath, torrentFile))) {
-                return DownloaderResult.rejected("DOWNLOAD_REJECTED");
-            }
-            String remoteTaskId = null;
-            try {
-                remoteTaskId = adapter.getTorrentsInfos().stream()
-                        .filter(task -> (item.getInfoHash() != null &&
-                                item.getInfoHash().equalsIgnoreCase(task.getHash())) ||
-                                (item.getReName() != null && item.getReName().equals(task.getName())))
-                        .map(TorrentsInfo::getId)
-                        .findFirst()
-                        .orElse(null);
-            } catch (RuntimeException ignored) {
-                // The task was accepted; ownership remains PENDING until a later observation.
-            }
-            return DownloaderResult.success(null, remoteTaskId);
-        });
+        return operation(() -> adapter.downloadResult(ani, item, savePath, torrentFile));
     }
 
     public DownloaderResult<Void> delete(TorrentsInfo torrent, boolean deleteFiles) {
-        return booleanOperation(() -> adapter.delete(torrent, deleteFiles), "DELETE_REJECTED");
+        return operation(() -> adapter.deleteResult(torrent, deleteFiles));
     }
 
     public DownloaderResult<Void> rename(TorrentsInfo torrent) {
-        return booleanOperation(() -> adapter.rename(torrent), "RENAME_REJECTED");
+        return operation(() -> adapter.renameResult(torrent));
     }
 
     public DownloaderResult<Void> addTags(TorrentsInfo torrent, String tags) {
-        return booleanOperation(() -> adapter.addTags(torrent, tags), "TAG_REJECTED");
+        return operation(() -> adapter.addTagsResult(torrent, tags));
     }
 
     public DownloaderResult<Void> updateTrackers(Set<String> trackers) {
-        return operation(() -> {
-            adapter.updateTrackers(trackers);
-            return DownloaderResult.success(null);
-        });
+        return operation(() -> adapter.updateTrackersResult(trackers));
     }
 
     public DownloaderResult<Void> setSavePath(TorrentsInfo torrent, String path) {
-        return operation(() -> {
-            adapter.setSavePath(torrent, path);
-            return DownloaderResult.success(null);
-        });
+        return operation(() -> adapter.setSavePathResult(torrent, path));
     }
 
     public Config configurationSnapshot() {
@@ -87,29 +61,17 @@ public final class DownloaderClient {
         return adapter;
     }
 
-    private DownloaderResult<Void> booleanOperation(Callable<Boolean> action, String rejectedCode) {
-        return operation(() -> Boolean.TRUE.equals(action.call())
-                ? DownloaderResult.success(null)
-                : DownloaderResult.rejected(rejectedCode));
-    }
-
     private static <T> DownloaderResult<T> operation(Callable<DownloaderResult<T>> action) {
         try {
-            return action.call();
+            DownloaderResult<T> result = action.call();
+            return result == null
+                    ? DownloaderResult.failed("DOWNLOADER_INVALID_RESULT", false)
+                    : result;
         } catch (Exception e) {
-            return DownloaderResult.failed("DOWNLOADER_" + e.getClass().getSimpleName().toUpperCase(), retryable(e));
-        }
-    }
-
-    private static boolean retryable(Throwable throwable) {
-        Throwable current = throwable;
-        while (current != null) {
-            if (current instanceof SocketTimeoutException || current instanceof ConnectException ||
-                    current instanceof IOException) {
-                return true;
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
             }
-            current = current.getCause();
+            return DownloaderFailures.result(e);
         }
-        return false;
     }
 }

@@ -21,7 +21,7 @@
               </div>
               <div style="margin-top: 8px;">
                 <el-upload
-                    :action="new URL('api/v2/uploads/cover', document.baseURI).toString()"
+                    :action="uploadUrl"
                     :headers="uploadHeaders()"
                     :with-credentials="true"
                     :before-upload="beforeAvatarUpload"
@@ -66,6 +66,7 @@ import {csrfToken, toApiFile} from "@/js/global.js";
 import * as http from "@/js/http.js";
 
 let reLoadIng = ref(false)
+const uploadUrl = new URL('api/v2/uploads/cover', document.baseURI).toString()
 const uploadHeaders = () => csrfToken.value ? {'X-CSRF-Token': csrfToken.value} : {}
 const coverSrc = () => {
   const url = new URL(toApiFile(ani.value['cover']))
@@ -79,7 +80,7 @@ let reLoad = () => {
         time.value = new Date().getTime()
         ani.value.cover = res.data
       })
-      .finally(res => {
+      .finally(() => {
         reLoadIng.value = false
       })
 }
@@ -87,7 +88,7 @@ let reLoad = () => {
 
 let dialogVisible = ref(false)
 
-let ani = ref({})
+let ani = ref(/** @type {Record<string, any>} */ ({}))
 let time = ref()
 
 let show = (newAni) => {

@@ -24,8 +24,8 @@ public class WindowsUpdate implements BaseUpdate {
         MavenUtils.CurrentFile currentFile = MavenUtils.getCurrentFile();
         File updateExe = new File(updateFile.getParent(), "ani-rss-update.exe");
         File updateManifest = new File(updateFile.getParent(), "ani-rss-update.exe.manifest");
-        FileUtil.del(updateExe);
-        FileUtil.del(updateManifest);
+        FileUtils.deleteRegularFile(updateExe);
+        FileUtils.deleteRegularFile(updateManifest);
 
         try {
             @Cleanup
@@ -53,7 +53,7 @@ public class WindowsUpdate implements BaseUpdate {
             String target = FileUtils.getAbsolutePath(currentFile.getFile());
 
             // 过滤掉 --gui, 因为 exe 本身会自动添加此参数
-            String args = Global.ARGS.stream()
+            String args = Global.args().stream()
                     .filter(s -> !"--gui".equals(s))
                     .collect(Collectors.joining(" "));
 

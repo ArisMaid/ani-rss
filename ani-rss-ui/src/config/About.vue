@@ -105,33 +105,17 @@ import {ElMessage, ElText} from "element-plus";
 import Popconfirm from "@/other/Popconfirm.vue";
 import {Book, Github, Telegram} from "@vicons/fa";
 
-import markdownit from 'markdown-it'
-import DOMPurify from 'dompurify'
-import MarkdownItGitHubAlerts from 'markdown-it-github-alerts'
 import 'markdown-it-github-alerts/styles/github-colors-light.css'
 import 'markdown-it-github-alerts/styles/github-colors-dark-media.css'
 import 'markdown-it-github-alerts/styles/github-base.css'
 
 import {clearAuthentication} from "@/js/global.js";
+import {renderSafeMarkdown} from "@/js/markdown.js";
 import * as http from "@/js/http.js";
-
-let md = markdownit({
-  html: false,
-  linkify: true
-})
-
-md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
-  const token = tokens[idx]
-  token.attrSet('target', '_blank') // 强制添加属性
-  token.attrSet('rel', 'noopener noreferrer')
-  return self.renderToken(tokens, idx, options)
-}
-
-md.use(MarkdownItGitHubAlerts)
 
 const actionLoading = ref(false)
 
-const renderMarkdown = (value) => DOMPurify.sanitize(md.render(value || ''))
+const renderMarkdown = renderSafeMarkdown
 
 const stop = (status) => {
   actionLoading.value = true
@@ -166,7 +150,8 @@ const update = async () => {
               location.reload()
               return
             }
-          } catch (e) {
+          } catch {
+            // The service can be unavailable briefly while the new process starts.
           }
         }
         ElMessage.error("重启时遇到错误")
@@ -180,7 +165,8 @@ const about = ref({
   'version': '',
   'latest': '',
   'update': false,
-  'markdownBody': ''
+  'markdownBody': '',
+  'date': null
 })
 
 onMounted(() => {

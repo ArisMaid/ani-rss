@@ -30,6 +30,7 @@ import java.util.UUID;
 
 @Slf4j
 public class ConfigUtil {
+    private static final Object SYNC_LOCK = new Object();
 
     public static final Config CONFIG = new Config();
     public static final String FILE_NAME = "config.v2.json";
@@ -268,22 +269,40 @@ public class ConfigUtil {
     /**
      * 加载设置
      */
-    public static synchronized void load() {
+    public static void load() {
+        synchronized (SYNC_LOCK) {
+            loadLocked();
+        }
+        TorrentUtil.loadDownloadTool();
+    }
+
+    private static void loadLocked() {
         STORE.load(STORE.snapshot());
         LogUtil.loadLogback();
         log.debug("加载配置文件 {}", STORE.path());
-        TorrentUtil.loadDownloadTool();
     }
 
     /**
      * 将设置保存到磁盘
      */
-    public static synchronized void sync() {
+    public static void sync() {
+        synchronized (SYNC_LOCK) {
+            syncLocked();
+        }
+    }
+
+    private static void syncLocked() {
         STORE.commitRuntimeCandidate();
         LogUtil.loadLogback();
     }
 
-    public static synchronized void sync(Config config) {
+    public static void sync(Config config) {
+        synchronized (SYNC_LOCK) {
+            syncLocked(config);
+        }
+    }
+
+    private static void syncLocked(Config config) {
         STORE.commit(config);
         log.debug("保存成功 {}", STORE.path());
     }
@@ -294,6 +313,14 @@ public class ConfigUtil {
 
     public static Config snapshot() {
         return STORE.snapshot();
+    }
+
+    public static Config validateCandidate(Config candidate) {
+        return STORE.validateCandidate(candidate);
+    }
+
+    public static Config validateImportCandidate(Config candidate) {
+        return STORE.validateOverlay(candidate, STORE.snapshot());
     }
 
     /**

@@ -25,6 +25,9 @@
         <el-tab-pane label="登录设置" :lazy="true">
           <LoginConfig :config="config"/>
         </el-tab-pane>
+        <el-tab-pane label="数据安全" name="ownership" :lazy="true">
+          <Ownership/>
+        </el-tab-pane>
         <el-tab-pane label="通知" :lazy="true">
           <div style="height: 500px;">
             <el-scrollbar style="padding: 0 12px;">
@@ -58,6 +61,7 @@ import Download from "@/config/Download.vue";
 import Basic from "@/config/Basic.vue";
 import About from "@/config/About.vue";
 import LoginConfig from "@/config/LoginConfig.vue";
+import Ownership from "@/config/Ownership.vue";
 import Afdian from "@/config/Afdian.vue";
 import {configData} from "@/js/config.js";
 import * as http from "@/js/http.js";

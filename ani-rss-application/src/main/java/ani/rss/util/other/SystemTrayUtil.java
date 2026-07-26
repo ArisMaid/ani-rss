@@ -17,11 +17,15 @@ import java.net.URL;
 @Slf4j
 public class SystemTrayUtil {
 
-    public static TrayIcon TRAY_ICON;
+    private static volatile TrayIcon trayIcon;
+
+    public static TrayIcon trayIcon() {
+        return trayIcon;
+    }
 
     public static void start() {
         // 仅在添加--gui参数时启动托盘
-        if (Global.ARGS.contains("--gui")) {
+        if (Global.args().contains("--gui")) {
             try {
                 initIcon();
                 showSystemTray();
@@ -85,13 +89,13 @@ public class SystemTrayUtil {
         });
 
         SystemTray tray = SystemTray.getSystemTray();
-        TRAY_ICON = new TrayIcon(
+        trayIcon = new TrayIcon(
                 Toolkit.getDefaultToolkit().getImage(
                         ResourceUtil.getResource("image/icon-64.png")
                 ), "ani-rss", popupMenu);
-        TRAY_ICON.setImageAutoSize(true);
+        trayIcon.setImageAutoSize(true);
 
-        tray.add(TRAY_ICON);
+        tray.add(trayIcon);
     }
 
     private static void browseFileDirectory(File file) {

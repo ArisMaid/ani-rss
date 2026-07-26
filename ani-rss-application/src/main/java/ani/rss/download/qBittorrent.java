@@ -62,7 +62,7 @@ public class qBittorrent implements BaseDownload {
         return execute(HttpReq.get(host + "/api/v2/torrents/files", config)
                 .form("hash", hash)
                 , res -> {
-                    HttpReq.assertStatus(res);
+                    requireSuccess(res);
                     return GsonStatic.fromJsonList(res.body(), qBittorrentTorrentsInfo.FileEntity.class).stream()
                             .filter(fileEntity -> {
                                 if (!filter) {
@@ -97,36 +97,45 @@ public class qBittorrent implements BaseDownload {
             return false;
         }
 
-        try {
-            if (!test) {
-                // 校验当前登录状态
-                Boolean isOk = execute(HttpReq.post(host + "/api/v2/app/version", config),
-                        HttpResponse::isOk);
-                if (isOk) {
-                    return true;
+        if (!test) {
+            // A 401/403 means that a fresh login is needed; server failures must propagate.
+            Boolean isOk = execute(HttpReq.post(host + "/api/v2/app/version", config), response -> {
+                int status = response.getStatus();
+                if (status == 401 || status == 403) {
+                    return false;
                 }
+                return requireSuccess(response);
+            });
+            if (isOk) {
+                return true;
             }
-
-            return execute(HttpReq.post(host + "/api/v2/auth/login", config)
-                    .form("username", username)
-                    .form("password", password)
-                    , res -> {
-                        HttpReq.assertStatus(res);
-                        String body = res.body();
-                        if (StrUtil.isBlank(body)) {
-                            // 在 5.2.0 后登录会响应空 body
-                            return true;
-                        }
-                        return "Ok.".equalsIgnoreCase(body);
-                    });
-        } catch (Exception e) {
-            log.warn("登录 qBittorrent 失败 type:{}", e.getClass().getSimpleName());
         }
-        return false;
+
+        return execute(HttpReq.post(host + "/api/v2/auth/login", config)
+                .form("username", username)
+                .form("password", password)
+                , res -> {
+                    requireSuccess(res);
+                    String body = res.body();
+                    if (StrUtil.isBlank(body)) {
+                        // qBittorrent 5.2+ can return an empty body after successful login.
+                        return true;
+                    }
+                    if (!"Ok.".equalsIgnoreCase(body)) {
+                        throw DownloaderOperationException.rejected(
+                                "QBITTORRENT_AUTHENTICATION_FAILED");
+                    }
+                    return true;
+                });
     }
 
     @Override
     public Boolean download(Ani ani, Item item, String savePath, File torrentFile) {
+        return downloadResult(ani, item, savePath, torrentFile).isSuccess();
+    }
+
+    @Override
+    public DownloaderResult<Void> downloadResult(Ani ani, Item item, String savePath, File torrentFile) {
         String name = item.getReName();
         String host = config.getDownloadToolHost();
         Boolean qbUseDownloadPath = config.getQbUseDownloadPath();
@@ -179,25 +188,10 @@ public class qBittorrent implements BaseDownload {
                         .form("urls", "magnet:?xt=urn:btih:" + FileUtil.mainName(torrentFile));
             }
         }
-        Assert.isTrue(execute(httpRequest, HttpResponse::isOk), "qBittorrent 添加任务失败");
+        execute(httpRequest, qBittorrent::requireSuccess);
 
-        String hash = FileUtil.mainName(torrentFile);
-
-        for (int i = 0; i < 3; i++) {
-            ThreadUtil.sleep(1000 * 10);
-            List<TorrentsInfo> torrentsInfos = getTorrentsInfos();
-            Optional<TorrentsInfo> optionalTorrentsInfo = torrentsInfos
-                    .stream()
-                    .filter(torrentsInfo ->
-                            torrentsInfo.getHash().equals(hash) ||
-                                    torrentsInfo.getName().equals(name)
-                    )
-                    .findFirst();
-            if (optionalTorrentsInfo.isPresent()) {
-                return true;
-            }
-        }
-        return false;
+        String hash = StrUtil.blankToDefault(item.getInfoHash(), FileUtil.mainName(torrentFile));
+        return DownloaderResult.success(null, hash);
     }
 
     /**
@@ -211,61 +205,45 @@ public class qBittorrent implements BaseDownload {
         String host = config.getDownloadToolHost();
         boolean b = execute(HttpReq.post(host + "/api/v2/torrents/start", config)
                 .form("hashes", torrentsInfo.getHash())
-                , HttpResponse::isOk);
+                , qBittorrent::requireSuccess);
         if (b) {
             return true;
         }
 
         return execute(HttpReq.post(host + "/api/v2/torrents/resume", config)
                 .form("hashes", torrentsInfo.getHash())
-                , HttpResponse::isOk);
+                , qBittorrent::requireSuccess);
     }
 
     @Override
     public List<TorrentsInfo> getTorrentsInfos() {
         String host = config.getDownloadToolHost();
-        try {
-            return execute(HttpReq.get(host + "/api/v2/torrents/info", config), res -> {
-                        HttpReq.assertStatus(res);
-                        List<qBittorrentTorrentsInfo> torrentsInfos = GsonStatic.fromJsonList(res.body(), qBittorrentTorrentsInfo.class);
-                        return torrentsInfos.stream()
-                                .map(value -> value.toTorrentsInfo(task -> files(task, true)))
-                                .filter(torrentsInfo -> {
-                                    // 过滤出 ani-rss 标签或分类
-                                    String category = torrentsInfo.getCategory();
-                                    if (TorrentsTagEnum.ANI_RSS.getValue().equals(category)) {
-                                        return true;
-                                    }
+        return execute(HttpReq.get(host + "/api/v2/torrents/info", config), res -> {
+                    requireSuccess(res);
+                    List<qBittorrentTorrentsInfo> torrentsInfos = GsonStatic.fromJsonList(res.body(), qBittorrentTorrentsInfo.class);
+                    return torrentsInfos.stream()
+                            .map(value -> value.toTorrentsInfo(task -> files(task, true)))
+                            .filter(torrentsInfo -> {
+                                // 过滤出 ani-rss 标签或分类
+                                String category = torrentsInfo.getCategory();
+                                if (TorrentsTagEnum.ANI_RSS.getValue().equals(category)) {
+                                    return true;
+                                }
 
-                                    List<String> tagList = torrentsInfo.getTagList();
-                                    return tagList != null && tagList.contains(TorrentsTagEnum.ANI_RSS.getValue());
-                                })
-                                .toList();
-                    });
-        } catch (Exception e) {
-            log.warn("读取 qBittorrent 任务失败 type:{}", e.getClass().getSimpleName());
-        }
-        return new ArrayList<>();
+                                List<String> tagList = torrentsInfo.getTagList();
+                                return tagList != null && tagList.contains(TorrentsTagEnum.ANI_RSS.getValue());
+                            })
+                            .toList();
+                });
     }
 
     @Override
     public Boolean delete(TorrentsInfo torrentsInfo, Boolean deleteFiles) {
         String host = config.getDownloadToolHost();
         String hash = torrentsInfo.getHash();
-        try {
-            boolean b = execute(HttpReq.post(host + "/api/v2/torrents/delete", config)
-                    .form("hashes", hash)
-                    .form("deleteFiles", false)
-                    , HttpResponse::isOk);
-            if (!b) {
-                return false;
-            }
-
-            return true;
-        } catch (Exception e) {
-            log.warn("删除 qBittorrent 任务失败 type:{}", e.getClass().getSimpleName());
-            return false;
-        }
+        return execute(HttpReq.post(host + "/api/v2/torrents/delete", config)
+                .form("hashes", hash)
+                .form("deleteFiles", false), qBittorrent::requireSuccess);
     }
 
     @Override
@@ -283,8 +261,6 @@ public class qBittorrent implements BaseDownload {
         }
 
         String hash = torrentsInfo.getHash();
-
-        String host = config.getDownloadToolHost();
 
         Optional<Ani> aniOpt = downloadService.findAniByDownloadPath(torrentsInfo);
 
@@ -393,16 +369,14 @@ public class qBittorrent implements BaseDownload {
         return execute(HttpReq.post(host + "/api/v2/torrents/addTags", config)
                 .form("hashes", hash)
                 .form("tags", tags)
-                , HttpResponse::isOk);
+                , qBittorrent::requireSuccess);
     }
 
     @Override
     public void updateTrackers(Set<String> trackers) {
         String host = config.getDownloadToolHost();
         JsonObject preferences = execute(HttpReq.get(host + "/api/v2/app/preferences", config), res -> {
-                    int status = res.getStatus();
-                    boolean ok = res.isOk();
-                    Assert.isTrue(ok, "更新trackers失败 {}", status);
+                    requireSuccess(res);
                     String body = res.body();
                     return GsonStatic.fromJson(body, JsonObject.class);
                 });
@@ -412,7 +386,7 @@ public class qBittorrent implements BaseDownload {
 
         boolean updated = execute(HttpReq.post(host + "/api/v2/app/setPreferences", config)
                 .form("json", GsonStatic.toJson(preferences))
-                , HttpResponse::isOk);
+                , qBittorrent::requireSuccess);
         Assert.isTrue(updated, "qBittorrent 更新 Trackers 失败");
         log.info("qBittorrent 更新Trackers完成 共{}条", trackers.size());
 
@@ -424,12 +398,12 @@ public class qBittorrent implements BaseDownload {
         boolean autoManagement = execute(HttpReq.post(host + "/api/v2/torrents/setAutoManagement", config)
                 .form("hashes", torrentsInfo.getHash())
                 .form("enable", false)
-                , HttpResponse::isOk);
+                , qBittorrent::requireSuccess);
         Assert.isTrue(autoManagement, "qBittorrent 关闭自动管理失败");
         boolean savePathUpdated = execute(HttpReq.post(host + "/api/v2/torrents/setSavePath", config)
                 .form("hashes", torrentsInfo.getHash())
                 .form("path", path)
-                , HttpResponse::isOk);
+                , qBittorrent::requireSuccess);
         Assert.isTrue(savePathUpdated, "qBittorrent 修改保存位置失败");
     }
 
@@ -439,7 +413,7 @@ public class qBittorrent implements BaseDownload {
                         .form("hash", hash)
                         .form("id", index)
                         .form("priority", priority),
-                HttpResponse::isOk);
+                qBittorrent::requireSuccess);
     }
 
     public Boolean renameFile(String hash, String oldPath, String newPath) {
@@ -448,7 +422,7 @@ public class qBittorrent implements BaseDownload {
                         .form("hash", hash)
                         .form("oldPath", oldPath)
                         .form("newPath", newPath),
-                HttpResponse::isOk);
+                qBittorrent::requireSuccess);
     }
 
     public Boolean addCollection(String name, File torrentFile, String savePath, List<String> tags) {
@@ -476,11 +450,19 @@ public class qBittorrent implements BaseDownload {
                         .form("ratioLimit", config.getRatioLimit())
                         .form("seedingTimeLimit", config.getSeedingTimeLimit())
                         .form("inactiveSeedingTimeLimit", config.getInactiveSeedingTimeLimit()),
-                HttpResponse::isOk);
+                qBittorrent::requireSuccess);
     }
 
     private <T> T execute(HttpRequest request, Function<HttpResponse, T> handler) {
         return cookies.execute(request, handler);
+    }
+
+    private static boolean requireSuccess(HttpResponse response) {
+        int status = response.getStatus();
+        if (status < 200 || status >= 300) {
+            throw DownloaderOperationException.http("QBITTORRENT", status);
+        }
+        return true;
     }
 
     private static List<String> getPriorityKeywords(Config config, Ani ani) {

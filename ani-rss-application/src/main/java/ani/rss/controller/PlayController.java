@@ -51,7 +51,11 @@ public class PlayController extends BaseController {
 
         List<PlayItem.Subtitles> subtitlesList = new ArrayList<>();
 
-        String extName = FileUtil.extName(mediaPath.getFileName().toString());
+        Path mediaName = mediaPath.getFileName();
+        if (mediaName == null) {
+            throw new IllegalArgumentException("media path has no file name");
+        }
+        String extName = FileUtil.extName(mediaName.toString());
         if (StrUtil.isBlank(extName)) {
             return Result.success(subtitlesList);
         }

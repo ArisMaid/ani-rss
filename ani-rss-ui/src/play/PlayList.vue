@@ -4,7 +4,7 @@
     <div v-loading="listLoading" v-if="list.length || listLoading">
       <el-scrollbar style="height: 500px;">
         <div class="grid-container">
-          <div v-for="it in list">
+          <div v-for="it in list" :key="it.path || it.url || it.title">
             <el-card shadow="never">
               <div class="grid-item">
                 <div>
@@ -53,7 +53,7 @@ const dialogVisible = ref(false)
 const listLoading = ref(false)
 const list = ref([])
 
-let ani = ref({})
+let ani = ref(/** @type {Record<string, any>} */ ({}))
 let playStartRef = ref()
 
 let playStartShow = (it) => {

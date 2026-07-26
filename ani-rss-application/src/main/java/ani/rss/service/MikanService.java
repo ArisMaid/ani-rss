@@ -157,10 +157,16 @@ public class MikanService {
                         Element dateSelect = dateSelects.get(0);
                         String dateText = dateSelects.get(0).select(".date-text").text().trim();
                         Element dropdownMenu = dateSelect.selectFirst(".dropdown-menu");
+                        if (dropdownMenu == null) {
+                            throw new IllegalStateException("Mikan response is missing the season menu");
+                        }
                         for (Element child : dropdownMenu.children()) {
                             Elements seasonItems = child.select("li");
                             for (Element seasonItem : seasonItems.subList(1, seasonItems.size())) {
                                 Element a = seasonItem.selectFirst("a");
+                                if (a == null) {
+                                    throw new IllegalStateException("Mikan response contains a season without a link");
+                                }
                                 String dataYear = a.attr("data-year");
                                 String dataSeason = a.attr("data-season");
                                 String selectLabel = StrUtil.format("{} {}", dataYear, dataSeason);
@@ -182,8 +188,8 @@ public class MikanService {
                         }
                         Elements lis = el.select("li");
                         for (Element li : lis) {
-                            String img = getMikanHost() + li.selectFirst("span")
-                                    .attr("data-src");
+                            Element image = li.selectFirst("span");
+                            String img = image == null ? "" : getMikanHost() + image.attr("data-src");
                             Elements aa = li.select("a");
                             if (aa.isEmpty()) {
                                 continue;
@@ -262,8 +268,10 @@ public class MikanService {
                     for (Element bangumiInfo : bangumiInfos) {
                         String string = bangumiInfo.ownText();
                         if (string.equals("Bangumi番组计划链接：")) {
-                            bgmUrl = bangumiInfo.selectFirst("a")
-                                    .attr("href");
+                            Element link = bangumiInfo.selectFirst("a");
+                            if (link != null) {
+                                bgmUrl = link.attr("href");
+                            }
                         }
                     }
 
@@ -277,7 +285,12 @@ public class MikanService {
                         String label = subgroupText.select("a.subgroup-name").text().trim();
                         // id锚点，例如 #213
                         String id = subgroupText.select("a.subgroup-name").attr("data-anchor");
-                        String attr = document.selectFirst(id).selectFirst(".mikan-rss").attr("href");
+                        Element anchor = document.selectFirst(id);
+                        Element rss = anchor == null ? null : anchor.selectFirst(".mikan-rss");
+                        if (rss == null) {
+                            throw new IllegalStateException("Mikan response is missing a subgroup RSS link");
+                        }
+                        String attr = rss.attr("href");
                         group.setLabel(label)
                                 .setRss(getMikanHost() + attr);
                         groups.add(group);
@@ -285,8 +298,12 @@ public class MikanService {
                         String day = subgroupText.select(".date").text().trim();
                         group.setUpdateDay(day);
 
-                        Element table = document.selectFirst(id).nextElementSibling();
-                        Element tbody = table.selectFirst("tbody");
+                        Element subgroupAnchor = document.selectFirst(id);
+                        Element table = subgroupAnchor == null ? null : subgroupAnchor.nextElementSibling();
+                        Element tbody = table == null ? null : table.selectFirst("tbody");
+                        if (tbody == null) {
+                            throw new IllegalStateException("Mikan response is missing a subgroup table");
+                        }
                         for (Element tr : tbody.children()) {
                             String title = tr.select("a").get(0).ownText();
                             String magnet = tr.select("a").get(1).attr("data-clipboard-text");
@@ -347,9 +364,10 @@ public class MikanService {
                     for (Element bangumiInfo : bangumiInfos) {
                         String string = bangumiInfo.ownText();
                         if (string.equals("Bangumi番组计划链接：")) {
-                            String bgmUrl = bangumiInfo.selectFirst("a")
-                                    .attr("href");
-                            mikanInfo.setBgmUrl(bgmUrl);
+                            Element link = bangumiInfo.selectFirst("a");
+                            if (link != null) {
+                                mikanInfo.setBgmUrl(link.attr("href"));
+                            }
                         }
                     }
 
@@ -370,9 +388,12 @@ public class MikanService {
                         // id锚点，例如 #213
                         String id = subgroupText.select("a.subgroup-name").attr("data-anchor");
 
-                        String attr = html.selectFirst(id)
-                                .selectFirst(".mikan-rss")
-                                .attr("href");
+                        Element anchor = html.selectFirst(id);
+                        Element rss = anchor == null ? null : anchor.selectFirst(".mikan-rss");
+                        if (rss == null) {
+                            throw new IllegalStateException("Mikan response is missing a subgroup RSS link");
+                        }
+                        String attr = rss.attr("href");
 
                         group.setLabel(label)
                                 .setSubgroupId(id.replace("#", "").trim())
@@ -383,8 +404,12 @@ public class MikanService {
 
                         group.setUpdateDay(day);
 
-                        Element table = html.selectFirst(id).nextElementSibling();
-                        Element tbody = table.selectFirst("tbody");
+                        Element subgroupAnchor = html.selectFirst(id);
+                        Element table = subgroupAnchor == null ? null : subgroupAnchor.nextElementSibling();
+                        Element tbody = table == null ? null : table.selectFirst("tbody");
+                        if (tbody == null) {
+                            throw new IllegalStateException("Mikan response is missing a subgroup table");
+                        }
                         for (Element tr : tbody.children()) {
                             String title = tr.select("a").get(0).ownText();
                             String magnet = tr.select("a").get(1).attr("data-clipboard-text");
@@ -446,10 +471,9 @@ public class MikanService {
     public static String getSubgroupId(String url) {
         Map<String, String> decodeParamMap = HttpUtil.decodeParamMap(url, StandardCharsets.UTF_8);
 
-        for (String k : decodeParamMap.keySet()) {
-            String v = decodeParamMap.get(k);
-            if (k.equalsIgnoreCase("subgroupid")) {
-                return v;
+        for (Map.Entry<String, String> entry : decodeParamMap.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase("subgroupid")) {
+                return entry.getValue();
             }
         }
         return "";

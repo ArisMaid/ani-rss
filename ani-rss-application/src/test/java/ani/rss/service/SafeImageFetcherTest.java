@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.InetAddress;
 import java.util.Base64;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -75,6 +76,41 @@ class SafeImageFetcherTest {
         assertTrue(SafeImageFetcher.isForbiddenAddress(InetAddress.getByName("fd00::1")));
         assertFalse(SafeImageFetcher.isForbiddenAddress(InetAddress.getByName("8.8.8.8")));
         assertFalse(SafeImageFetcher.isForbiddenAddress(InetAddress.getByName("2001:4860:4860::8888")));
+    }
+
+    @Test
+    void enforcesRedirectLimitAndDeclaredBodyLimit() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicInteger redirects = new AtomicInteger();
+        server.createContext("/loop", exchange -> {
+            redirects.incrementAndGet();
+            redirect(exchange, "/loop");
+        });
+        server.createContext("/oversized", exchange -> {
+            exchange.getResponseHeaders().add("Content-Type", "image/png");
+            exchange.sendResponseHeaders(200, SafeImageFetcher.MAX_BYTES + 1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            Config allowLocal = ConfigUtil.copy(ConfigUtil.CONFIG)
+                    .setImagePrivateAllowlist("127.0.0.1");
+            String origin = "http://127.0.0.1:" + server.getAddress().getPort();
+            assertThrows(IllegalStateException.class,
+                    () -> SafeImageFetcher.fetch(origin + "/loop", allowLocal));
+            assertTrue(redirects.get() <= SafeImageFetcher.MAX_REDIRECTS + 1);
+            assertThrows(IllegalStateException.class,
+                    () -> SafeImageFetcher.fetch(origin + "/oversized", allowLocal));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void rejectsUrlCredentialsBeforeConnecting() {
+        Config config = ConfigUtil.copy(ConfigUtil.CONFIG).setImagePrivateAllowlist("127.0.0.1");
+        assertThrows(IllegalArgumentException.class,
+                () -> SafeImageFetcher.fetch("http://user:password@127.0.0.1/image", config));
     }
 
     private static void redirect(HttpExchange exchange, String location) throws IOException {

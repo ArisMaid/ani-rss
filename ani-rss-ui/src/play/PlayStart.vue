@@ -15,7 +15,7 @@ import * as http from "@/js/http.js";
 
 let loading = ref(false);
 let dialogVisible = ref(false)
-let playItem = ref({})
+let playItem = ref(/** @type {Record<string, any>} */ ({}))
 let subtitleObjectUrls = []
 
 let show = (pi) => {

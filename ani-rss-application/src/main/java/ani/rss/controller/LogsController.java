@@ -11,7 +11,6 @@ import ani.rss.util.other.ConfigUtil;
 import cn.hutool.core.text.StrFormatter;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.servlet.http.HttpServletResponse;
-import lombok.Synchronized;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -24,7 +23,6 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.zip.ZipEntry;
@@ -33,23 +31,18 @@ import java.util.zip.ZipOutputStream;
 @Slf4j
 @RestController
 public class LogsController extends BaseController {
-    public static final List<Log> LOG_LIST = LogUtil.LOG_LIST;
-
     @Auth
     @Operation(summary = "日志")
     @PostMapping("/logs")
-    @Synchronized("LOG_LIST")
     public Result<List<Log>> logs() {
-        List<Log> logs = new ArrayList<>(LOG_LIST);
-        return Result.success(logs);
+        return Result.success(LogUtil.snapshot());
     }
 
     @Auth
     @Operation(summary = "清理日志")
     @PostMapping("/clearLogs")
-    @Synchronized("LOG_LIST")
     public Result<Void> clearLogs() {
-        LOG_LIST.clear();
+        LogUtil.clear();
         log.info("清理日志");
         return Result.success();
     }
@@ -78,14 +71,20 @@ public class LogsController extends BaseController {
 
         try (ZipOutputStream zip = new ZipOutputStream(response.getOutputStream(), StandardCharsets.UTF_8);
              var paths = Files.list(realLogsRoot)) {
-            for (Path path : paths.sorted(Comparator.comparing(value -> value.getFileName().toString())).toList()) {
-                if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(path) ||
-                        !path.getFileName().toString().toLowerCase().endsWith(".log")) {
+            for (Path path : paths.sorted(Comparator.comparing(Path::toString)).toList()) {
+                Path pathName = path.getFileName();
+                if (pathName == null || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) ||
+                        Files.isSymbolicLink(path) ||
+                        !pathName.toString().toLowerCase(java.util.Locale.ROOT).endsWith(".log")) {
                     continue;
                 }
                 PathPolicy.requireNoSymbolicLinks(realLogsRoot, path);
                 Path real = PathPolicy.realPathWithin(realLogsRoot, path);
-                zip.putNextEntry(new ZipEntry(real.getFileName().toString()));
+                Path realName = real.getFileName();
+                if (realName == null) {
+                    throw new IllegalStateException("log file path has no file name");
+                }
+                zip.putNextEntry(new ZipEntry(realName.toString()));
                 try (InputStream input = Files.newInputStream(
                         real, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
                     input.transferTo(zip);

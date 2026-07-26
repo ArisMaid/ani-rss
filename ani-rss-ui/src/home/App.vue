@@ -1,10 +1,10 @@
 <template>
-  <Config ref="configRef"/>
-  <Add ref="addRef"/>
-  <Logs ref="logsRef"/>
-  <Manage ref="manageRef"/>
-  <Collection ref="collectionRef"/>
-  <TorrentsInfos ref="torrentsInfosRef"/>
+  <Config v-if="mounted.config" ref="configRef"/>
+  <Add v-if="mounted.add" ref="addRef"/>
+  <Logs v-if="mounted.logs" ref="logsRef"/>
+  <Manage v-if="mounted.manage" ref="manageRef"/>
+  <Collection v-if="mounted.collection" ref="collectionRef"/>
+  <TorrentsInfos v-if="mounted.torrents" ref="torrentsInfosRef"/>
   <div class="content">
     <div id="header">
       <div style="margin: 10px;" class="auto-flex">
@@ -58,10 +58,10 @@
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item @click="addRef?.show">
+                <el-dropdown-item @click="openLazy('add', addRef)">
                   添加订阅
                 </el-dropdown-item>
-                <el-dropdown-item @click="collectionRef?.show">
+                <el-dropdown-item @click="openLazy('collection', collectionRef)">
                   添加合集
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -69,7 +69,7 @@
           </el-dropdown>
         </div>
         <div style="margin: 0 4px;">
-          <el-button bg text @click="torrentsInfosRef?.show">
+          <el-button bg text @click="openLazy('torrents', torrentsInfosRef)">
             <el-icon :class="elIconClass">
               <Download/>
             </el-icon>
@@ -93,7 +93,7 @@
           </popconfirm>
         </div>
         <div style="margin: 0 4px;">
-          <el-button text bg @click="manageRef?.show">
+          <el-button text bg @click="openLazy('manage', manageRef)">
             <el-icon :class="elIconClass">
               <Fold/>
             </el-icon>
@@ -104,7 +104,7 @@
         </div>
         <div style="margin: 0 4px;">
           <el-badge :is-dot="about.update" class="item">
-            <el-button @click="configRef?.show(about.update)" text bg>
+            <el-button @click="openLazy('config', configRef, about.update)" text bg>
               <el-icon :class="elIconClass">
                 <Setting/>
               </el-icon>
@@ -115,7 +115,7 @@
           </el-badge>
         </div>
         <div style="margin-left: 4px;">
-          <el-button @click="logsRef?.show" text bg>
+          <el-button @click="openLazy('logs', logsRef)" text bg>
             <el-icon :class="elIconClass">
               <Tickets/>
             </el-icon>
@@ -133,20 +133,21 @@
 </template>
 
 <script setup>
-import {onMounted, ref} from "vue";
-import {Fold, Plus, Refresh, Setting, Tickets} from "@element-plus/icons-vue"
-import Config from "./Config.vue";
+import {defineAsyncComponent, onMounted, reactive, ref, watch} from "vue";
+import {Download, Fold, Plus, Refresh, Setting, Tickets} from "@element-plus/icons-vue"
 import List from "./List.vue";
-import Add from "./Add.vue";
-import Logs from "./Logs.vue";
 import {ElMessage} from "element-plus";
 import Popconfirm from "@/other/Popconfirm.vue";
-import Manage from "./Manage.vue";
 import {useLocalStorage} from "@vueuse/core";
-import Collection from "./Collection.vue";
-import TorrentsInfos from "./TorrentsInfos.vue";
 import {elIconClass, initLayout, isNotMobile} from "@/js/global.js";
 import * as http from "@/js/http.js";
+
+const Config = defineAsyncComponent(() => import('./Config.vue'))
+const Add = defineAsyncComponent(() => import('./Add.vue'))
+const Logs = defineAsyncComponent(() => import('./Logs.vue'))
+const Manage = defineAsyncComponent(() => import('./Manage.vue'))
+const Collection = defineAsyncComponent(() => import('./Collection.vue'))
+const TorrentsInfos = defineAsyncComponent(() => import('./TorrentsInfos.vue'))
 
 const listRef = ref()
 const configRef = ref()
@@ -155,6 +156,27 @@ const logsRef = ref()
 const manageRef = ref()
 const collectionRef = ref()
 const torrentsInfosRef = ref()
+const mounted = reactive({
+  config: false,
+  add: false,
+  logs: false,
+  manage: false,
+  collection: false,
+  torrents: false
+})
+
+const openLazy = (name, componentRef, ...args) => {
+  mounted[name] = true
+  if (componentRef.value) {
+    componentRef.value.show(...args)
+    return
+  }
+  const stop = watch(componentRef, component => {
+    if (!component) return
+    stop()
+    component.show(...args)
+  }, {flush: 'post'})
+}
 
 const title = ref('')
 const enable = useLocalStorage('select-enable', '已启用')
@@ -172,6 +194,7 @@ const enableSelect = ref([
     fun: item => !item.enable
   }
 ])
+/** @type {import('vue').Ref<(item: any) => boolean>} */
 const filter = ref(() => true)
 const releaseDate = ref('')
 

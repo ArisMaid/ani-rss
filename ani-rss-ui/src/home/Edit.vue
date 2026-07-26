@@ -90,7 +90,6 @@ const editAni = () => {
 
 const show = (item) => {
   ani.value = JSON.parse(JSON.stringify(item))
-  ani.value.showDownlaod = true
   move.value = false
   dialogVisible.value = true
 }

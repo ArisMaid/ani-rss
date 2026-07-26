@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+    <!-- Spring-managed collaborators are intentionally retained by identity; they are not DTO state. -->
+    <Match>
+        <Class name="ani.rss.ownership.OwnershipService"/>
+        <Field name="repository"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.ownership.OwnershipMigrationService"/>
+        <Field name="~(repository|downloadService)"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.ownership.QuarantineService"/>
+        <Field name="repository"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.service.BackupService"/>
+        <Field name="clearService"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.controller.v2.ConfigV2Controller"/>
+        <Field name="configService"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.controller.v2.ImageController"/>
+        <Field name="cache"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.download.qBittorrent"/>
+        <Field name="downloadService"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+
+    <!-- These accessors bridge legacy qB-specific collection and desktop notification operations. -->
+    <Match>
+        <Class name="ani.rss.download.DownloaderClient"/>
+        <Method name="adapter"/>
+        <Bug pattern="EI_EXPOSE_REP"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.util.other.TorrentUtil"/>
+        <Method name="client"/>
+        <Bug pattern="MS_EXPOSE_REP"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.util.other.SystemTrayUtil"/>
+        <Method name="trayIcon"/>
+        <Bug pattern="MS_EXPOSE_REP"/>
+    </Match>
+
+    <!-- Hardened Hutool factories deliberately preserve the original static factory names. -->
+    <Match>
+        <Class name="ani.rss.util.basic.HttpRequestPlus"/>
+        <Bug pattern="HSM_HIDING_METHOD"/>
+    </Match>
+
+    <!-- Existing JSON/protocol type names are compatibility-sensitive despite legacy casing. -->
+    <Match>
+        <Class name="~ani\.rss\.(download\.qBittorrent|entity\.torrent\.qBittorrentTorrentsInfo)"/>
+        <Bug pattern="NM_CLASS_NAMING_CONVENTION"/>
+    </Match>
+
+    <!-- Update handoff and fatal startup validation intentionally terminate the standalone process. -->
+    <Match>
+        <Class name="~ani\.rss\.update\.(Linux|Mac|Windows)Update"/>
+        <Bug pattern="DM_EXIT"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.config.Runner"/>
+        <Bug pattern="DM_EXIT"/>
+    </Match>
+</FindBugsFilter>

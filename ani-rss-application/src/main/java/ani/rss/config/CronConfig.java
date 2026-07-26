@@ -92,7 +92,7 @@ public class CronConfig {
         Set<String> trackers = new HashSet<>();
 
         for (String url : urls) {
-            String safeUrl = HttpReq.sanitizeUrl(url);
+            String safeUrl = HttpReq.sanitizeOrigin(url);
             log.info("获取 tracker {}", safeUrl);
             HttpReq.get(url)
                     .then(res -> {

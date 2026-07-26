@@ -159,7 +159,9 @@ let readJSONFile = (file) => {
 
     reader.onload = (event) => {
       try {
-        let jsonData = JSON.parse(event.target.result);
+        const result = event.target?.result
+        if (typeof result !== 'string') throw new Error('文件内容不是文本')
+        let jsonData = JSON.parse(result);
         resolve(jsonData);
       } catch (error) {
         reject(`JSON解析失败: ${error.message}`);

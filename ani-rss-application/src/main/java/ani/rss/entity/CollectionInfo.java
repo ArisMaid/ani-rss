@@ -4,15 +4,13 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.experimental.Accessors;
 
-import java.io.Serializable;
-
 /**
  * 合集信息
  */
 @Data
 @Accessors(chain = true)
 @Schema(description = "合集")
-public class CollectionInfo implements Serializable {
+public class CollectionInfo {
     /**
      * 种子文件 base64
      */

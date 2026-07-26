@@ -39,4 +39,14 @@ class DatabaseManagerTest {
         RenameCacheUtil.remove("task");
         assertNull(RenameCacheUtil.get("task"));
     }
+
+    @Test
+    void createsConsistentSnapshotWithQuotedFilename() {
+        RenameCacheUtil.put("snapshot", "value");
+        Path snapshot = tempDir.resolve("backup's copy.db");
+
+        DatabaseManager.backupTo(snapshot);
+
+        assertTrue(DatabaseManager.integrityCheck(snapshot));
+    }
 }

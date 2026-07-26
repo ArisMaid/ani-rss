@@ -192,7 +192,6 @@ public final class SafeImageFetcher {
             throw new IllegalArgumentException("image URL port is invalid");
         }
         String host = normalizeHost(uri.getHost());
-        Set<String> allowlist = allowlist(config);
         try {
             resolveAndValidate(host, config);
         } catch (UnknownHostException e) {
@@ -520,5 +519,13 @@ public final class SafeImageFetcher {
     }
 
     public record FetchedImage(byte[] bytes, String contentType) {
+        public FetchedImage {
+            bytes = bytes == null ? new byte[0] : bytes.clone();
+        }
+
+        @Override
+        public byte[] bytes() {
+            return bytes.clone();
+        }
     }
 }

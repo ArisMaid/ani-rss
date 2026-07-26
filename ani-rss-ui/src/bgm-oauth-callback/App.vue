@@ -10,7 +10,9 @@
         <div v-if="me">
           <el-descriptions direction="vertical" border>
             <el-descriptions-item :rowspan="2" :width="140" label="头像" align="center">
-              <el-avatar :src="me?.avatar?.large"/>
+              <el-avatar>
+                <SafeImage :src-url="me?.avatar?.large" alt="avatar" class="avatar-image"/>
+              </el-avatar>
             </el-descriptions-item>
             <el-descriptions-item label="用户名">
               <el-text v-if="me.username">
@@ -71,6 +73,7 @@ import {onMounted, ref} from 'vue'
 import {init, initAuth} from "@/js/global.js";
 import api from "@/js/api.js";
 import * as http from "@/js/http.js";
+import SafeImage from '@/other/SafeImage.vue'
 
 const type = ref('success')
 const text = ref('')
@@ -157,5 +160,11 @@ init()
 .footer {
   display: flex;
   justify-content: flex-end;
+}
+
+.avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 </style>

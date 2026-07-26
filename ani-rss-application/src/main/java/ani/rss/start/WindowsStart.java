@@ -1,6 +1,7 @@
 package ani.rss.start;
 
 import ani.rss.commons.MavenUtils;
+import ani.rss.commons.FileUtils;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.lang.Assert;
 import cn.hutool.core.util.RuntimeUtil;
@@ -35,15 +36,14 @@ public class WindowsStart implements BaseStart {
         File vbs = null;
         try {
             vbs = File.createTempFile("ani-rss-autostart", ".vbs");
-            String script = """
-                    Set objShell = CreateObject("WScript.Shell")
-                    Set objShortcut = objShell.CreateShortcut("%s")
-                    objShortcut.TargetPath = "%s"
-                    objShortcut.WorkingDirectory = "%s"
-                    objShortcut.WindowStyle = 1
-                    objShortcut.Description = "ani-rss"
-                    objShortcut.Save
-                    """.formatted(
+            String script = String.join(System.lineSeparator(),
+                    "Set objShell = CreateObject(\"WScript.Shell\")",
+                    "Set objShortcut = objShell.CreateShortcut(\"%s\")",
+                    "objShortcut.TargetPath = \"%s\"",
+                    "objShortcut.WorkingDirectory = \"%s\"",
+                    "objShortcut.WindowStyle = 1",
+                    "objShortcut.Description = \"ani-rss\"",
+                    "objShortcut.Save").formatted(
                     escapeVbs(shortcut.getAbsolutePath()),
                     escapeVbs(targetPath),
                     escapeVbs(workingDirectory.getAbsolutePath())
@@ -55,7 +55,9 @@ public class WindowsStart implements BaseStart {
         } catch (Exception e) {
             throw new IllegalStateException("创建 Windows 启动快捷方式失败: " + e.getMessage(), e);
         } finally {
-            FileUtil.del(vbs);
+            if (vbs != null) {
+                FileUtils.deleteRegularFile(vbs);
+            }
         }
     }
 
@@ -66,7 +68,7 @@ public class WindowsStart implements BaseStart {
     public void disable() {
         File shortcut = getWindowsShortcut();
         if (shortcut.exists()) {
-            FileUtil.del(shortcut);
+            FileUtils.deleteRegularFile(shortcut);
             log.info("已删除 Windows 启动快捷方式 {}", shortcut);
         }
     }

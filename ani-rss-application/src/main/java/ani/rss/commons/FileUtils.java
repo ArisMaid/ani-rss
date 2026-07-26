@@ -8,7 +8,10 @@ import cn.hutool.core.util.StrUtil;
 import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.List;
@@ -167,17 +170,55 @@ public class FileUtils {
      * @param target 目标位置
      */
     public static void move(Path source, Path target) {
-        try {
-            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            return;
-        } catch (Exception e) {
-            log.debug(e.getMessage(), e);
+        Path normalizedSource = source.toAbsolutePath().normalize();
+        Path normalizedTarget = target.toAbsolutePath().normalize();
+        if (!Files.exists(normalizedSource, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalStateException("move source does not exist");
         }
-
+        if (Files.isSymbolicLink(normalizedSource)) {
+            throw new IllegalStateException("move source is a symbolic link");
+        }
+        if (Files.exists(normalizedTarget, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalStateException("move target already exists; overwrite was refused");
+        }
+        Path targetParent = normalizedTarget.getParent();
+        if (targetParent == null || Files.isSymbolicLink(targetParent)) {
+            throw new IllegalStateException("move target parent is unsafe");
+        }
         try {
-            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+            Files.move(normalizedSource, normalizedTarget, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            try {
+                Files.move(normalizedSource, normalizedTarget);
+            } catch (IOException fallbackFailure) {
+                fallbackFailure.addSuppressed(e);
+                throw new IllegalStateException("move file failed", fallbackFailure);
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("move file failed", e);
+        }
+    }
+
+    public static boolean deleteRegularFile(File file) {
+        Objects.requireNonNull(file, "file");
+        return deleteRegularFile(file.toPath());
+    }
+
+    public static boolean deleteRegularFile(Path path) {
+        Objects.requireNonNull(path, "path");
+        Path normalized = path.toAbsolutePath().normalize();
+        try {
+            if (!Files.exists(normalized, LinkOption.NOFOLLOW_LINKS)) {
+                return false;
+            }
+            if (Files.isSymbolicLink(normalized) ||
+                    !Files.isRegularFile(normalized, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IllegalStateException("refusing to delete a non-regular or symbolic file");
+            }
+            Files.delete(normalized);
+            return true;
+        } catch (IOException e) {
+            throw new IllegalStateException("delete regular file failed", e);
         }
     }
 

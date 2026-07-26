@@ -94,11 +94,12 @@
 
 <script setup>
 import {isNotMobile, showLastDownloadTime, showPlaylist, showScore, toApiFile} from "@/js/global.js";
+import {openHttpUrl} from '@/js/url.js'
 import {Delete, Edit as EditIcon, Files} from "@element-plus/icons-vue";
 
 let openBgmUrl = (it) => {
   if (it.bgmUrl.length) {
-    window.open(it.bgmUrl)
+    openHttpUrl(it.bgmUrl)
     return
   }
   if (it.title.length) {
@@ -106,7 +107,7 @@ let openBgmUrl = (it) => {
     title = title.replace(/ ?\[tmdbid=(\d+)]/g, "").trim()
     const url = new URL(`https://bgm.tv/subject_search/${encodeURIComponent(title)}`)
     url.search = new URLSearchParams({cat: '2'}).toString()
-    window.open(url.toString())
+    openHttpUrl(url.toString())
   }
 }
 
@@ -115,7 +116,7 @@ let decodeURLComponentSafe = (str) => {
 }
 
 const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
-let props = defineProps(["item"])
+defineProps(["item"])
 </script>
 
 <style scoped>

@@ -5,6 +5,7 @@
         <el-radio-group v-model="sortType">
           <el-radio-button
               v-for="item in sortTypeList"
+              :key="item.value"
               :value="item.value"
               @click="changeSort(item.value)">
             <div class="flex-center">
@@ -22,7 +23,7 @@
       </div>
       <el-empty v-if="!torrentsInfos.length" description="当前无下载任务" class="torrents-empty"/>
       <el-scrollbar v-else class="torrents-scrollbar">
-        <el-card v-for="torrentsInfo in torrentsInfos"
+        <el-card v-for="torrentsInfo in torrentsInfos" :key="torrentsInfo.id || torrentsInfo.hash"
                  shadow="never"
                  class="torrents-card">
           <p>{{ torrentsInfo.name }}</p>
@@ -30,7 +31,8 @@
           <template #footer>
             <div class="flex torrents-footer">
               <div>
-                <el-tag v-for="tag in torrentsInfo['tagList']" class="torrents-tag-spacer" type="info">
+                <el-tag v-for="tag in torrentsInfo['tagList']" :key="`${torrentsInfo.id}-${tag}`"
+                        class="torrents-tag-spacer" type="info">
                   {{ tag }}
                 </el-tag>
               </div>
@@ -115,7 +117,8 @@ let getTorrentsInfos = async () => {
       let res = await http.torrentsInfos()
       let infos = await res.data
       torrentsInfos.value = sortInfos(infos)
-    } catch (_) {
+    } catch {
+      // A transient poll failure is retried on the next interval.
     }
     await sleep(3000)
   }

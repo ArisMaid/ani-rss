@@ -171,7 +171,8 @@ public class RenameUtil {
                 String s = StrFormatter.format("${{}}", fieldName);
                 String v = func1.callWithRuntimeException(object).toString();
                 template = template.replace(s, v);
-            } catch (Exception ignored) {
+            } catch (RuntimeException e) {
+                log.trace("skip unavailable rename field type:{}", e.getClass().getSimpleName());
             }
         }
         return template;
@@ -250,8 +251,8 @@ public class RenameUtil {
                 "3840x2160", "2160p",
                 "1280x720", "720p"
         );
-        for (String s : stringStringMap.keySet()) {
-            itemTitle = itemTitle.replace(s, stringStringMap.get(s));
+        for (Map.Entry<String, String> entry : stringStringMap.entrySet()) {
+            itemTitle = itemTitle.replace(entry.getKey(), entry.getValue());
         }
 
         String resolutionReg = "(720|1080|2160)[Pp]";

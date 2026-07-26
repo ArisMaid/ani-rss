@@ -34,5 +34,5 @@
 </template>
 
 <script setup>
-let props = defineProps(['notificationConfig', 'config'])
+defineProps(['notificationConfig', 'config'])
 </script>

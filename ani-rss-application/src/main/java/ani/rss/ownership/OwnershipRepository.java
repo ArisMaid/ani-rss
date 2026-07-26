@@ -7,9 +7,12 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Repository
 public class OwnershipRepository {
@@ -92,7 +95,11 @@ public class OwnershipRepository {
     }
 
     public void markFailed(String ownershipId) {
-        updateStateAndRemoteId(ownershipId, OwnershipState.FAILED, null);
+        markFailed(ownershipId, null);
+    }
+
+    public void markFailed(String ownershipId, String remoteTaskId) {
+        updateStateAndRemoteId(ownershipId, OwnershipState.FAILED, remoteTaskId);
     }
 
     public void updateState(String ownershipId, OwnershipState state) {
@@ -188,8 +195,8 @@ public class OwnershipRepository {
             try (PreparedStatement statement = connection.prepareStatement("""
                     INSERT INTO quarantine_entries(
                         entry_id, operation_id, ownership_id, original_path,
-                        quarantine_path, purge_after, state, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        quarantine_path, purge_after, state, created_at, previous_state
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """)) {
                 for (QuarantineEntry entry : entries) {
                     statement.setString(1, entry.entryId());
@@ -200,6 +207,7 @@ public class OwnershipRepository {
                     statement.setLong(6, entry.purgeAfter());
                     statement.setString(7, entry.state());
                     statement.setLong(8, entry.createdAt());
+                    statement.setString(9, entry.previousOwnershipState());
                     statement.addBatch();
                 }
                 statement.executeBatch();
@@ -207,16 +215,35 @@ public class OwnershipRepository {
             try (PreparedStatement statement = connection.prepareStatement("""
                     UPDATE download_ownership SET state = 'QUARANTINED', updated_at = ? WHERE ownership_id = ?
                     """)) {
-                statement.setLong(1, System.currentTimeMillis());
-                statement.setString(2, entries.get(0).ownershipId());
-                statement.executeUpdate();
+                long now = System.currentTimeMillis();
+                for (String ownershipId : entries.stream()
+                        .map(QuarantineEntry::ownershipId)
+                        .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new))) {
+                    statement.setLong(1, now);
+                    statement.setString(2, ownershipId);
+                    statement.addBatch();
+                }
+                statement.executeBatch();
             }
             return null;
         });
     }
 
-    public void markQuarantineOperationRestored(String operationId, String ownershipId) {
+    public void markQuarantineOperationRestored(String operationId) {
         DatabaseManager.transaction(connection -> {
+            Map<String, String> previousStates = new LinkedHashMap<>();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT DISTINCT ownership_id, previous_state
+                    FROM quarantine_entries WHERE operation_id = ?
+                    """)) {
+                statement.setString(1, operationId);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    while (resultSet.next()) {
+                        previousStates.put(resultSet.getString("ownership_id"),
+                                resultSet.getString("previous_state"));
+                    }
+                }
+            }
             try (PreparedStatement statement = connection.prepareStatement("""
                     UPDATE quarantine_entries SET state = 'RESTORED'
                     WHERE operation_id = ? AND state = 'QUARANTINED'
@@ -225,11 +252,19 @@ public class OwnershipRepository {
                 statement.executeUpdate();
             }
             try (PreparedStatement statement = connection.prepareStatement("""
-                    UPDATE download_ownership SET state = 'ACTIVE', updated_at = ? WHERE ownership_id = ?
+                    UPDATE download_ownership SET state = ?, updated_at = ? WHERE ownership_id = ?
                     """)) {
-                statement.setLong(1, System.currentTimeMillis());
-                statement.setString(2, ownershipId);
-                statement.executeUpdate();
+                long now = System.currentTimeMillis();
+                for (Map.Entry<String, String> entry : previousStates.entrySet()) {
+                    String previous = entry.getValue();
+                    OwnershipState state = "LEGACY_ADOPTED".equals(previous)
+                            ? OwnershipState.LEGACY_ADOPTED : OwnershipState.ACTIVE;
+                    statement.setString(1, state.name());
+                    statement.setLong(2, now);
+                    statement.setString(3, entry.getKey());
+                    statement.addBatch();
+                }
+                statement.executeBatch();
             }
             return null;
         });
@@ -355,7 +390,8 @@ public class OwnershipRepository {
                 resultSet.getString("quarantine_path"),
                 resultSet.getLong("purge_after"),
                 resultSet.getString("state"),
-                resultSet.getLong("created_at")
+                resultSet.getLong("created_at"),
+                resultSet.getString("previous_state")
         );
     }
 

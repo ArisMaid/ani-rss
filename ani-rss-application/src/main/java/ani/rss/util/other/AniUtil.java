@@ -44,6 +44,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 @Slf4j
 public class AniUtil {
+    private static final Object SYNC_LOCK = new Object();
 
     public static final List<Ani> ANI_LIST = new CopyOnWriteArrayList<>();
     public static final String FILE_NAME = "ani.v2.json";
@@ -65,6 +66,10 @@ public class AniUtil {
      * 加载订阅
      */
     public static void load() {
+        load(true);
+    }
+
+    public static void load(boolean hydrateCovers) {
         File configFile = getAniFile();
 
         if (!configFile.exists()) {
@@ -98,14 +103,18 @@ public class AniUtil {
                     Integer date = ani.getDate();
                     String format = StrUtil.format("{}-{}-{}", year, month, date);
                     releaseDate = DateUtil.parse(format, DatePattern.NORM_DATE_PATTERN);
-                } catch (Exception ignored) {
+                } catch (RuntimeException e) {
+                    log.warn("invalid legacy release date; using current time subscriptionId:{} type:{}",
+                            ani.getId(), e.getClass().getSimpleName());
                 }
                 ani.setReleaseDate(releaseDate);
             }
 
             // 自动修补缺失的封面
-            String image = ani.getImage();
-            saveCover(image);
+            if (hydrateCovers) {
+                String image = ani.getImage();
+                saveCover(image);
+            }
 
             Ani newAni = AniUtil.createAni();
             BeanUtil.copyProperties(newAni, ani, copyOptions);
@@ -118,13 +127,28 @@ public class AniUtil {
     /**
      * 将订阅配置保存到磁盘
      */
-    public static synchronized void sync() {
+    public static void sync() {
+        synchronized (SYNC_LOCK) {
+            syncLocked();
+        }
+    }
+
+    private static void syncLocked() {
         REPOSITORY.commitRuntimeCandidate();
         log.debug("保存成功 {}", REPOSITORY.path());
     }
 
     public static List<Ani> snapshot() {
         return REPOSITORY.snapshot();
+    }
+
+    public static List<Ani> validateCandidate(List<Ani> candidate) {
+        return REPOSITORY.validateCandidate(candidate);
+    }
+
+    public static void commit(List<Ani> subscriptions) {
+        REPOSITORY.commit(subscriptions);
+        log.debug("保存成功 {}", REPOSITORY.path());
     }
 
     /**
@@ -510,6 +534,7 @@ public class AniUtil {
 
         List<TorrentsInfo> torrentsInfos = TorrentUtil.getTorrentsInfos();
         OwnershipService ownershipService = SpringUtil.getBean(OwnershipService.class);
+        ownershipService.validateSubscriptionMove(ani.getId(), newPath);
 
         for (TorrentsInfo torrentsInfo : torrentsInfos) {
             if (!ownershipService.belongsTo(torrentsInfo, ani.getId())) {

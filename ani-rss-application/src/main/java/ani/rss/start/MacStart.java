@@ -26,11 +26,10 @@ public class MacStart implements BaseStart {
 
         String path = escapeAppleScript(app.getAbsolutePath());
 
-        String createScript = """
-                tell application "System Events"
-                    make login item at end with properties {path:"%s", hidden:false}
-                end tell
-                """.formatted(path);
+        String createScript = String.join(System.lineSeparator(),
+                "tell application \"System Events\"",
+                "    make login item at end with properties {path:\"%s\", hidden:false}",
+                "end tell").formatted(path);
         RuntimeUtil.execForStr("/usr/bin/osascript", "-e", createScript);
 
         log.info("已添加 macOS 登录项 {}", app);
@@ -50,13 +49,12 @@ public class MacStart implements BaseStart {
         File app = appOpt.get();
 
         String path = escapeAppleScript(app.getAbsolutePath());
-        String deleteScript = """
-                tell application "System Events"
-                    try
-                        delete (login items whose path is "%s")
-                    end try
-                end tell
-                """.formatted(path);
+        String deleteScript = String.join(System.lineSeparator(),
+                "tell application \"System Events\"",
+                "    try",
+                "        delete (login items whose path is \"%s\")",
+                "    end try",
+                "end tell").formatted(path);
         RuntimeUtil.execForStr("/usr/bin/osascript", "-e", deleteScript);
 
         log.info("已删除 macOS 登录项 {}", app);

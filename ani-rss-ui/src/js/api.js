@@ -1,6 +1,23 @@
 import {ElMessage} from "element-plus";
 import {clearAuthentication, csrfToken} from "@/js/global.js";
 
+/**
+ * @typedef {object} ApiResponse
+ * @property {number} code
+ * @property {string} message
+ * @property {any} data
+ * @property {number=} t
+ */
+
+/**
+ * @typedef {Error & {
+ *   code?: string,
+ *   operationId?: string,
+ *   status?: number,
+ *   problem?: Record<string, any>
+ * }} ApiError
+ */
+
 let post = async (url, body) => {
     return await fetch_(url, 'POST', body);
 }
@@ -18,13 +35,13 @@ let put = async (url, body) => {
 }
 
 let fetch_ = async (url, method, body) => {
+    /** @type {Record<string, string>} */
     let headers = {}
     const isForm = typeof FormData !== 'undefined' && body instanceof FormData
     if (body && !isForm) {
         headers['Content-Type'] = 'application/json'
     }
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && csrfToken.value &&
-        !url.includes('v2/auth/login') && !url.includes('v2/auth/setup')) {
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && csrfToken.value && !isCsrfExempt(url)) {
         headers['X-CSRF-Token'] = csrfToken.value
     }
     const response = await fetch(url, {
@@ -33,10 +50,11 @@ let fetch_ = async (url, method, body) => {
         headers: headers,
         credentials: 'include'
     })
-    let result = {}
+    /** @type {any} */
+    let result
     try {
         result = await response.json()
-    } catch (e) {
+    } catch {
         result = {}
     }
     if (!result || typeof result !== 'object') result = {}
@@ -47,7 +65,7 @@ let fetch_ = async (url, method, body) => {
             clearAuthentication()
             setTimeout(() => location.reload(), 1000)
         }
-        const error = new Error(message)
+        const error = /** @type {ApiError} */ (new Error(message))
         error.code = result.code
         error.operationId = result.operationId
         error.status = response.status
@@ -88,4 +106,9 @@ let checkTimestampRange = (timestamp, isMilli = true) => {
     const range = 30 * 60 * 1000;
     const diff = Math.abs(now - targetTime);
     return diff <= range;
+}
+
+const isCsrfExempt = value => {
+    const path = new URL(value, document.baseURI).pathname
+    return path === '/api/v2/auth/login' || path === '/api/v2/auth/setup'
 }

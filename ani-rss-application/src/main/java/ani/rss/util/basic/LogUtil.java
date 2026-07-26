@@ -26,7 +26,7 @@ import org.slf4j.LoggerFactory;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
@@ -34,8 +34,27 @@ import java.util.Objects;
 @Slf4j
 public class LogUtil {
 
-    public static final List<Log> LOG_LIST = Collections.synchronizedList(new FixedSizeLinkedList<>());
-    public static final List<String> HIDDE_LOG_LIST = List.of("org.apache.coyote.http11.Http11Processor");
+    private static final Object LOG_LOCK = new Object();
+    private static final List<Log> LOG_LIST = new FixedSizeLinkedList<>();
+    private static final List<String> HIDDEN_LOGGERS = List.of("org.apache.coyote.http11.Http11Processor");
+
+    public static List<Log> snapshot() {
+        synchronized (LOG_LOCK) {
+            return new ArrayList<>(LOG_LIST);
+        }
+    }
+
+    public static void clear() {
+        synchronized (LOG_LOCK) {
+            LOG_LIST.clear();
+        }
+    }
+
+    private static void add(Log entry) {
+        synchronized (LOG_LOCK) {
+            LOG_LIST.add(entry);
+        }
+    }
 
     public static void loadLogback() {
         Config config = ConfigUtil.CONFIG;
@@ -61,7 +80,7 @@ public class LogUtil {
                 @Override
                 public FilterReply decide(ILoggingEvent event) {
                     String loggerName = event.getLoggerName();
-                    if (HIDDE_LOG_LIST.contains(loggerName)) {
+                    if (HIDDEN_LOGGERS.contains(loggerName)) {
                         return FilterReply.DENY;
                     }
                     return FilterReply.NEUTRAL;
@@ -88,13 +107,11 @@ public class LogUtil {
                             .setLoggerName(loggerName)
                             .setThreadName(threadName);
 
-                    if (HIDDE_LOG_LIST.contains(loggerName)) {
+                    if (HIDDEN_LOGGERS.contains(loggerName)) {
                         return FilterReply.DENY;
                     }
 
-                    synchronized (LOG_LIST) {
-                        LOG_LIST.add(logEntity);
-                    }
+                    add(logEntity);
                     return FilterReply.NEUTRAL;
                 }
             });

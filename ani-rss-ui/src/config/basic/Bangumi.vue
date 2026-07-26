@@ -124,7 +124,7 @@ let loading = ref(false);
 let start = () => {
   loading.value = true;
   setConfig(props.config)
-      .then(async res => {
+      .then(async () => {
         const state = (await bgmOAuthState()).data.state
         const url = new URL('https://bgm.tv/oauth/authorize')
         url.search = new URLSearchParams({

@@ -41,8 +41,8 @@
 import {onMounted, ref} from "vue";
 
 import {createOnigurumaEngine} from 'shiki/engine/oniguruma'
-import log from 'shiki/langs/log'
-import nord from 'shiki/themes/nord'
+import log from 'shiki/langs/log.mjs'
+import nord from 'shiki/themes/nord.mjs'
 import wasm from 'shiki/wasm'
 import {createHighlighterCore} from "shiki";
 import DOMPurify from 'dompurify'

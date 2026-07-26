@@ -20,7 +20,6 @@ import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.bean.copier.CopyOptions;
 import cn.hutool.core.codec.Base64;
 import cn.hutool.core.date.LocalDateTimeUtil;
-import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.http.HttpRequest;
 import jakarta.annotation.Resource;
@@ -138,6 +137,7 @@ public class ConfigService {
         try {
             if (credentialsChanged) {
                 AuthService.invalidateSessions();
+                AuthService.invalidateLegacyMigration();
             }
             LogUtil.loadLogback();
             if (downloaderChanged) {
@@ -174,14 +174,7 @@ public class ConfigService {
     }
 
     public String clearCache() {
-        File configDir = ConfigUtil.getConfigDir();
-        String configDirStr = FileUtils.getAbsolutePath(configDir);
-
-        Long size = clearService.clearCover();
-
-        // 清理 mikan 预览封面
-        FileUtil.del(configDirStr + "/img");
-
+        long size = clearService.clearCover() + clearService.clearPreviewImages();
         return FileUtils.formatSize(size, true);
     }
 

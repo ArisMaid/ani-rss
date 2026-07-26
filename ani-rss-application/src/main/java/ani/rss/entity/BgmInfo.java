@@ -6,7 +6,6 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.experimental.Accessors;
 
-import java.io.Serializable;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -17,7 +16,7 @@ import java.util.Map;
 @Data
 @Accessors(chain = true)
 @Schema(description = "Bgm番剧信息")
-public class BgmInfo implements Serializable {
+public class BgmInfo {
     private String id;
 
     private String url;
@@ -77,7 +76,7 @@ public class BgmInfo implements Serializable {
     @Data
     @Accessors(chain = true)
     @Schema(description = "封面图片")
-    public static class Images implements Serializable {
+    public static class Images {
         private String small;
         private String grid;
         private String large;
@@ -91,7 +90,7 @@ public class BgmInfo implements Serializable {
     @Data
     @Accessors(chain = true)
     @Schema(description = "标签")
-    public static class Tag implements Serializable {
+    public static class Tag {
         @Schema(description = "标签名")
         private String name;
 
@@ -109,7 +108,7 @@ public class BgmInfo implements Serializable {
     @Data
     @Accessors(chain = true)
     @Schema(description = "评分")
-    public static class Rating implements Serializable {
+    public static class Rating {
         /**
          * 级别
          */

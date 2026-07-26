@@ -17,6 +17,7 @@ import ani.rss.ownership.QuarantineService;
 import ani.rss.service.AniService;
 import ani.rss.service.ClearService;
 import ani.rss.service.DownloadService;
+import ani.rss.service.SubscriptionDeletionService;
 import ani.rss.task.RssTask;
 import ani.rss.util.other.*;
 import cn.hutool.core.bean.BeanUtil;
@@ -56,7 +57,7 @@ public class AniController extends BaseController {
     private OwnershipService ownershipService;
 
     @Resource
-    private QuarantineService quarantineService;
+    private SubscriptionDeletionService subscriptionDeletionService;
 
     @Auth
     @Operation(summary = "添加订阅")
@@ -153,6 +154,12 @@ public class AniController extends BaseController {
                     // 位置未发生改变
                     return;
                 }
+                try {
+                    ownershipService.validateSubscriptionMove(get.getId(), newDownloadPath);
+                } catch (Exception e) {
+                    log.error(ExceptionUtils.getMessage(e), e);
+                    return;
+                }
 
                 File downloadPathFile = new File(downloadPath);
 
@@ -166,7 +173,12 @@ public class AniController extends BaseController {
                         continue;
                     }
                     // 修改保存位置
-                    TorrentUtil.setSavePath(torrentsInfo, newDownloadPath);
+                    try {
+                        TorrentUtil.setSavePath(torrentsInfo, newDownloadPath);
+                    } catch (Exception e) {
+                        log.error(ExceptionUtils.getMessage(e), e);
+                        return;
+                    }
                 }
                 if (!downloadPathFile.exists()) {
                     return;
@@ -190,9 +202,9 @@ public class AniController extends BaseController {
         String[] ignoreProperties = new String[]{"currentEpisodeNumber", "lastDownloadTime"};
         BeanUtil.copyProperties(ani, first.get(), ignoreProperties);
         File newTorrentDir = TorrentUtil.getTorrentDir(first.get());
-        if (!torrentDir.toString().equals(newTorrentDir.toString())) {
-            FileUtil.mkdir(newTorrentDir);
-            FileUtil.move(torrentDir, newTorrentDir.getParentFile(), true);
+        if (!torrentDir.toString().equals(newTorrentDir.toString()) && torrentDir.exists()) {
+            FileUtil.mkdir(newTorrentDir.getParentFile());
+            FileUtils.move(torrentDir.toPath(), newTorrentDir.toPath());
         }
         clearService.clearDir(torrentDir);
         AniUtil.sync();
@@ -206,39 +218,11 @@ public class AniController extends BaseController {
     @PostMapping("/deleteAni")
     public Result<Void> deleteAni(@RequestBody List<String> ids, @RequestParam("deleteFiles") Boolean deleteFiles) {
         Assert.notEmpty(ids, "未选择订阅");
-        List<Ani> anis = AniUtil.ANI_LIST.stream()
-                .filter(it -> ids.contains(it.getId()))
-                .toList();
-        if (anis.isEmpty()) {
-            return Result.error("删除失败");
+        if (Boolean.TRUE.equals(deleteFiles)) {
+            throw new IllegalStateException("file deletion requires the /api/v2/subscriptions deletion plan API");
         }
-
-        AniUtil.ANI_LIST.removeAll(anis);
-        AniUtil.sync();
-
-        ThreadUtil.execute(() -> {
-            List<TorrentsInfo> torrentsInfos = TorrentUtil.getTorrentsInfos();
-
-            for (Ani ani : anis) {
-                File torrentDir = TorrentUtil.getTorrentDir(ani);
-                FileUtil.del(torrentDir);
-                clearService.clearDir(torrentDir);
-                log.info("删除订阅 {} {}", ani.getTitle(), ani.getId());
-
-                if (!deleteFiles) {
-                    continue;
-                }
-                // 删除本地文件
-                for (TorrentsInfo torrentsInfo : torrentsInfos) {
-                    if (ownershipService.belongsTo(torrentsInfo, ani.getId())) {
-                        String ownershipId = ownershipService.requireOwned(torrentsInfo).ownershipId();
-                        ownershipService.captureFiles(ownershipId, torrentsInfo);
-                        quarantineService.quarantineOwnership(ownershipId);
-                        TorrentUtil.delete(torrentsInfo, true, false);
-                    }
-                }
-            }
-        });
+        SubscriptionDeletionService.DeletionPlan plan = subscriptionDeletionService.plan(ids, false);
+        subscriptionDeletionService.execute(plan.operationId());
         return Result.success("删除订阅成功");
     }
 

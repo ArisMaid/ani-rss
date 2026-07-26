@@ -65,6 +65,12 @@ class AuthServiceTest {
         assertEquals("operator", result.username());
         assertFalse(Files.exists(tempDir.resolve("initial-setup-code.txt")));
         assertTrue(response.getHeaders("Set-Cookie").stream().anyMatch(v -> v.startsWith("ANI_SESSION=")));
+        String sessionHeader = cookieHeader(response, AuthService.SESSION_COOKIE);
+        String csrfHeader = cookieHeader(response, AuthService.CSRF_COOKIE);
+        assertTrue(sessionHeader.contains("HttpOnly"));
+        assertTrue(sessionHeader.contains("SameSite=Strict"));
+        assertFalse(csrfHeader.contains("HttpOnly"));
+        assertTrue(csrfHeader.contains("SameSite=Strict"));
         assertThrows(IllegalArgumentException.class,
                 () -> AuthService.setup(code, "second", "another password", null, null));
 
@@ -126,10 +132,37 @@ class AuthServiceTest {
         assertTrue(response.getHeaders("Set-Cookie").stream()
                 .anyMatch(value -> value.startsWith(AuthService.SESSION_COOKIE + "=")));
 
+        MockHttpServletRequest queryOnly = new MockHttpServletRequest();
+        queryOnly.setParameter("s", legacyToken);
+        assertThrows(AuthenticationFailureException.class,
+                () -> AuthService.migrateLegacy(queryOnly, new MockHttpServletResponse()));
+
         Object state = ReflectionTestUtils.getField(AuthService.class, "state");
         ReflectionTestUtils.setField(state, "legacyMigrationUntil", 1L);
         assertThrows(AuthenticationFailureException.class,
                 () -> AuthService.migrateLegacy(migration, new MockHttpServletResponse()));
+    }
+
+    @Test
+    void legacyTokenSurvivesArgonMigrationAndAuthStateReload() throws Exception {
+        Config legacy = ConfigUtil.copy(ConfigUtil.snapshot())
+                .setLogin(new Login().setUsername("legacy").setPassword(SecureUtil.md5("secret-pass")))
+                .setMultiLoginForbidden(false);
+        ConfigUtil.sync(legacy);
+        AuthService.reload();
+        String legacyToken = AuthUtil.getAuth(AuthUtil.getLogin());
+
+        AuthService.login("legacy", "secret-pass", null, new MockHttpServletResponse());
+        assertTrue(ConfigUtil.snapshot().getLogin().getPassword().startsWith("$argon2"));
+        AuthService.reload();
+
+        MockHttpServletRequest migration = new MockHttpServletRequest();
+        migration.addHeader("Authorization", legacyToken);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AuthService.migrateLegacy(migration, response);
+
+        assertTrue(response.getHeaders("Set-Cookie").stream()
+                .anyMatch(value -> value.startsWith(AuthService.SESSION_COOKIE + "=")));
     }
 
     @Test
@@ -297,6 +330,28 @@ class AuthServiceTest {
     }
 
     @Test
+    void csrfExemptionMatchesOnlyTheExactLoginAndSetupEndpoints() {
+        Config configured = ConfigUtil.copy(ConfigUtil.snapshot())
+                .setLogin(new Login().setUsername("operator")
+                        .setPassword(AuthService.encodePassword("session-password")));
+        ConfigUtil.sync(configured);
+        MockHttpServletResponse loginResponse = new MockHttpServletResponse();
+        AuthService.login("operator", "session-password", new MockHttpServletRequest(), loginResponse);
+
+        MockHttpServletRequest misleadingLogin = new MockHttpServletRequest();
+        misleadingLogin.setMethod("POST");
+        misleadingLogin.setRequestURI("/api/v2/ownership/login");
+        misleadingLogin.setCookies(sessionCookie(loginResponse));
+        assertFalse(AuthService.validateRequest(misleadingLogin));
+
+        MockHttpServletRequest misleadingSetup = new MockHttpServletRequest();
+        misleadingSetup.setMethod("POST");
+        misleadingSetup.setRequestURI("/api/v2/auth/setup/replace");
+        misleadingSetup.setCookies(sessionCookie(loginResponse));
+        assertFalse(AuthService.validateRequest(misleadingSetup));
+    }
+
+    @Test
     void trustedHttpsReverseProxyProducesSecureCookies() {
         Config configured = ConfigUtil.copy(ConfigUtil.snapshot())
                 .setLogin(new Login().setUsername("operator")
@@ -343,11 +398,15 @@ class AuthServiceTest {
     }
 
     private static Cookie cookie(MockHttpServletResponse response, String name) {
-        String header = response.getHeaders("Set-Cookie").stream()
+        String header = cookieHeader(response, name);
+        String value = header.substring(name.length() + 1, header.indexOf(';'));
+        return new Cookie(name, value);
+    }
+
+    private static String cookieHeader(MockHttpServletResponse response, String name) {
+        return response.getHeaders("Set-Cookie").stream()
                 .filter(value -> value.startsWith(name + "="))
                 .findFirst()
                 .orElseThrow();
-        String value = header.substring(name.length() + 1, header.indexOf(';'));
-        return new Cookie(name, value);
     }
 }

@@ -1,6 +1,7 @@
 package ani.rss.service;
 
 import ani.rss.commons.FileUtils;
+import ani.rss.download.DownloaderClient;
 import ani.rss.download.qBittorrent;
 import ani.rss.entity.Ani;
 import ani.rss.entity.CollectionInfo;
@@ -284,7 +285,8 @@ public class CollectionService {
     }
 
     private static qBittorrent qBittorrentClient() {
-        if (TorrentUtil.CLIENT == null || !(TorrentUtil.CLIENT.adapter() instanceof qBittorrent client)) {
+        DownloaderClient activeClient = TorrentUtil.client();
+        if (activeClient == null || !(activeClient.adapter() instanceof qBittorrent client)) {
             throw new IllegalStateException("active downloader is not qBittorrent");
         }
         return client;

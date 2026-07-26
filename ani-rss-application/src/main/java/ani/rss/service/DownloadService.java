@@ -8,6 +8,7 @@ import ani.rss.entity.Config;
 import ani.rss.entity.Item;
 import ani.rss.entity.StandbyRss;
 import ani.rss.entity.torrent.TorrentsInfo;
+import ani.rss.download.DownloaderClient;
 import ani.rss.download.DownloaderResult;
 import ani.rss.enums.NotificationStatusEnum;
 import ani.rss.enums.StringEnum;
@@ -378,20 +379,33 @@ public class DownloadService {
         NotificationUtil.send(ConfigUtil.CONFIG, ani, text, NotificationStatusEnum.DOWNLOAD_START);
 
         Config config = ConfigUtil.CONFIG;
-        DownloadOwnership ownership = ownershipService.registerPending(ani, item, savePath);
+        DownloaderClient activeClient = TorrentUtil.client();
+        if (activeClient == null) {
+            log.error("{} 下载失败 code:DOWNLOADER_NOT_INITIALIZED retryable:false", name);
+            return;
+        }
+        String downloaderType = activeClient.configurationSnapshot().getDownloadToolType();
+        DownloadOwnership ownership = ownershipService.registerPending(
+                downloaderType, ani, item, savePath);
 
         Integer downloadRetry = ObjectUtil.defaultIfNull(config.getDownloadRetry(), 1);
+        String lastRemoteTaskId = null;
         for (int i = 1; i <= downloadRetry; i++) {
-            DownloaderResult<Void> result = TorrentUtil.CLIENT.download(ani, item, savePath, torrentFile);
+            DownloaderResult<Void> result = activeClient.download(ani, item, savePath, torrentFile);
+            if (StrUtil.isNotBlank(result.remoteTaskId())) {
+                lastRemoteTaskId = result.remoteTaskId();
+            }
             if (result.isSuccess()) {
-                DownloaderResult<List<TorrentsInfo>> tasksResult = TorrentUtil.CLIENT.torrents();
-                List<TorrentsInfo> observedTasks = tasksResult.value() == null ? List.of() : tasksResult.value();
+                DownloaderResult<List<TorrentsInfo>> tasksResult = activeClient.torrents();
+                List<TorrentsInfo> observedTasks = tasksResult.isSuccess() && tasksResult.value() != null
+                        ? tasksResult.value()
+                        : List.of();
                 TorrentsInfo task = observedTasks.stream()
                         .filter(info -> StrUtil.equalsIgnoreCase(info.getHash(), item.getInfoHash()) ||
                                 StrUtil.equals(info.getId(), result.remoteTaskId()))
                         .findFirst()
                         .orElse(null);
-                ownershipService.activate(ownership.ownershipId(), task);
+                ownershipService.activate(ownership.ownershipId(), result.remoteTaskId(), task);
                 return;
             }
             log.error("{} 下载失败 code:{} retryable:{}", name, result.errorCode(), result.retryable());
@@ -402,10 +416,12 @@ public class DownloadService {
             ThreadUtil.sleep(backoffSeconds * 1000L);
         }
 
-        ownershipService.markFailed(ownership.ownershipId());
+        ownershipService.markFailed(ownership.ownershipId(), lastRemoteTaskId);
 
-        // 删除下载失败的种子, 下次轮询仍会重试
-        FileUtil.del(torrentFile);
+        if (StrUtil.isBlank(lastRemoteTaskId)) {
+            // No remote task was created, so the cached input can be retried from scratch.
+            FileUtils.deleteRegularFile(torrentFile);
+        }
 
         log.error("{} 添加失败，疑似为坏种", name);
         NotificationUtil.send(ConfigUtil.CONFIG, ani,

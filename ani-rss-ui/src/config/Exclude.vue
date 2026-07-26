@@ -6,7 +6,7 @@
       </el-form-item>
       <div class="exclude-spacer"></div>
       <el-form-item label="正则">
-        <el-input placeholder="如 720、简、\d-\d" v-model="exclude"></el-input>
+        <el-input placeholder="如 720、简、\d-\d" v-model="newExclude"></el-input>
       </el-form-item>
     </el-form>
     <div class="flex exclude-dialog-footer">
@@ -107,19 +107,19 @@ let importExclude = () => {
 }
 
 let subgroup = ref('')
-let exclude = ref('')
+let newExclude = ref('')
 
 let addExclude = () => {
-  if (!exclude.value) {
+  if (!newExclude.value) {
     ElMessage.error('正则为空')
     return
   }
   if (subgroup.value) {
-    exclude.value = `{{${subgroup.value}}}:${exclude.value}`
+    newExclude.value = `{{${subgroup.value}}}:${newExclude.value}`
   }
-  props.exclude.push(exclude.value)
+  props.exclude.push(newExclude.value)
   subgroup.value = ''
-  exclude.value = ''
+  newExclude.value = ''
   add.value = false
 }
 

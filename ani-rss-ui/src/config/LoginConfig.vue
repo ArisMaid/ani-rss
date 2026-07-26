@@ -77,7 +77,7 @@ import * as http from '@/js/http.js'
 let createApiKey = async () => {
   try {
     await ElMessageBox.confirm('生成后旧 API Key 将立即失效，是否继续？', '轮换 API Key', {type: 'warning'})
-  } catch (e) {
+  } catch {
     return
   }
   const response = await http.rotateApiKey()
@@ -97,7 +97,7 @@ let copyApiKey = async () => {
 let copy = async (value) => {
   try {
     await navigator.clipboard.writeText(value)
-  } catch (e) {
+  } catch {
     const input = document.createElement('textarea')
     input.value = value
     input.style.position = 'fixed'

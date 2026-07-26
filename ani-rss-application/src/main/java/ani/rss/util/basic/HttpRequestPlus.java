@@ -45,7 +45,7 @@ public class HttpRequestPlus extends HttpRequest {
         try {
             return super.execute(isAsync);
         } catch (Exception e) {
-            log.error("HTTP request failed url:{} type:{}", HttpReq.sanitizeUrl(url),
+            log.error("HTTP request failed origin:{} type:{}", HttpReq.sanitizeOrigin(url),
                     e.getClass().getSimpleName());
             throw e;
         }

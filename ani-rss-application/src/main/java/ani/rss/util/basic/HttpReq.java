@@ -96,7 +96,7 @@ public class HttpReq {
      */
     public static void setProxy(HttpRequest req, Config config) {
         String url = req.getUrl();
-        String safeUrl = sanitizeUrl(url);
+        String safeUrl = sanitizeOrigin(url);
         Boolean proxy = config.getProxy();
         if (!Boolean.TRUE.equals(proxy)) {
             log.debug("代理未开启 {}", safeUrl);
@@ -136,12 +136,12 @@ public class HttpReq {
     public static void assertStatus(HttpResponse response) {
         boolean ok = response.isOk();
         int status = response.getStatus();
-        String url = sanitizeUrl(getUrl(response));
+        String url = sanitizeOrigin(getUrl(response));
         Assert.isTrue(ok, "url: {}, status: {}", url, status);
     }
 
     public static void assertXml(HttpResponse response) {
-        String url = sanitizeUrl(getUrl(response));
+        String url = sanitizeOrigin(getUrl(response));
         String contentType = response.header(Header.CONTENT_TYPE);
         Assert.notBlank(contentType, "ContentType 为空, {}", url);
 

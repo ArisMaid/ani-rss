@@ -7,11 +7,14 @@ import ani.rss.backup.BackupValidation;
 import ani.rss.commons.AtomicFileWriter;
 import ani.rss.commons.GsonStatic;
 import ani.rss.commons.PathPolicy;
+import ani.rss.entity.Ani;
+import ani.rss.entity.Config;
 import ani.rss.persistence.DatabaseManager;
 import ani.rss.util.other.AniUtil;
 import ani.rss.util.other.ConfigUtil;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -24,13 +27,13 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
@@ -47,10 +50,20 @@ public class RestoreService {
     private final TaskCoordinator taskCoordinator;
     private final Map<String, Context> operations = new ConcurrentHashMap<>();
     private final ExecutorService executor;
+    private final FailureInjector failureInjector;
 
+    @Autowired
     public RestoreService(TaskService taskService, TaskCoordinator taskCoordinator) {
+        this(taskService, taskCoordinator, checkpoint -> { });
+    }
+
+    RestoreService(
+            TaskService taskService,
+            TaskCoordinator taskCoordinator,
+            FailureInjector failureInjector) {
         this.taskService = taskService;
         this.taskCoordinator = taskCoordinator;
+        this.failureInjector = failureInjector;
         AtomicInteger sequence = new AtomicInteger();
         ThreadFactory factory = runnable -> {
             Thread thread = new Thread(runnable, "ani-rss-restore-" + sequence.incrementAndGet());
@@ -80,9 +93,10 @@ public class RestoreService {
             }
             context.validation = BackupArchive.validateAndExtract(
                     context.uploadPath, context.extractedPath);
-            context.status = RestoreStatus.VALIDATED;
+            validateRuntimeCandidates(context.extractedPath);
             context.warnings = context.validation.warnings();
             context.files = context.validation.files();
+            context.status = RestoreStatus.VALIDATED;
         } catch (Exception e) {
             context.status = RestoreStatus.INVALID;
             context.errors = List.of(message(e));
@@ -105,33 +119,33 @@ public class RestoreService {
     }
 
     public RestoreOperationView status(String operationId) {
-        return require(operationId).view();
+        Context context = require(operationId);
+        synchronized (context) {
+            return context.view();
+        }
     }
 
     private void execute(Context context) {
-        boolean tasksWereRunning = TaskService.LOOP.get() &&
-                TaskService.THREADS.stream().anyMatch(Thread::isAlive);
+        boolean tasksWereRunning = taskService.isRunning();
         String authFingerprint = null;
         TaskCoordinator.MaintenanceLease lease = null;
-        List<String> currentMoved = new ArrayList<>();
-        List<String> installed = new ArrayList<>();
         try {
             authFingerprint = AuthService.credentialFingerprint();
             lease = taskCoordinator.enterMaintenance(MAINTENANCE_TIMEOUT);
-            context.tasksWereRunning = tasksWereRunning;
-            context.status = RestoreStatus.STOPPING;
-            persist(context);
+            transition(context, RestoreStatus.STOPPING);
             if (!taskService.stop(MAINTENANCE_TIMEOUT)) {
                 throw new IllegalStateException("background tasks did not stop within 30 seconds");
             }
+            checkpoint(Checkpoint.TASKS_STOPPED);
             DatabaseManager.close();
-            context.status = RestoreStatus.SWITCHING;
-            persist(context);
+            checkpoint(Checkpoint.DATABASE_CLOSED);
+            transition(context, RestoreStatus.SWITCHING);
 
             Path currentRoot = rollbackRoot(context).resolve("current");
             Path failedRoot = rollbackRoot(context).resolve("failed");
             Files.createDirectories(currentRoot);
             Files.createDirectories(failedRoot);
+            snapshotUnswitchedState(context, currentRoot);
 
             for (String name : SWITCH_NAMES) {
                 if (!context.validation.topLevelNames().contains(topLevel(name))) {
@@ -139,46 +153,50 @@ public class RestoreService {
                 }
                 Path current = child(configRoot(), name);
                 if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
+                    context.currentMoved.add(name);
+                    persist(context);
                     moveExact(current, currentRoot.resolve(name));
-                    currentMoved.add(name);
+                    checkpoint(Checkpoint.CURRENT_MOVED);
                 }
                 Path staged = child(context.extractedPath, name);
                 if (Files.exists(staged, LinkOption.NOFOLLOW_LINKS)) {
+                    context.installed.add(name);
+                    persist(context);
                     moveExact(staged, current);
-                    installed.add(name);
+                    checkpoint(Checkpoint.STAGED_INSTALLED);
                 }
             }
 
-            reopenAndLoad(authFingerprint);
+            reopenAndLoad(authFingerprint, true);
             if (tasksWereRunning) {
+                checkpoint(Checkpoint.BEFORE_TASK_RESTART);
                 taskService.start();
+                checkpoint(Checkpoint.AFTER_TASK_RESTART);
             }
-            context.status = RestoreStatus.SUCCEEDED;
-            persist(context);
             lease.complete(tasksWereRunning);
-        } catch (Exception failure) {
+            transition(context, RestoreStatus.SUCCEEDED);
+        } catch (IOException | RuntimeException failure) {
             context.errors = List.of(message(failure));
             boolean rolledBack = false;
             if (lease != null) {
                 try {
-                    rollback(context, currentMoved, installed);
-                    reopenAndLoad(authFingerprint);
+                    ensureTasksStoppedForRollback();
+                    rollback(context);
+                    reopenAndLoad(authFingerprint, false);
                     if (tasksWereRunning) {
                         taskService.start();
                     }
-                    context.status = RestoreStatus.ROLLED_BACK;
-                    rolledBack = true;
-                    persist(context);
                     lease.complete(tasksWereRunning);
+                    transition(context, RestoreStatus.ROLLED_BACK);
+                    rolledBack = true;
                 } catch (Exception rollbackFailure) {
+                    stopTasksBestEffort();
                     context.errors = List.of(message(failure), message(rollbackFailure));
-                    context.status = RestoreStatus.MAINTENANCE_REQUIRED;
-                    persist(context);
                     lease.fail();
+                    transitionBestEffort(context, RestoreStatus.MAINTENANCE_REQUIRED);
                 }
             } else {
-                context.status = RestoreStatus.FAILED;
-                persist(context);
+                transitionBestEffort(context, RestoreStatus.FAILED);
             }
             if (!rolledBack) {
                 log.error("restore operation {} failed", context.operationId, failure);
@@ -190,34 +208,102 @@ public class RestoreService {
         }
     }
 
-    private void rollback(Context context, List<String> currentMoved, List<String> installed) throws IOException {
+    private void rollback(Context context) throws IOException {
         DatabaseManager.close();
         Path currentRoot = rollbackRoot(context).resolve("current");
         Path failedRoot = rollbackRoot(context).resolve("failed");
-        for (int i = installed.size() - 1; i >= 0; i--) {
-            String name = installed.get(i);
+        for (int i = context.installed.size() - 1; i >= 0; i--) {
+            String name = context.installed.get(i);
             Path current = child(configRoot(), name);
             if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
                 moveExact(current, failedRoot.resolve(name));
             }
         }
-        for (int i = currentMoved.size() - 1; i >= 0; i--) {
-            String name = currentMoved.get(i);
+        for (int i = context.currentMoved.size() - 1; i >= 0; i--) {
+            String name = context.currentMoved.get(i);
             Path backup = child(currentRoot, name);
             if (Files.exists(backup, LinkOption.NOFOLLOW_LINKS)) {
                 moveExact(backup, child(configRoot(), name));
             }
         }
+        for (int i = context.copiedSnapshots.size() - 1; i >= 0; i--) {
+            String name = context.copiedSnapshots.get(i);
+            Path current = child(configRoot(), name);
+            if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
+                moveExact(current, failedRoot.resolve(name));
+            }
+            Path backup = child(currentRoot, name);
+            if (!Files.exists(backup, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException("rollback snapshot is missing: " + name);
+            }
+            moveExact(backup, current);
+        }
+        for (int i = context.absentBefore.size() - 1; i >= 0; i--) {
+            String name = context.absentBefore.get(i);
+            Path current = child(configRoot(), name);
+            if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
+                moveExact(current, failedRoot.resolve(name));
+            }
+        }
     }
 
-    private void reopenAndLoad(String previousAuthFingerprint) {
+    private void snapshotUnswitchedState(Context context, Path currentRoot) throws IOException {
+        for (String name : SWITCH_NAMES) {
+            if (context.validation.topLevelNames().contains(topLevel(name))) {
+                continue;
+            }
+            Path current = child(configRoot(), name);
+            if (!Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
+                context.absentBefore.add(name);
+                persist(context);
+                continue;
+            }
+            if (!"database.db".equals(name) && !"auth-state.v2.json".equals(name)) {
+                continue;
+            }
+            copyExactRegularFile(current, currentRoot.resolve(name));
+            context.copiedSnapshots.add(name);
+            persist(context);
+        }
+    }
+
+    private void reopenAndLoad(String previousAuthFingerprint, boolean injectFailures) {
         DatabaseManager.reopen();
         if (!DatabaseManager.integrityCheck()) {
             throw new IllegalStateException("database integrity check failed after restore");
         }
+        checkpointIf(injectFailures, Checkpoint.DATABASE_REOPENED);
         ConfigUtil.load();
+        checkpointIf(injectFailures, Checkpoint.CONFIG_LOADED);
         AuthService.reload(AuthService.credentialFingerprint().equals(previousAuthFingerprint));
-        AniUtil.load();
+        checkpointIf(injectFailures, Checkpoint.AUTH_LOADED);
+        AniUtil.load(false);
+        checkpointIf(injectFailures, Checkpoint.SUBSCRIPTIONS_LOADED);
+    }
+
+    private void ensureTasksStoppedForRollback() {
+        if (!taskService.stop(MAINTENANCE_TIMEOUT)) {
+            throw new IllegalStateException("background tasks are still running; rollback is unsafe");
+        }
+    }
+
+    private void stopTasksBestEffort() {
+        try {
+            taskService.stop(MAINTENANCE_TIMEOUT);
+        } catch (RuntimeException stopFailure) {
+            log.error("could not stop background tasks after restore failure type:{}",
+                    stopFailure.getClass().getSimpleName());
+        }
+    }
+
+    private void checkpoint(Checkpoint checkpoint) {
+        failureInjector.check(checkpoint);
+    }
+
+    private void checkpointIf(boolean enabled, Checkpoint checkpoint) {
+        if (enabled) {
+            checkpoint(checkpoint);
+        }
     }
 
     private void prepareDirectories(Context context) throws IOException {
@@ -240,6 +326,24 @@ public class RestoreService {
         Files.createDirectories(context.operationRoot);
         Files.createDirectories(context.extractedPath);
         PathPolicy.realPathWithin(root, context.operationRoot);
+    }
+
+    private static void validateRuntimeCandidates(Path extractedRoot) throws IOException {
+        try {
+            Config config = GsonStatic.fromJson(
+                    Files.readString(extractedRoot.resolve("config.v2.json")), Config.class);
+            if (config == null) {
+                throw new IllegalArgumentException("configuration document is empty");
+            }
+            ConfigUtil.validateImportCandidate(config);
+
+            List<Ani> subscriptions = GsonStatic.fromJsonList(
+                    Files.readString(extractedRoot.resolve("ani.v2.json")), Ani.class);
+            AniUtil.validateCandidate(subscriptions == null ? List.of() : subscriptions);
+            AuthService.validateStateFile(extractedRoot.resolve("auth-state.v2.json"));
+        } catch (RuntimeException e) {
+            throw new IOException("backup runtime validation failed", e);
+        }
     }
 
     private void copyUpload(InputStream input, Path target) throws IOException {
@@ -277,7 +381,36 @@ public class RestoreService {
             context.updatedAt = System.currentTimeMillis();
             AtomicFileWriter.writeUtf8(operationFile, GsonStatic.toJson(context.view()));
         } catch (Exception e) {
-            log.warn("could not persist restore operation {}", context.operationId);
+            throw new IllegalStateException("persist restore operation failed", e);
+        }
+    }
+
+    private void transition(Context context, RestoreStatus status) {
+        synchronized (context) {
+            RestoreStatus previous = context.status;
+            context.status = status;
+            try {
+                persist(context);
+            } catch (RuntimeException e) {
+                context.status = previous;
+                throw e;
+            }
+        }
+    }
+
+    private void transitionBestEffort(Context context, RestoreStatus status) {
+        synchronized (context) {
+            context.status = status;
+            persistBestEffort(context);
+        }
+    }
+
+    private void persistBestEffort(Context context) {
+        try {
+            persist(context);
+        } catch (RuntimeException e) {
+            log.error("could not persist restore operation {} type:{}",
+                    context.operationId, e.getClass().getSimpleName());
         }
     }
 
@@ -322,9 +455,42 @@ public class RestoreService {
         Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
     }
 
+    private static void copyExactRegularFile(Path source, Path target) throws IOException {
+        if (Files.isSymbolicLink(source) || !Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS) ||
+                Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("restore snapshot conflict or non-regular source");
+        }
+        Path parent = target.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        Files.copy(source, target, StandardCopyOption.COPY_ATTRIBUTES);
+        try (FileChannel channel = FileChannel.open(target, StandardOpenOption.WRITE)) {
+            channel.force(true);
+        }
+    }
+
     private static String message(Exception e) {
         String message = e.getMessage();
         return message == null || message.isBlank() ? e.getClass().getSimpleName() : message;
+    }
+
+    enum Checkpoint {
+        TASKS_STOPPED,
+        DATABASE_CLOSED,
+        CURRENT_MOVED,
+        STAGED_INSTALLED,
+        DATABASE_REOPENED,
+        CONFIG_LOADED,
+        AUTH_LOADED,
+        SUBSCRIPTIONS_LOADED,
+        BEFORE_TASK_RESTART,
+        AFTER_TASK_RESTART
+    }
+
+    @FunctionalInterface
+    interface FailureInjector {
+        void check(Checkpoint checkpoint);
     }
 
     public enum RestoreStatus {
@@ -347,8 +513,21 @@ public class RestoreService {
             List<BackupManifest.Entry> files,
             List<String> warnings,
             List<String> errors,
+            List<String> rollbackFiles,
+            List<String> installedFiles,
+            List<String> copiedSnapshots,
+            List<String> absentBefore,
             long createdAt,
             long updatedAt) {
+        public RestoreOperationView {
+            files = files == null ? List.of() : List.copyOf(files);
+            warnings = warnings == null ? List.of() : List.copyOf(warnings);
+            errors = errors == null ? List.of() : List.copyOf(errors);
+            rollbackFiles = rollbackFiles == null ? List.of() : List.copyOf(rollbackFiles);
+            installedFiles = installedFiles == null ? List.of() : List.copyOf(installedFiles);
+            copiedSnapshots = copiedSnapshots == null ? List.of() : List.copyOf(copiedSnapshots);
+            absentBefore = absentBefore == null ? List.of() : List.copyOf(absentBefore);
+        }
     }
 
     private final class Context {
@@ -360,10 +539,13 @@ public class RestoreService {
         private volatile long updatedAt = createdAt;
         private volatile RestoreStatus status = RestoreStatus.INVALID;
         private volatile BackupValidation validation;
-        private volatile boolean tasksWereRunning;
         private volatile List<BackupManifest.Entry> files = List.of();
         private volatile List<String> warnings = List.of();
         private volatile List<String> errors = List.of();
+        private final List<String> currentMoved = new CopyOnWriteArrayList<>();
+        private final List<String> installed = new CopyOnWriteArrayList<>();
+        private final List<String> copiedSnapshots = new CopyOnWriteArrayList<>();
+        private final List<String> absentBefore = new CopyOnWriteArrayList<>();
 
         private Context(String operationId) {
             this.operationId = operationId;
@@ -383,6 +565,10 @@ public class RestoreService {
                     files,
                     warnings,
                     errors,
+                    currentMoved,
+                    installed,
+                    copiedSnapshots,
+                    absentBefore,
                     createdAt,
                     updatedAt);
         }

@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 import lombok.experimental.Accessors;
 
+import java.io.Serial;
 import java.io.Serializable;
 import java.util.List;
 import java.util.function.Supplier;
@@ -19,6 +20,9 @@ import java.util.function.Supplier;
 @Accessors(chain = true)
 @Schema(description = "种子信息")
 public class TorrentsInfo implements Serializable {
+    @Serial
+    private static final long serialVersionUID = 1L;
+
     @Schema(description = "id")
     private String id;
 
@@ -87,7 +91,7 @@ public class TorrentsInfo implements Serializable {
      * 文件列表
      */
     @Schema(description = "文件列表")
-    private Supplier<List<String>> filesSupplier;
+    private transient Supplier<List<String>> filesSupplier;
 
     public TorrentsInfo progress(long completed, long size) {
         if (size < 1) {

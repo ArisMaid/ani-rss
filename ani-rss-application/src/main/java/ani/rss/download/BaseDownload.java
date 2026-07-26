@@ -36,12 +36,22 @@ public interface BaseDownload {
      */
     Boolean login(Boolean test, Config config);
 
+    default DownloaderResult<Void> connectResult(Boolean test, Config config) {
+        return Boolean.TRUE.equals(login(test, config))
+                ? DownloaderResult.success(null)
+                : DownloaderResult.rejected("CONNECTION_REJECTED");
+    }
+
     /**
      * 获取任务列表
      *
      * @return 任务列表
      */
     List<TorrentsInfo> getTorrentsInfos();
+
+    default DownloaderResult<List<TorrentsInfo>> torrentsResult() {
+        return DownloaderResult.success(List.copyOf(getTorrentsInfos()));
+    }
 
     /**
      * 下载
@@ -54,6 +64,13 @@ public interface BaseDownload {
      */
     Boolean download(Ani ani, Item item, String savePath, File torrentFile);
 
+    default DownloaderResult<Void> downloadResult(
+            Ani ani, Item item, String savePath, File torrentFile) {
+        return Boolean.TRUE.equals(download(ani, item, savePath, torrentFile))
+                ? DownloaderResult.success(null)
+                : DownloaderResult.rejected("DOWNLOAD_REJECTED");
+    }
+
     /**
      * 删除已完成任务
      *
@@ -63,12 +80,24 @@ public interface BaseDownload {
      */
     Boolean delete(TorrentsInfo torrentsInfo, Boolean deleteFiles);
 
+    default DownloaderResult<Void> deleteResult(TorrentsInfo torrentsInfo, Boolean deleteFiles) {
+        return Boolean.TRUE.equals(delete(torrentsInfo, deleteFiles))
+                ? DownloaderResult.success(null)
+                : DownloaderResult.rejected("DELETE_REJECTED");
+    }
+
     /**
      * 重命名
      *
      * @param torrentsInfo 任务
      */
     Boolean rename(TorrentsInfo torrentsInfo);
+
+    default DownloaderResult<Void> renameResult(TorrentsInfo torrentsInfo) {
+        return Boolean.TRUE.equals(rename(torrentsInfo))
+                ? DownloaderResult.success(null)
+                : DownloaderResult.rejected("RENAME_REJECTED");
+    }
 
     /**
      * 为任务添加标签
@@ -79,12 +108,23 @@ public interface BaseDownload {
      */
     Boolean addTags(TorrentsInfo torrentsInfo, String tags);
 
+    default DownloaderResult<Void> addTagsResult(TorrentsInfo torrentsInfo, String tags) {
+        return Boolean.TRUE.equals(addTags(torrentsInfo, tags))
+                ? DownloaderResult.success(null)
+                : DownloaderResult.rejected("TAG_REJECTED");
+    }
+
     /**
      * 自动更新 Trackers
      *
      * @param trackers trackers 列表
      */
     void updateTrackers(Set<String> trackers);
+
+    default DownloaderResult<Void> updateTrackersResult(Set<String> trackers) {
+        updateTrackers(trackers);
+        return DownloaderResult.success(null);
+    }
 
     /**
      * 修改保存位置
@@ -93,6 +133,11 @@ public interface BaseDownload {
      * @param path         位置
      */
     void setSavePath(TorrentsInfo torrentsInfo, String path);
+
+    default DownloaderResult<Void> setSavePathResult(TorrentsInfo torrentsInfo, String path) {
+        setSavePath(torrentsInfo, path);
+        return DownloaderResult.success(null);
+    }
 
     /**
      * 获取重命名结果

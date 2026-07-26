@@ -44,7 +44,7 @@ public class SystemNotification implements BaseNotification {
             return false;
         }
 
-        TrayIcon trayIcon = SystemTrayUtil.TRAY_ICON;
+        TrayIcon trayIcon = SystemTrayUtil.trayIcon();
         if (Objects.isNull(trayIcon)) {
             log.error("未开启系统托盘 添加--gui参数启动");
             return false;

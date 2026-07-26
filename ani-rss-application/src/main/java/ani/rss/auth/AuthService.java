@@ -66,28 +66,37 @@ public class AuthService {
             Config config = ConfigUtil.snapshot();
             Login login = config.getLogin();
             boolean setupRequired = login == null || isBlank(login.getUsername()) || isBlank(login.getPassword());
+            long now = System.currentTimeMillis();
             if (setupRequired) {
-                if (isBlank(state.setupCodeHash) || state.setupExpiresAt <= System.currentTimeMillis() ||
+                boolean stateChanged = clearLegacyMigrationState();
+                if (isBlank(state.setupCodeHash) || state.setupExpiresAt <= now ||
                         state.setupUsed || !Files.isRegularFile(setupCodePath(), LinkOption.NOFOLLOW_LINKS)) {
                     String code = randomToken(24);
                     state.setupCodeHash = PASSWORDS.encode(code);
-                    state.setupExpiresAt = System.currentTimeMillis() + SETUP_CODE_TTL;
+                    state.setupExpiresAt = now + SETUP_CODE_TTL;
                     state.setupUsed = false;
                     writeState(path, state);
                     writeSetupCode(code);
-                }
-            } else if (isLegacyHash(login.getPassword())) {
-                if (state.legacyMigrationUntil <= 0) {
-                    state.legacyMigrationUntil = System.currentTimeMillis() + LEGACY_MIGRATION_TTL;
+                } else if (stateChanged) {
                     writeState(path, state);
                 }
-            } else if (!isBlank(state.setupCodeHash) || state.setupExpiresAt != 0 ||
-                    !state.setupUsed || state.legacyMigrationUntil != 0) {
-                state.setupCodeHash = null;
-                state.setupExpiresAt = 0;
-                state.setupUsed = true;
-                state.legacyMigrationUntil = 0;
-                writeState(path, state);
+            } else {
+                boolean stateChanged = clearSetupState();
+                if (isLegacyHash(login.getPassword())) {
+                    if (state.legacyMigrationUntil == 0 && isBlank(state.legacyTokenHash)) {
+                        state.legacyMigrationUntil = now + LEGACY_MIGRATION_TTL;
+                        state.legacyTokenHash = legacyTokenFingerprint();
+                        stateChanged = true;
+                    } else if (state.legacyMigrationUntil > now && isBlank(state.legacyTokenHash)) {
+                        state.legacyTokenHash = legacyTokenFingerprint();
+                        stateChanged = true;
+                    }
+                } else if (state.legacyMigrationUntil <= now || isBlank(state.legacyTokenHash)) {
+                    stateChanged |= clearLegacyMigrationState();
+                }
+                if (stateChanged) {
+                    writeState(path, state);
+                }
             }
             if (!setupRequired && Files.exists(setupCodePath(), LinkOption.NOFOLLOW_LINKS)) {
                 deleteSetupCode();
@@ -115,6 +124,15 @@ public class AuthService {
     public static void invalidateSessions() {
         SESSIONS.clear();
         OAUTH_STATES.clear();
+    }
+
+    public static void invalidateLegacyMigration() {
+        initialize();
+        synchronized (STATE_LOCK) {
+            if (clearLegacyMigrationState()) {
+                writeState(statePath(), state);
+            }
+        }
     }
 
     public static String credentialFingerprint() {
@@ -152,6 +170,7 @@ public class AuthService {
             state.setupUsed = true;
             state.setupCodeHash = null;
             state.setupExpiresAt = 0;
+            clearLegacyMigrationState();
             writeState(statePath(), state);
             deleteSetupCode();
             SESSIONS.clear();
@@ -192,10 +211,6 @@ public class AuthService {
             Config candidate = ConfigUtil.snapshot();
             candidate.getLogin().setPassword(PASSWORDS.encode(password));
             ConfigUtil.sync(candidate);
-            synchronized (STATE_LOCK) {
-                state.legacyMigrationUntil = 0;
-                writeState(statePath(), state);
-            }
             SESSIONS.clear();
         }
         return issueSession(username, request, response);
@@ -236,28 +251,29 @@ public class AuthService {
 
     public static boolean validateLegacyRequest(HttpServletRequest request) {
         initialize();
+        String expectedFingerprint;
         synchronized (STATE_LOCK) {
-            if (state.legacyMigrationUntil <= System.currentTimeMillis()) {
+            if (state.legacyMigrationUntil <= System.currentTimeMillis() ||
+                    isBlank(state.legacyTokenHash)) {
                 return false;
             }
+            expectedFingerprint = state.legacyTokenHash;
         }
         if (request == null) {
             return false;
         }
         String authorization = request.getHeader("Authorization");
-        String supplied = isBlank(authorization) ? request.getParameter("s") : authorization;
-        if (isBlank(supplied) || supplied.startsWith("Bearer ")) {
+        if (isBlank(authorization) || authorization.regionMatches(true, 0, "Bearer ", 0, 7)) {
             return false;
         }
-        Login login = AuthUtil.getLogin();
-        String expected = AuthUtil.getAuth(login);
-        return constantEquals(expected, supplied);
+        return constantEquals(expectedFingerprint, SecureUtil.sha256(authorization));
     }
 
     public static boolean legacyTokensEnabled() {
         initialize();
         synchronized (STATE_LOCK) {
-            return state.legacyMigrationUntil > System.currentTimeMillis();
+            return state.legacyMigrationUntil > System.currentTimeMillis() &&
+                    !isBlank(state.legacyTokenHash);
         }
     }
 
@@ -443,7 +459,7 @@ public class AuthService {
     }
 
     private static boolean isAuthEndpoint(String uri) {
-        return uri != null && (uri.endsWith("/login") || uri.contains("/auth/setup"));
+        return "/api/v2/auth/login".equals(uri) || "/api/v2/auth/setup".equals(uri);
     }
 
     private static void validateCredentials(String username, String password) {
@@ -472,6 +488,29 @@ public class AuthService {
         return value != null && value.matches("(?i)[0-9a-f]{32}");
     }
 
+    private static String legacyTokenFingerprint() {
+        return SecureUtil.sha256(AuthUtil.getAuth(AuthUtil.getLogin()));
+    }
+
+    private static boolean clearSetupState() {
+        if (isBlank(state.setupCodeHash) && state.setupExpiresAt == 0 && state.setupUsed) {
+            return false;
+        }
+        state.setupCodeHash = null;
+        state.setupExpiresAt = 0;
+        state.setupUsed = true;
+        return true;
+    }
+
+    private static boolean clearLegacyMigrationState() {
+        if (state.legacyMigrationUntil == 0 && isBlank(state.legacyTokenHash)) {
+            return false;
+        }
+        state.legacyMigrationUntil = 0;
+        state.legacyTokenHash = null;
+        return true;
+    }
+
     private static String randomToken(int bytes) {
         byte[] value = new byte[bytes];
         RANDOM.nextBytes(value);
@@ -494,19 +533,42 @@ public class AuthService {
         return ConfigUtil.getConfigDir().toPath().toAbsolutePath().normalize().resolve(STATE_FILE);
     }
 
+    public static void validateStateFile(Path path) {
+        try {
+            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                return;
+            }
+            if (Files.isSymbolicLink(path) || !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IllegalStateException("auth state is not a regular file");
+            }
+            AuthState candidate = parseState(path);
+            if (candidate.setupExpiresAt < 0 || candidate.legacyMigrationUntil < 0 ||
+                    (!isBlank(candidate.legacyTokenHash) &&
+                            !candidate.legacyTokenHash.matches("(?i)[0-9a-f]{64}"))) {
+                throw new IllegalStateException("auth state contains invalid values");
+            }
+        } catch (IOException | RuntimeException e) {
+            throw new IllegalStateException("validate auth state failed", e);
+        }
+    }
+
     private static AuthState readState(Path path) {
         try {
             if (!Files.exists(path)) {
                 return new AuthState();
             }
-            AuthState loaded = GsonStatic.GSON.fromJson(Files.readString(path), AuthState.class);
-            if (loaded == null) {
-                throw new IllegalStateException("auth state is empty");
-            }
-            return loaded;
+            return parseState(path);
         } catch (IOException | RuntimeException e) {
             throw new IllegalStateException("load auth state failed", e);
         }
+    }
+
+    private static AuthState parseState(Path path) throws IOException {
+        AuthState loaded = GsonStatic.GSON.fromJson(Files.readString(path), AuthState.class);
+        if (loaded == null) {
+            throw new IllegalStateException("auth state is empty");
+        }
+        return loaded;
     }
 
     private static void writeState(Path path, AuthState value) {
@@ -579,5 +641,6 @@ public class AuthService {
         private long setupExpiresAt;
         private boolean setupUsed;
         private long legacyMigrationUntil;
+        private String legacyTokenHash;
     }
 }

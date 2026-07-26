@@ -60,6 +60,65 @@ class OwnershipServiceMoveTest {
                 repository.find("second").orElseThrow().saveRoot());
     }
 
+    @Test
+    void reconcilesOnlyAfterAValidatedDownloaderMove() throws Exception {
+        Path sourceRoot = Files.createDirectories(tempDir.resolve("reconcile-source"));
+        Path targetRoot = Files.createDirectories(tempDir.resolve("reconcile-target"));
+        Path source = sourceRoot.resolve("episode.mkv");
+        Path target = targetRoot.resolve("episode.mkv");
+        Files.writeString(source, "episode");
+        createOwnership("reconcile", "hash-reconcile", sourceRoot, "episode.mkv", 7L);
+        repository.replaceFiles("reconcile",
+                List.of(new OwnedFile("reconcile", "episode.mkv", "FILE", 7L)));
+
+        service.validateSubscriptionMove("subscription", targetRoot.toString());
+        Files.move(source, target);
+        service.moveSubscriptionFiles("subscription", targetRoot.toString());
+
+        assertFalse(Files.exists(source));
+        assertEquals("episode", Files.readString(target));
+        assertEquals(targetRoot.toAbsolutePath().normalize().toString(),
+                repository.find("reconcile").orElseThrow().saveRoot());
+    }
+
+    @Test
+    void sourceMissingTargetIsRejectedWithoutPreflight() throws Exception {
+        Path sourceRoot = Files.createDirectories(tempDir.resolve("unplanned-source"));
+        Path targetRoot = Files.createDirectories(tempDir.resolve("unplanned-target"));
+        Path source = sourceRoot.resolve("episode.mkv");
+        Path target = targetRoot.resolve("episode.mkv");
+        Files.writeString(source, "episode");
+        createOwnership("unplanned", "hash-unplanned", sourceRoot, "episode.mkv", 7L);
+        Files.move(source, target);
+
+        assertThrows(IllegalStateException.class,
+                () -> service.moveSubscriptionFiles("subscription", targetRoot.toString()));
+
+        assertTrue(Files.exists(target));
+        assertEquals(sourceRoot.toAbsolutePath().normalize().toString(),
+                repository.find("unplanned").orElseThrow().saveRoot());
+    }
+
+    @Test
+    void copyPreflightsEveryTargetAndNeverOverwrites() throws Exception {
+        Path firstRoot = Files.createDirectories(tempDir.resolve("copy-first"));
+        Path secondRoot = Files.createDirectories(tempDir.resolve("copy-second"));
+        Path targetRoot = Files.createDirectories(tempDir.resolve("copy-target"));
+        Files.writeString(firstRoot.resolve("first.mkv"), "first");
+        Files.writeString(secondRoot.resolve("second.mkv"), "second");
+        Files.writeString(targetRoot.resolve("second.mkv"), "existing");
+        createOwnership("copy-a", "hash-copy-a", firstRoot, "first.mkv", 5L);
+        createOwnership("copy-b", "hash-copy-b", secondRoot, "second.mkv", 6L);
+
+        assertThrows(IllegalStateException.class,
+                () -> service.copySubscriptionFiles("subscription", targetRoot.toString()));
+
+        assertFalse(Files.exists(targetRoot.resolve("first.mkv")));
+        assertEquals("existing", Files.readString(targetRoot.resolve("second.mkv")));
+        assertTrue(Files.exists(firstRoot.resolve("first.mkv")));
+        assertTrue(Files.exists(secondRoot.resolve("second.mkv")));
+    }
+
     private void createOwnership(String id, String hash, Path root, String file, long createdAt) {
         repository.createPending(new DownloadOwnership(
                 id, "qBittorrent", id, hash, "subscription", 1, "1",

@@ -10,8 +10,6 @@ import ani.rss.util.basic.HttpReq;
 import ani.rss.util.other.NotificationUtil;
 import ani.rss.util.other.TorrentUtil;
 import cn.hutool.core.collection.ListUtil;
-import cn.hutool.core.date.DateTime;
-import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.lang.Assert;
 import cn.hutool.core.text.StrFormatter;
@@ -26,11 +24,17 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 @Slf4j
 public class OpenList implements BaseDownload {
+    private static final long POLL_INTERVAL_MILLIS = 1_000L;
     private Config config;
+    private final ConcurrentMap<String, Workflow> workflows = new ConcurrentHashMap<>();
+    private final ThreadLocal<String> submittedTaskId = new ThreadLocal<>();
 
     public OpenList() {
     }
@@ -41,24 +45,33 @@ public class OpenList implements BaseDownload {
 
     @Override
     public Boolean login(Boolean test, Config config) {
+        return connectResult(test, config).isSuccess();
+    }
+
+    @Override
+    public DownloaderResult<Void> connectResult(Boolean test, Config config) {
         this.config = ani.rss.util.other.ConfigUtil.copy(config);
         String host = config.getDownloadToolHost();
         String password = config.getDownloadToolPassword();
         if (StrUtil.isBlank(host) || StrUtil.isBlank(password)) {
             log.warn("OpenList 未配置完成");
-            return false;
+            return DownloaderResult.rejected("OPENLIST_CONFIGURATION_INCOMPLETE");
         }
         String downloadPath = config.getDownloadPathTemplate();
-        Assert.notBlank(downloadPath, "未设置下载位置");
+        if (StrUtil.isBlank(downloadPath)) {
+            return DownloaderResult.rejected("OPENLIST_DOWNLOAD_PATH_MISSING");
+        }
         String provider = config.getProvider();
-        Assert.notBlank(provider, "请选择 Driver");
+        if (StrUtil.isBlank(provider)) {
+            return DownloaderResult.rejected("OPENLIST_PROVIDER_MISSING");
+        }
         try {
             executeApi(getApi("me"), "login");
-            return true;
+            return DownloaderResult.success(null);
         } catch (Exception e) {
             log.warn("登录 OpenList 失败 type:{}", e.getClass().getSimpleName());
+            return DownloaderFailures.result(e);
         }
-        return false;
     }
 
 
@@ -69,6 +82,33 @@ public class OpenList implements BaseDownload {
 
     @Override
     public Boolean download(Ani ani, Item item, String savePath, File torrentFile) {
+        return downloadResult(ani, item, savePath, torrentFile).isSuccess();
+    }
+
+    @Override
+    public DownloaderResult<Void> downloadResult(Ani ani, Item item, String savePath, File torrentFile) {
+        String workflowKey = StrUtil.blankToDefault(item.getInfoHash(), TorrentUtil.getMagnet(torrentFile));
+        Workflow workflow = workflows.computeIfAbsent(workflowKey, ignored -> new Workflow());
+        synchronized (workflow) {
+            submittedTaskId.remove();
+            try {
+                boolean success = downloadInternal(ani, item, savePath, torrentFile, workflow);
+                String remoteTaskId = submittedTaskId.get();
+                if (success) {
+                    workflows.remove(workflowKey, workflow);
+                    return DownloaderResult.success(null, remoteTaskId);
+                }
+                return DownloaderResult.rejected("OPENLIST_DOWNLOAD_REJECTED", remoteTaskId);
+            } catch (Exception e) {
+                return DownloaderFailures.result(e, submittedTaskId.get());
+            } finally {
+                submittedTaskId.remove();
+            }
+        }
+    }
+
+    private Boolean downloadInternal(
+            Ani ani, Item item, String savePath, File torrentFile, Workflow workflow) {
         // windows 真该死啊
         savePath = ReUtil.replaceAll(savePath, "^[A-z]:", "");
 
@@ -77,36 +117,43 @@ public class OpenList implements BaseDownload {
         String path = savePath + "/" + reName;
         Boolean delete = config.getDelete();
         try {
-            mkdir(path);
-            String tid;
+            ensureDirectory(path, workflow);
+            String tid = workflow.taskId;
             try {
-                tid = fsAddOfflineDownload(magnet, path);
+                if (StrUtil.isBlank(tid)) {
+                    tid = findExistingTaskId(magnet).orElseGet(() -> fsAddOfflineDownload(magnet, path));
+                    workflow.taskId = tid;
+                    workflow.startedAtMillis = System.currentTimeMillis();
+                }
+                submittedTaskId.set(tid);
                 log.info("添加离线下载成功 {}", reName);
             } catch (Exception e) {
                 log.error("添加离线下载失败 {}", reName);
-                throw new IllegalStateException("添加离线下载失败 " + reName);
+                throw new IllegalStateException("OpenList task submission failed", e);
             }
 
-            // 记录开始时间
-            DateTime startTime = DateTime.now();
+            if (!workflow.taskSucceeded) {
+                if (workflow.startedAtMillis == 0L) {
+                    workflow.startedAtMillis = System.currentTimeMillis();
+                }
 
-            // 重试次数
-            long retry = 0;
-            while (true) {
+                // 重试次数
+                long retry = 0;
+                while (true) {
                 Integer openListDownloadTimeout = config.getOpenListDownloadTimeout();
                 Long openListDownloadRetryNumber = config.getOpenListDownloadRetryNumber();
 
-                DateTime endTime = DateUtil.offsetMinute(startTime, openListDownloadTimeout);
-                DateTime currentTime = DateTime.now();
-                if (currentTime.getTime() >= endTime.getTime()) {
+                long timeoutMillis = TimeUnit.MINUTES.toMillis(openListDownloadTimeout);
+                if (System.currentTimeMillis() - workflow.startedAtMillis >= timeoutMillis) {
                     // 超过下载超时限制
                     log.error("{} {} 分钟还未下载完成, 停止检测下载", reName, openListDownloadTimeout);
-                    return false;
+                    throw DownloaderOperationException.failed("OPENLIST_TASK_TIMEOUT", false);
                 }
 
                 Optional<OpenListTaskInfo> taskInfoOpt = taskInfo(tid);
 
                 if (taskInfoOpt.isEmpty()) {
+                    sleepPoll();
                     continue;
                 }
 
@@ -135,12 +182,13 @@ public class OpenList implements BaseDownload {
                                 break;
                             }
                             log.error("离线下载失败 {}", error);
-                            return false;
+                            throw DownloaderOperationException.rejected("OPENLIST_TASK_FAILED");
                         }
                         retry++;
                         log.info("离线任务正在进行重试 {}, 当前重试次数 {}, 最大重试次数 {}", tid, retry, openListDownloadRetryNumber);
                     }
                     taskRetry(tid);
+                    sleepPoll();
                     continue;
                 }
 
@@ -151,86 +199,41 @@ public class OpenList implements BaseDownload {
                         ).contains(state)
                 ) {
                     log.error("离线任务已被取消 {}", reName);
-                    return false;
+                    throw DownloaderOperationException.rejected("OPENLIST_TASK_CANCELED");
                 }
 
                 // 成功
                 if (state == OpenListTaskInfo.State.Succeeded) {
                     break;
                 }
-            }
-
-            if (delete) {
-                log.info("离线下载完成, 自动删除已完成任务");
-                taskDelete(tid);
-            }
-
-            List<OpenListFileInfo> openListFileInfos = findFiles(path);
-
-            // 取大小最大的一个视频文件
-            Optional<OpenListFileInfo> videoFileOpt = openListFileInfos.stream()
-                    .filter(openListFileInfo ->
-                            FileUtils.isVideoFormat(openListFileInfo.getName()))
-                    .findFirst();
-
-            if (videoFileOpt.isEmpty()) {
-                return false;
-            }
-            OpenListFileInfo videoFile = videoFileOpt.get();
-            List<OpenListFileInfo> subtitleList = openListFileInfos.stream()
-                    .filter(openListFileInfo ->
-                            FileUtils.isSubtitleFormat(openListFileInfo.getName()))
-                    .toList();
-
-            Map<String, String> renameMap = new HashMap<>();
-            renameMap.put(videoFile.getName(), reName + "." + FileUtil.extName(videoFile.getName()));
-            for (OpenListFileInfo openListFileInfo : subtitleList) {
-                String name = openListFileInfo.getName();
-                String extName = FileUtil.extName(name);
-                String newName = reName;
-                String lang = FileUtil.extName(FileUtil.mainName(name));
-                if (StrUtil.isNotBlank(lang)) {
-                    newName = newName + "." + lang;
+                    sleepPoll();
                 }
-                renameMap.put(name, newName + "." + extName);
+                workflow.taskSucceeded = true;
             }
 
-            Boolean rename = config.getRename();
-
-            if (rename) {
-                // 重命名
-                List<Map<String, String>> renameObjects = renameMap.entrySet().stream()
-                        .map(map -> {
-                            String srcName = map.getKey();
-                            String newName = map.getValue();
-                            log.info("重命名 {} ==> {}", srcName, newName);
-                            return Map.of(
-                                    "src_name", srcName,
-                                    "new_name", newName
-                            );
-                        }).toList();
-                fsBatchRename(renameObjects, videoFile.getPath());
+            if (workflow.files == null) {
+                workflow.files = buildFilePlans(path, reName, Boolean.TRUE.equals(config.getRename()));
             }
+            applyRenames(workflow.files);
+            moveFiles(workflow.files, savePath);
 
-            // 移动
-            List<String> names = renameMap.entrySet()
-                    .stream()
-                    .map(m -> rename ? m.getValue() : m.getKey())
-                    .toList();
-            fsMove(videoFile.getPath(), savePath, names);
-
-            // 删除残留文件夹
-            fsRemove(savePath, List.of(reName));
+            if (delete && !workflow.taskDeleted) {
+                log.info("离线下载完成, 自动删除已完成任务记录");
+                if (taskInfo(tid).isPresent()) {
+                    taskDelete(tid);
+                }
+                workflow.taskDeleted = true;
+            }
 
             NotificationUtil.send(config, ani,
                     StrFormatter.format("{} 下载完成", item.getReName()),
                     NotificationStatusEnum.DOWNLOAD_END
             );
             return true;
-        } catch (Exception e) {
+        } catch (RuntimeException e) {
             log.warn("OpenList 下载流程失败 type:{}", e.getClass().getSimpleName());
+            throw e;
         }
-        return false;
     }
 
     @Override
@@ -256,6 +259,140 @@ public class OpenList implements BaseDownload {
     @Override
     public void setSavePath(TorrentsInfo torrentsInfo, String path) {
 
+    }
+
+    private void ensureDirectory(String path, Workflow workflow) {
+        if (workflow.directoryReady) {
+            return;
+        }
+        try {
+            mkdir(path);
+        } catch (DownloaderOperationException e) {
+            if (!"OPENLIST_APPLICATION_REJECTED".equals(e.errorCode())) {
+                throw e;
+            }
+            // mkdir may report an application error when the directory already exists.
+            fsList(path, false);
+        }
+        workflow.directoryReady = true;
+    }
+
+    private List<FilePlan> buildFilePlans(String sourceRoot, String reName, boolean rename) {
+        List<OpenListFileInfo> files = findFiles(sourceRoot);
+        OpenListFileInfo video = files.stream()
+                .filter(file -> FileUtils.isVideoFormat(file.getName()))
+                .findFirst()
+                .orElseThrow(() -> DownloaderOperationException.failed(
+                        "OPENLIST_VIDEO_NOT_FOUND", false));
+
+        List<OpenListFileInfo> selected = new ArrayList<>();
+        selected.add(video);
+        files.stream()
+                .filter(file -> FileUtils.isSubtitleFormat(file.getName()))
+                .forEach(selected::add);
+
+        Set<String> targets = new HashSet<>();
+        List<FilePlan> plans = new ArrayList<>();
+        for (OpenListFileInfo file : selected) {
+            String targetName = file.getName();
+            if (rename && FileUtils.isVideoFormat(file.getName())) {
+                targetName = reName + "." + FileUtil.extName(file.getName());
+            } else if (rename && FileUtils.isSubtitleFormat(file.getName())) {
+                String language = FileUtil.extName(FileUtil.mainName(file.getName()));
+                targetName = reName + (StrUtil.isBlank(language) ? "" : "." + language) +
+                        "." + FileUtil.extName(file.getName());
+            }
+            if (!targets.add(targetName)) {
+                throw DownloaderOperationException.rejected("OPENLIST_TARGET_CONFLICT");
+            }
+            plans.add(new FilePlan(file.getPath(), file.getName(), targetName));
+        }
+        return List.copyOf(plans);
+    }
+
+    private void applyRenames(List<FilePlan> plans) {
+        Map<String, List<FilePlan>> byDirectory = plans.stream()
+                .filter(plan -> !plan.sourceName().equals(plan.targetName()))
+                .collect(java.util.stream.Collectors.groupingBy(
+                        FilePlan::sourceDirectory, LinkedHashMap::new, java.util.stream.Collectors.toList()));
+        for (Map.Entry<String, List<FilePlan>> entry : byDirectory.entrySet()) {
+            Set<String> currentNames = fileNames(entry.getKey());
+            List<Map<String, String>> pending = new ArrayList<>();
+            for (FilePlan plan : entry.getValue()) {
+                boolean sourceExists = currentNames.contains(plan.sourceName());
+                boolean targetExists = currentNames.contains(plan.targetName());
+                if (sourceExists && targetExists) {
+                    throw DownloaderOperationException.rejected("OPENLIST_TARGET_CONFLICT");
+                }
+                if (!sourceExists && targetExists) {
+                    continue;
+                }
+                if (!sourceExists) {
+                    throw DownloaderOperationException.failed("OPENLIST_SOURCE_MISSING", false);
+                }
+                log.info("重命名 {} ==> {}", plan.sourceName(), plan.targetName());
+                pending.add(Map.of("src_name", plan.sourceName(), "new_name", plan.targetName()));
+            }
+            if (!pending.isEmpty()) {
+                fsBatchRename(pending, entry.getKey());
+            }
+        }
+    }
+
+    private void moveFiles(List<FilePlan> plans, String destinationDirectory) {
+        String normalizedDestination = normalizeRemotePath(destinationDirectory);
+        Set<String> destinationNames = fileNames(destinationDirectory);
+        Map<String, List<FilePlan>> byDirectory = plans.stream()
+                .collect(java.util.stream.Collectors.groupingBy(
+                        FilePlan::sourceDirectory, LinkedHashMap::new, java.util.stream.Collectors.toList()));
+        for (Map.Entry<String, List<FilePlan>> entry : byDirectory.entrySet()) {
+            if (normalizeRemotePath(entry.getKey()).equals(normalizedDestination)) {
+                continue;
+            }
+            Set<String> sourceNames = fileNames(entry.getKey());
+            List<String> pending = new ArrayList<>();
+            for (FilePlan plan : entry.getValue()) {
+                boolean sourceExists = sourceNames.contains(plan.targetName());
+                boolean targetExists = destinationNames.contains(plan.targetName());
+                if (sourceExists && targetExists) {
+                    throw DownloaderOperationException.rejected("OPENLIST_TARGET_CONFLICT");
+                }
+                if (!sourceExists && targetExists) {
+                    continue;
+                }
+                if (!sourceExists) {
+                    throw DownloaderOperationException.failed("OPENLIST_SOURCE_MISSING", false);
+                }
+                pending.add(plan.targetName());
+            }
+            if (!pending.isEmpty()) {
+                fsMove(entry.getKey(), destinationDirectory, pending);
+                destinationNames.addAll(pending);
+            }
+        }
+    }
+
+    private Set<String> fileNames(String directory) {
+        return fsList(directory, true).stream()
+                .map(OpenListFileInfo::getName)
+                .filter(Objects::nonNull)
+                .collect(java.util.stream.Collectors.toCollection(HashSet::new));
+    }
+
+    private static String normalizeRemotePath(String path) {
+        String normalized = StrUtil.blankToDefault(path, "/").replace('\\', '/').replaceAll("/+", "/");
+        return normalized.length() > 1 && normalized.endsWith("/")
+                ? normalized.substring(0, normalized.length() - 1)
+                : normalized;
+    }
+
+    private static void sleepPoll() {
+        try {
+            Thread.sleep(POLL_INTERVAL_MILLIS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw DownloaderOperationException.failed("OPENLIST_INTERRUPTED", false, e);
+        }
     }
 
     /**
@@ -502,16 +639,30 @@ public class OpenList implements BaseDownload {
                 .header(Header.AUTHORIZATION, password);
     }
 
+    private Optional<String> findExistingTaskId(String magnet) {
+        String normalizedMagnet = StrUtil.blankToDefault(magnet, "").toLowerCase(Locale.ROOT);
+        String infoHash = ReUtil.get("(?i)btih:([a-z0-9]+)", normalizedMagnet, 1);
+        return Stream.concat(taskDoneList().stream(), taskUnDoneList().stream())
+                .filter(task -> {
+                    String name = StrUtil.blankToDefault(task.getName(), "").toLowerCase(Locale.ROOT);
+                    return (!normalizedMagnet.isBlank() && name.contains(normalizedMagnet)) ||
+                            (StrUtil.isNotBlank(infoHash) && name.contains(infoHash.toLowerCase(Locale.ROOT)));
+                })
+                .map(OpenListTaskInfo::getId)
+                .filter(StrUtil::isNotBlank)
+                .findFirst();
+    }
+
     private JsonObject executeApi(HttpRequest request, String action) {
         try (HttpResponse response = request.execute()) {
             int status = response.getStatus();
             if (status < 200 || status >= 300) {
-                throw new IllegalStateException("OpenList " + action + " HTTP " + status);
+                throw DownloaderOperationException.http("OPENLIST", status);
             }
             JsonObject json = GsonStatic.fromJson(response.body(), JsonObject.class);
             if (json == null || !json.has("code") || json.get("code").getAsInt() != 200) {
                 int code = json != null && json.has("code") ? json.get("code").getAsInt() : -1;
-                throw new IllegalStateException("OpenList " + action + " code " + code);
+                throw DownloaderOperationException.rejected("OPENLIST_APPLICATION_REJECTED");
             }
             return json;
         }
@@ -523,6 +674,18 @@ public class OpenList implements BaseDownload {
             return List.of();
         }
         return GsonStatic.fromJsonList(data.getAsJsonArray(), OpenListTaskInfo.class);
+    }
+
+    private record FilePlan(String sourceDirectory, String sourceName, String targetName) {
+    }
+
+    private static final class Workflow {
+        private String taskId;
+        private boolean directoryReady;
+        private boolean taskSucceeded;
+        private boolean taskDeleted;
+        private long startedAtMillis;
+        private List<FilePlan> files;
     }
 
 }

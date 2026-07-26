@@ -5,6 +5,7 @@ target/
 
 package-lock.json
 pnpm-lock.yaml
+!ani-rss-ui/pnpm-lock.yaml
 
 ### IntelliJ IDEA ###
 .idea

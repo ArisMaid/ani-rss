@@ -63,7 +63,7 @@ public class PlayItem implements Serializable {
     @Data
     @Accessors(chain = true)
     @Schema(description = "字幕")
-    public static class Subtitles {
+    public static class Subtitles implements Serializable {
         @Schema(description = "字幕 HTML")
         private String html;
         @Schema(description = "字幕名")

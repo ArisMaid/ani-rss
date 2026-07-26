@@ -14,7 +14,7 @@ import java.sql.ResultSet;
 public class RenameCacheUtil {
     private static final String TABLE_NAME = "RENAME_CACHES";
 
-    public static synchronized void put(String key, String object) {
+    public static void put(String key, String object) {
         log.debug("put => key: {}, object: {}", key, object);
         DatabaseManager.withConnection(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
@@ -28,7 +28,7 @@ public class RenameCacheUtil {
         });
     }
 
-    public static synchronized String get(String key) {
+    public static String get(String key) {
         log.debug("get => key: {}", key);
         return DatabaseManager.withConnection(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
@@ -41,7 +41,7 @@ public class RenameCacheUtil {
         });
     }
 
-    public static synchronized void remove(String key) {
+    public static void remove(String key) {
         DatabaseManager.withConnection(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
                     "DELETE FROM " + TABLE_NAME + " WHERE K = ?")) {

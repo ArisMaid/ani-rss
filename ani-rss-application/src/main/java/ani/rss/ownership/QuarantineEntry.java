@@ -8,6 +8,7 @@ public record QuarantineEntry(
         String quarantinePath,
         long purgeAfter,
         String state,
-        long createdAt
+        long createdAt,
+        String previousOwnershipState
 ) {
 }

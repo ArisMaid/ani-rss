@@ -32,7 +32,7 @@
     </a>
     <div class="afdian-unlock">
       <h3>捐赠后解锁</h3>
-      <el-tag v-for="it in ['Mikan/AnimeGarden 番剧列表显示评分']"
+      <el-tag v-for="it in ['Mikan/AnimeGarden 番剧列表显示评分']" :key="it"
               class="afdian-tag">
         {{ it }}
       </el-tag>

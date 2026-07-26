@@ -20,23 +20,15 @@
     <build>
         <plugins>
             <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>exec-maven-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <phase>clean</phase>
-                        <goals>
-                            <goal>exec</goal>
-                        </goals>
-                    </execution>
-                </executions>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
                 <configuration>
-                    <executable>rm</executable>
-                    <arguments>
-                        <argument>-rf</argument>
-                        <argument>./dist</argument>
-                    </arguments>
-                    <workingDirectory>${project.basedir}</workingDirectory>
+                    <filesets>
+                        <fileset>
+                            <directory>${project.basedir}/dist</directory>
+                            <followSymlinks>false</followSymlinks>
+                        </fileset>
+                    </filesets>
                 </configuration>
             </plugin>
             <plugin>
@@ -44,6 +36,7 @@
                 <artifactId>frontend-maven-plugin</artifactId>
                 <configuration>
                     <workingDirectory>${project.basedir}</workingDirectory>
+                    <skip>${skip.frontend}</skip>
                 </configuration>
                 <executions>
                     <execution>
@@ -63,7 +56,7 @@
                         </goals>
                         <phase>generate-resources</phase>
                         <configuration>
-                            <arguments>install</arguments>
+                            <arguments>install --frozen-lockfile</arguments>
                         </configuration>
                     </execution>
                     <execution>

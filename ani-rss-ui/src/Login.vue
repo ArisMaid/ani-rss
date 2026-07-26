@@ -98,7 +98,7 @@ let submit = () => {
       ? http.setup({code: setupCode.value, ...user.value})
       : http.login(user.value)
   action
-      .then(res => {
+      .then(() => {
         if (rememberThePassword.value.remember) {
           rememberThePassword.value.username = username
         } else {

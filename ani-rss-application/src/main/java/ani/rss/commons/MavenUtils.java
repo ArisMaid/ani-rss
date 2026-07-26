@@ -18,7 +18,8 @@ import java.util.jar.JarFile;
 
 @Slf4j
 public class MavenUtils {
-    private static String version;
+    private static final Object VERSION_LOCK = new Object();
+    private static volatile String version;
     public static JarFile JAR_FILE = null;
 
     static {
@@ -41,20 +42,25 @@ public class MavenUtils {
                 .setFile(new File(s));
     }
 
-    public static synchronized String getVersion() {
-        if (Objects.nonNull(version)) {
+    public static String getVersion() {
+        String current = version;
+        if (Objects.nonNull(current)) {
+            return current;
+        }
+        synchronized (VERSION_LOCK) {
+            if (version == null) {
+                try {
+                    BuildProperties buildProperties = SpringUtil.getBean(BuildProperties.class);
+                    version = buildProperties.getVersion();
+                } catch (RuntimeException ignored) {
+                    Package packageInfo = MavenUtils.class.getPackage();
+                    String implementationVersion = packageInfo == null ? null : packageInfo.getImplementationVersion();
+                    version = StrUtil.blankToDefault(implementationVersion,
+                            System.getProperty("ani-rss.version", "dev"));
+                }
+            }
             return version;
         }
-        try {
-            BuildProperties buildProperties = SpringUtil.getBean(BuildProperties.class);
-            version = buildProperties.getVersion();
-        } catch (RuntimeException ignored) {
-            Package packageInfo = MavenUtils.class.getPackage();
-            String implementationVersion = packageInfo == null ? null : packageInfo.getImplementationVersion();
-            version = StrUtil.blankToDefault(implementationVersion,
-                    System.getProperty("ani-rss.version", "dev"));
-        }
-        return version;
     }
 
     @Data

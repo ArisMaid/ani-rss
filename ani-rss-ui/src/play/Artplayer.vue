@@ -147,7 +147,7 @@ onMounted(() => {
     fullscreen: true,
     fullscreenWeb: true,
     airplay: true,
-    preload: true,
+    moreVideoAttr: {preload: 'auto'},
     plugins: [
       artplayerPluginMultipleSubtitles({
         subtitles: subtitles
@@ -169,7 +169,8 @@ onBeforeUnmount(() => {
   try {
     art.destroy(true);
     art = null;
-  } catch (e) {
+  } catch {
+    // The player can already be detached during dialog teardown.
   }
 })
 </script>

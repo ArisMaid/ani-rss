@@ -31,6 +31,10 @@ public class TaskService {
         }
     }
 
+    public boolean isRunning() {
+        return LOOP.get() && THREADS.stream().anyMatch(Thread::isAlive);
+    }
+
     public synchronized boolean stop(Duration timeout) {
         LOOP.set(false);
         long deadline = System.nanoTime() + timeout.toNanos();

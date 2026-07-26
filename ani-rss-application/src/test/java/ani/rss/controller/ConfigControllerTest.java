@@ -27,6 +27,10 @@ class ConfigControllerTest {
                 List.of(),
                 List.of(),
                 List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
+                List.of(),
                 1L,
                 2L);
         MockMultipartFile file = new MockMultipartFile(

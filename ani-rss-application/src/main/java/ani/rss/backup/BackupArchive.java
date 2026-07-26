@@ -8,7 +8,9 @@ import com.google.gson.JsonParser;
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
 import org.apache.commons.compress.archivers.zip.ZipArchiveInputStream;
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
+import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.apache.commons.compress.archivers.zip.Zip64Mode;
+import org.apache.commons.compress.archivers.zip.UnixStat;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -27,8 +29,8 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Enumeration;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +46,9 @@ public final class BackupArchive {
     public static final long MAX_ENTRY_BYTES = 256L * 1024 * 1024;
     public static final int MAX_ENTRIES = 50_000;
     private static final Pattern DRIVE_PATH = Pattern.compile("^[A-Za-z]:([/\\\\].*)?$");
+    private static final Pattern APPLICATION_VERSION = Pattern.compile(
+            "[0-9A-Za-z][0-9A-Za-z._+\\-]{0,127}");
+    private static final long MAX_CLOCK_SKEW_MILLIS = 24L * 60 * 60 * 1000;
     private static final Set<String> ROOT_FILES = Set.of(
             "config.v2.json", "ani.v2.json", "database.db", "auth-state.v2.json");
     private static final Set<String> ROOT_DIRECTORIES = Set.of("files", "torrents");
@@ -52,6 +57,7 @@ public final class BackupArchive {
     }
 
     public static void create(OutputStream output, Path configDir, String applicationVersion) throws IOException {
+        validateApplicationVersion(applicationVersion);
         Path root = configDir.toAbsolutePath().normalize();
         Files.createDirectories(root);
         Map<String, Path> sources = new LinkedHashMap<>();
@@ -108,6 +114,7 @@ public final class BackupArchive {
         if (Files.size(source) > MAX_COMPRESSED_BYTES) {
             throw new IOException("compressed archive exceeds 50 MiB");
         }
+        validateArchiveStructure(source);
         Path targetRoot = destination.toAbsolutePath().normalize();
         if (Files.exists(targetRoot, LinkOption.NOFOLLOW_LINKS)) {
             boolean nonEmpty;
@@ -122,7 +129,6 @@ public final class BackupArchive {
         }
 
         Map<String, BackupManifest.Entry> actual = new LinkedHashMap<>();
-        Set<String> directories = new HashSet<>();
         long expanded = 0;
         int count = 0;
         try (InputStream raw = new BufferedInputStream(Files.newInputStream(source));
@@ -136,12 +142,9 @@ public final class BackupArchive {
                 if (name.isEmpty()) {
                     continue;
                 }
-                if (entry.isUnixSymlink()) {
-                    throw new IOException("symbolic links and special files are not allowed");
-                }
+                validateEntryType(entry);
                 if (entry.isDirectory()) {
                     validateAllowed(name + "/");
-                    directories.add(name);
                     continue;
                 }
                 validateAllowed(name);
@@ -204,6 +207,7 @@ public final class BackupArchive {
             if (manifest == null || manifest.formatVersion() != BackupManifest.CURRENT_FORMAT) {
                 throw new IOException("unsupported backup manifest version");
             }
+            validateManifestMetadata(manifest);
             actual.remove("manifest.json");
             verifyManifest(manifest, actual);
         }
@@ -254,8 +258,11 @@ public final class BackupArchive {
                 if (Files.isSymbolicLink(path)) {
                     throw new IOException("symbolic links are not allowed in backup: " + path);
                 }
-                if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                if (Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) {
                     continue;
+                }
+                if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                    throw new IOException("special files are not allowed in backup: " + path);
                 }
                 String relative = root.relativize(path).toString().replace('\\', '/');
                 if (relative.startsWith(".") || relative.contains("/.")) {
@@ -312,6 +319,67 @@ public final class BackupArchive {
                     !declaredEntry.sha256().equalsIgnoreCase(actualEntry.sha256())) {
                 throw new IOException("manifest hash mismatch: " + item.getKey());
             }
+        }
+    }
+
+    private static void validateArchiveStructure(Path source) throws IOException {
+        try (ZipFile zip = ZipFile.builder()
+                .setPath(source)
+                .setUseUnicodeExtraFields(true)
+                .get()) {
+            Enumeration<ZipArchiveEntry> entries = zip.getEntriesInPhysicalOrder();
+            int count = 0;
+            while (entries.hasMoreElements()) {
+                ZipArchiveEntry entry = entries.nextElement();
+                if (++count > MAX_ENTRIES) {
+                    throw new IOException("archive contains too many entries");
+                }
+                String name = normalizeEntryName(entry.getName());
+                if (!name.isEmpty()) {
+                    validateAllowed(entry.isDirectory() ? name + "/" : name);
+                }
+                validateEntryType(entry);
+                if (!zip.canReadEntryData(entry)) {
+                    throw new IOException("unsupported or encrypted ZIP entry: " + name);
+                }
+            }
+            if (count == 0) {
+                throw new IOException("backup archive is empty");
+            }
+        } catch (ZipException e) {
+            throw new IOException("invalid ZIP archive", e);
+        }
+    }
+
+    private static void validateEntryType(ZipArchiveEntry entry) throws IOException {
+        if (entry.isUnixSymlink()) {
+            throw new IOException("symbolic links and special files are not allowed");
+        }
+        if (entry.getPlatform() != ZipArchiveEntry.PLATFORM_UNIX) {
+            return;
+        }
+        int type = entry.getUnixMode() & UnixStat.FILE_TYPE_FLAG;
+        if (type == 0) {
+            return;
+        }
+        boolean regular = type == UnixStat.FILE_FLAG && !entry.isDirectory();
+        boolean directory = type == UnixStat.DIR_FLAG && entry.isDirectory();
+        if (!regular && !directory) {
+            throw new IOException("symbolic links and special files are not allowed");
+        }
+    }
+
+    private static void validateManifestMetadata(BackupManifest manifest) throws IOException {
+        validateApplicationVersion(manifest.applicationVersion());
+        long now = System.currentTimeMillis();
+        if (manifest.createdAt() <= 0 || manifest.createdAt() > now + MAX_CLOCK_SKEW_MILLIS) {
+            throw new IOException("invalid backup manifest creation time");
+        }
+    }
+
+    private static void validateApplicationVersion(String applicationVersion) throws IOException {
+        if (applicationVersion == null || !APPLICATION_VERSION.matcher(applicationVersion).matches()) {
+            throw new IOException("invalid backup application version");
         }
     }
 

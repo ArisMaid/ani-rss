@@ -4,6 +4,7 @@ import ani.rss.commons.ExceptionUtils;
 import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
 import ani.rss.service.DownloadService;
+import ani.rss.service.TaskService;
 import ani.rss.util.other.AniUtil;
 import ani.rss.util.other.ConfigUtil;
 import ani.rss.util.other.TorrentUtil;
@@ -24,7 +25,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class RssTask implements BaseTask {
     public static final List<Ani> ANI_LIST = AniUtil.ANI_LIST;
     public static final AtomicBoolean DOWNLOAD_LOCK = new AtomicBoolean(false);
-    public static AtomicBoolean LOOP = new AtomicBoolean(false);
 
     public static void syncDownload() {
         syncDownload(ANI_LIST);
@@ -67,7 +67,7 @@ public class RssTask implements BaseTask {
             return;
         }
         for (Ani ani : aniList) {
-            if (!LOOP.get()) {
+            if (!TaskService.LOOP.get()) {
                 // 停止循环
                 return;
             }
@@ -108,7 +108,6 @@ public class RssTask implements BaseTask {
         }
 
         try {
-            LOOP = loop;
             syncDownload(ANI_LIST);
         } catch (Exception e) {
             String message = ExceptionUtils.getMessage(e);

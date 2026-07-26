@@ -1,5 +1,6 @@
 package ani.rss.backup;
 
+import ani.rss.commons.GsonStatic;
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 import org.junit.jupiter.api.Test;
@@ -8,9 +9,15 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.util.Arrays;
+import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -77,24 +84,144 @@ class BackupArchiveTest {
     @Test
     void rejectsTooLargeCompressedArchiveBeforeExtraction() throws Exception {
         Path archive = tempDir.resolve("large.zip");
-        try (OutputStream output = Files.newOutputStream(archive);
-             ZipArchiveOutputStream zip = new ZipArchiveOutputStream(output)) {
-            ZipArchiveEntry entry = new ZipArchiveEntry("config.v2.json");
-            zip.putArchiveEntry(entry);
-            byte[] chunk = new byte[1024 * 1024];
-            for (int i = 0; i < 51; i++) {
-                zip.write(chunk);
-            }
-            zip.closeArchiveEntry();
+        try (FileChannel channel = FileChannel.open(archive,
+                StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+            channel.position(BackupArchive.MAX_COMPRESSED_BYTES);
+            channel.write(ByteBuffer.wrap(new byte[]{0}));
         }
 
         assertThrows(IOException.class,
                 () -> BackupArchive.validateAndExtract(archive, tempDir.resolve("large-out")));
     }
 
+    @Test
+    void rejectsZipWithTruncatedCentralDirectory() throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(bytes, StandardCharsets.UTF_8)) {
+            put(zip, "config.v2.json", "{}");
+            put(zip, "ani.v2.json", "[]");
+        }
+        byte[] valid = bytes.toByteArray();
+        int centralDirectory = indexOf(valid, new byte[]{'P', 'K', 1, 2});
+        assertTrue(centralDirectory > 0);
+        Path archive = tempDir.resolve("truncated.zip");
+        Files.write(archive, Arrays.copyOf(valid, centralDirectory));
+
+        assertThrows(IOException.class,
+                () -> BackupArchive.validateAndExtract(archive, tempDir.resolve("truncated-out")));
+    }
+
+    @Test
+    void rejectsUnixSpecialFileEntry() throws Exception {
+        Path archive = tempDir.resolve("special.zip");
+        try (OutputStream output = Files.newOutputStream(archive);
+             ZipArchiveOutputStream zip = new ZipArchiveOutputStream(output)) {
+            put(zip, "config.v2.json", "{}");
+            put(zip, "ani.v2.json", "[]");
+            ZipArchiveEntry fifo = new ZipArchiveEntry("files/fifo");
+            fifo.setUnixMode(0010000 | 0644);
+            zip.putArchiveEntry(fifo);
+            zip.closeArchiveEntry();
+        }
+
+        assertThrows(IOException.class,
+                () -> BackupArchive.validateAndExtract(archive, tempDir.resolve("special-out")));
+    }
+
+    @Test
+    void rejectsManifestWithInvalidVersionOrCreationTime() throws Exception {
+        List<BackupManifest> invalid = List.of(
+                manifest("", System.currentTimeMillis(), sha256("{}")),
+                manifest("3.1.75", 0, sha256("{}")));
+
+        for (int i = 0; i < invalid.size(); i++) {
+            Path archive = manifestArchive("invalid-manifest-" + i + ".zip", invalid.get(i), null);
+            Path destination = tempDir.resolve("invalid-manifest-out-" + i);
+            assertThrows(IOException.class,
+                    () -> BackupArchive.validateAndExtract(archive, destination));
+        }
+    }
+
+    @Test
+    void rejectsManifestHashMismatch() throws Exception {
+        BackupManifest manifest = manifest(
+                "3.1.75", System.currentTimeMillis(), "0".repeat(64));
+        Path archive = manifestArchive("hash-mismatch.zip", manifest, null);
+
+        assertThrows(IOException.class,
+                () -> BackupArchive.validateAndExtract(archive, tempDir.resolve("hash-mismatch-out")));
+    }
+
+    @Test
+    void rejectsCorruptSqliteDatabase() throws Exception {
+        Path archive = tempDir.resolve("corrupt-database.zip");
+        try (OutputStream output = Files.newOutputStream(archive);
+             ZipOutputStream zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
+            put(zip, "config.v2.json", "{}");
+            put(zip, "ani.v2.json", "[]");
+            put(zip, "database.db", "not a sqlite database");
+        }
+
+        assertThrows(IOException.class,
+                () -> BackupArchive.validateAndExtract(archive, tempDir.resolve("corrupt-database-out")));
+    }
+
+    private Path manifestArchive(String name, BackupManifest manifest, String database) throws IOException {
+        Path archive = tempDir.resolve(name);
+        try (OutputStream output = Files.newOutputStream(archive);
+             ZipOutputStream zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
+            put(zip, "config.v2.json", "{}");
+            put(zip, "ani.v2.json", "[]");
+            if (database != null) {
+                put(zip, "database.db", database);
+            }
+            put(zip, "manifest.json", GsonStatic.toJson(manifest));
+        }
+        return archive;
+    }
+
+    private static BackupManifest manifest(String version, long createdAt, String configHash)
+            throws Exception {
+        return new BackupManifest(
+                BackupManifest.CURRENT_FORMAT,
+                version,
+                createdAt,
+                List.of(
+                        new BackupManifest.Entry("config.v2.json", 2, configHash),
+                        new BackupManifest.Entry("ani.v2.json", 2, sha256("[]"))));
+    }
+
+    private static String sha256(String value) throws Exception {
+        return java.util.HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256")
+                        .digest(value.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static int indexOf(byte[] value, byte[] pattern) {
+        for (int i = 0; i <= value.length - pattern.length; i++) {
+            boolean matches = true;
+            for (int j = 0; j < pattern.length; j++) {
+                if (value[i + j] != pattern[j]) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     private static void put(ZipOutputStream zip, String name, String content) throws IOException {
         zip.putNextEntry(new ZipEntry(name));
         zip.write(content.getBytes(StandardCharsets.UTF_8));
         zip.closeEntry();
+    }
+
+    private static void put(ZipArchiveOutputStream zip, String name, String content) throws IOException {
+        zip.putArchiveEntry(new ZipArchiveEntry(name));
+        zip.write(content.getBytes(StandardCharsets.UTF_8));
+        zip.closeArchiveEntry();
     }
 }

@@ -6,14 +6,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
 public final class DatabaseManager {
     private static final Object LOCK = new Object();
-    private static Connection connection;
-    private static Path openedPath;
+    private static volatile Connection connection;
+    private static volatile Path openedPath;
 
     private DatabaseManager() {
     }
@@ -97,7 +98,7 @@ public final class DatabaseManager {
                  ResultSet resultSet = statement.executeQuery("PRAGMA integrity_check")) {
                 return resultSet.next() && "ok".equalsIgnoreCase(resultSet.getString(1));
             }
-        } catch (Exception e) {
+        } catch (ClassNotFoundException | SQLException e) {
             return false;
         }
     }
@@ -110,10 +111,14 @@ public final class DatabaseManager {
                 throw new IllegalArgumentException("database snapshot target already exists");
             }
             try {
-                Files.createDirectories(normalized.getParent());
-                String escaped = normalized.toString().replace("'", "''");
-                try (Statement statement = connection().createStatement()) {
-                    statement.executeUpdate("VACUUM INTO '" + escaped + "'");
+                Path parent = normalized.getParent();
+                if (parent == null) {
+                    throw new IllegalArgumentException("database snapshot target must have a parent directory");
+                }
+                Files.createDirectories(parent);
+                try (PreparedStatement statement = connection().prepareStatement("VACUUM INTO ?")) {
+                    statement.setString(1, normalized.toString());
+                    statement.executeUpdate();
                 }
                 if (!integrityCheck(normalized)) {
                     throw new IllegalStateException("database snapshot integrity check failed");
@@ -132,7 +137,8 @@ public final class DatabaseManager {
     }
 
     private static Connection connection() {
-        try {
+        synchronized (LOCK) {
+            try {
             Path expectedPath = path();
             if (connection != null && !connection.isClosed() && expectedPath.equals(openedPath)) {
                 return connection;
@@ -140,7 +146,11 @@ public final class DatabaseManager {
             if (connection != null && !connection.isClosed()) {
                 connection.close();
             }
-            Files.createDirectories(expectedPath.getParent());
+            Path parent = expectedPath.getParent();
+            if (parent == null) {
+                throw new IllegalStateException("database path must have a parent directory");
+            }
+            Files.createDirectories(parent);
             Class.forName("org.sqlite.JDBC");
             connection = DriverManager.getConnection("jdbc:sqlite:" + expectedPath);
             openedPath = expectedPath;
@@ -154,6 +164,7 @@ public final class DatabaseManager {
             connection = null;
             openedPath = null;
             throw new IllegalStateException("打开数据库失败", e);
+            }
         }
     }
 
@@ -218,6 +229,21 @@ public final class DatabaseManager {
                         )
                         """);
                 statement.executeUpdate("INSERT INTO schema_migrations(version, applied_at) VALUES (1, "
+                        + System.currentTimeMillis() + ")");
+                current.commit();
+            } catch (SQLException e) {
+                current.rollback();
+                throw e;
+            } finally {
+                current.setAutoCommit(autoCommit);
+            }
+        }
+        if (version < 2) {
+            boolean autoCommit = current.getAutoCommit();
+            current.setAutoCommit(false);
+            try (Statement statement = current.createStatement()) {
+                statement.executeUpdate("ALTER TABLE quarantine_entries ADD COLUMN previous_state TEXT");
+                statement.executeUpdate("INSERT INTO schema_migrations(version, applied_at) VALUES (2, "
                         + System.currentTimeMillis() + ")");
                 current.commit();
             } catch (SQLException e) {

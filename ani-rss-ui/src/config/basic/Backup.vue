@@ -1,5 +1,5 @@
 <template>
-  <input id="backup-file" hidden="hidden" type="file" @change="changeFile">
+  <input ref="backupFile" hidden="hidden" type="file" @change="changeFile">
   <div class="content flex">
     <el-button bg @click="exportConfig" icon="Upload">导出设置</el-button>
     <el-button bg @click="importConfig" icon="Download">导入设置</el-button>
@@ -8,13 +8,15 @@
 <script setup>
 import * as http from "@/js/http.js"
 import {ElMessage, ElMessageBox} from "element-plus";
+import {ref} from 'vue'
 
-let importConfig = () => {
-  document.querySelector('#backup-file').click()
-}
+const backupFile = ref()
 
-let changeFile = async () => {
-  let element = document.querySelector('#backup-file');
+let importConfig = () => backupFile.value?.click()
+
+let changeFile = async (event) => {
+  const element = event.target
+  if (!(element instanceof HTMLInputElement)) return
   const file = element.files[0]
   if (!file) return
   try {
@@ -76,7 +78,6 @@ let exportConfig = () => {
   document.body.removeChild(element);
 }
 
-let props = defineProps(['config'])
 </script>
 <style scoped>
 .content {

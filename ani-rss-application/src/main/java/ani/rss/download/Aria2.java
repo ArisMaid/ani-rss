@@ -64,21 +64,21 @@ public class Aria2 implements BaseDownload {
     public List<TorrentsInfo> getTorrentsInfos() {
         List<TorrentsInfo> torrentsInfos = new ArrayList<>();
         ThreadUtil.sleep(1000);
-        try {
-            torrentsInfos.addAll(getTorrentsInfos(Aria2RpcBody.tellActive()));
-            torrentsInfos.addAll(getTorrentsInfos(Aria2RpcBody.tellWaiting()));
-            torrentsInfos.addAll(getTorrentsInfos(Aria2RpcBody.tellStopped()));
-        } catch (Exception e) {
-            log.warn("读取 Aria2 任务失败 type:{}", e.getClass().getSimpleName());
-        }
+        torrentsInfos.addAll(getTorrentsInfos(Aria2RpcBody.tellActive()));
+        torrentsInfos.addAll(getTorrentsInfos(Aria2RpcBody.tellWaiting()));
+        torrentsInfos.addAll(getTorrentsInfos(Aria2RpcBody.tellStopped()));
         return ownedTasks(torrentsInfos);
     }
 
     public List<TorrentsInfo> getTorrentsInfos(Aria2RpcBody aria2RpcBody) {
         return rpc(aria2RpcBody, configuration())
                 .thenFunction(res -> {
-                    HttpReq.assertStatus(res);
-                    Aria2TorrentsInfo aria2TorrentsInfo = GsonStatic.fromJson(res.body(), Aria2TorrentsInfo.class);
+                    requireSuccess(res);
+                    JsonObject json = GsonStatic.fromJson(res.body(), JsonObject.class);
+                    if (json.has("error")) {
+                        throw DownloaderOperationException.rejected("ARIA2_APPLICATION_REJECTED");
+                    }
+                    Aria2TorrentsInfo aria2TorrentsInfo = GsonStatic.fromJson(json, Aria2TorrentsInfo.class);
 
                     List<Aria2TorrentsInfo.Torrent> result = aria2TorrentsInfo.getResult();
                     if (result == null) {
@@ -106,25 +106,37 @@ public class Aria2 implements BaseDownload {
 
     @Override
     public Boolean download(Ani ani, Item item, String savePath, File torrentFile) {
+        return downloadResult(ani, item, savePath, torrentFile).isSuccess();
+    }
+
+    @Override
+    public DownloaderResult<Void> downloadResult(Ani ani, Item item, String savePath, File torrentFile) {
         String name = item.getReName();
 
         String extName = FileUtil.extName(torrentFile);
         if (StrUtil.isBlank(extName)) {
-            return false;
+            return DownloaderResult.rejected("ARIA2_UNSUPPORTED_TORRENT");
         }
 
         if ("txt".equals(extName)) {
             log.error("Aria2 暂不支持磁力链接下载与重命名");
-            return false;
+            return DownloaderResult.rejected("ARIA2_MAGNET_RENAME_UNSUPPORTED");
         }
 
         Aria2RpcBody aria2RpcBody = Aria2RpcBody.addTorrent(torrentFile, savePath);
 
         String id = rpc(aria2RpcBody, configuration())
-                .thenFunction(res ->
-                        GsonStatic.fromJson(res.body(), JsonObject.class)
-                                .get("result").getAsString()
-                );
+                .thenFunction(res -> {
+                    requireSuccess(res);
+                    JsonObject json = GsonStatic.fromJson(res.body(), JsonObject.class);
+                    if (json.has("error")) {
+                        throw DownloaderOperationException.rejected("ARIA2_APPLICATION_REJECTED");
+                    }
+                    if (!json.has("result") || json.get("result").isJsonNull()) {
+                        throw DownloaderOperationException.failed("ARIA2_INVALID_RESPONSE", false);
+                    }
+                    return json.get("result").getAsString();
+                });
 
         log.info("aria2 添加下载 => name: {} id: {}", name, id);
 
@@ -133,17 +145,7 @@ public class Aria2 implements BaseDownload {
             RenameCacheUtil.put(id, name);
         }
 
-        for (int i = 0; i < 3; i++) {
-            ThreadUtil.sleep(1000 * 10);
-            List<TorrentsInfo> torrentsInfos = getTorrentsInfos();
-            for (TorrentsInfo torrentsInfo : torrentsInfos) {
-                if (!torrentsInfo.getId().equals(id)) {
-                    continue;
-                }
-                return true;
-            }
-        }
-        return false;
+        return DownloaderResult.success(null, id);
     }
 
     @Override
@@ -154,12 +156,7 @@ public class Aria2 implements BaseDownload {
                 ? Aria2RpcBody.removeDownloadResult(id)
                 : Aria2RpcBody.remove(id);
 
-        try {
-            return rpcSuccess(aria2RpcBody, configuration());
-        } catch (Exception e) {
-            log.warn("删除 Aria2 任务失败 type:{}", e.getClass().getSimpleName());
-            return false;
-        }
+        return rpcSuccess(aria2RpcBody, configuration());
     }
 
     @Override
@@ -205,7 +202,7 @@ public class Aria2 implements BaseDownload {
             if (FileUtil.equals(src, newPath)) {
                 continue;
             }
-            FileUtil.move(src, newPath, true);
+            FileUtils.move(src.toPath(), newPath.toPath());
             log.info("重命名 {} ==> {}", name, newPath);
         }
         RenameCacheUtil.remove(id);
@@ -254,18 +251,35 @@ public class Aria2 implements BaseDownload {
 
     private boolean rpcSuccess(Aria2RpcBody body, Config config) {
         return rpc(body, config).thenFunction(response -> {
-            HttpReq.assertStatus(response);
+            requireSuccess(response);
             JsonObject json = GsonStatic.fromJson(response.body(), JsonObject.class);
-            return !json.has("error") && json.has("result");
+            if (json.has("error")) {
+                throw DownloaderOperationException.rejected("ARIA2_APPLICATION_REJECTED");
+            }
+            if (!json.has("result")) {
+                throw DownloaderOperationException.failed("ARIA2_INVALID_RESPONSE", false);
+            }
+            return true;
         });
+    }
+
+    private static boolean requireSuccess(cn.hutool.http.HttpResponse response) {
+        int status = response.getStatus();
+        if (status < 200 || status >= 300) {
+            throw DownloaderOperationException.http("ARIA2", status);
+        }
+        return true;
     }
 
     private List<TorrentsInfo> ownedTasks(List<TorrentsInfo> tasks) {
         try {
             OwnershipService ownershipService = SpringUtil.getBean(OwnershipService.class);
-            return tasks.stream().filter(task -> ownershipService.findManaged(task).isPresent()).toList();
+            String downloaderType = configuration().getDownloadToolType();
+            return tasks.stream()
+                    .filter(task -> ownershipService.findManaged(downloaderType, task).isPresent())
+                    .toList();
         } catch (RuntimeException ignored) {
-            return List.of();
+            throw DownloaderOperationException.failed("ARIA2_OWNERSHIP_UNAVAILABLE", false);
         }
     }
 

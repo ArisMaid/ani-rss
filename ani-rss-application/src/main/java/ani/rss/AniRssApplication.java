@@ -17,7 +17,7 @@ import java.util.Map;
 public class AniRssApplication {
 
     public static void main(String[] args) {
-        Global.ARGS = List.of(ObjectUtil.defaultIfNull(args, new String[]{}));
+        Global.setArgs(ObjectUtil.defaultIfNull(args, new String[]{}));
         loadProperty();
         SystemTrayUtil.start();
         SpringApplication.run(AniRssApplication.class, args);
@@ -43,7 +43,7 @@ public class AniRssApplication {
         );
 
         mapping.forEach((k, v) -> {
-            for (String arg : Global.ARGS) {
+            for (String arg : Global.args()) {
                 String separator = k + "=";
                 if (arg.startsWith(separator)) {
                     String value = StrUtil.subAfter(arg, separator, false);

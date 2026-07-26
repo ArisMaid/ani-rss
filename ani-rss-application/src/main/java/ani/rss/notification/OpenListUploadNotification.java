@@ -1,22 +1,18 @@
 package ani.rss.notification;
 
-import ani.rss.commons.FileUtils;
 import ani.rss.commons.GsonStatic;
 import ani.rss.entity.Ani;
 import ani.rss.entity.NotificationConfig;
 import ani.rss.entity.OpenListFileInfo;
 import ani.rss.entity.web.Header;
 import ani.rss.enums.NotificationStatusEnum;
-import ani.rss.enums.StringEnum;
+import ani.rss.ownership.OwnershipService;
+import ani.rss.ownership.QuarantineService;
 import ani.rss.service.DownloadService;
 import ani.rss.util.basic.HttpReq;
-import cn.hutool.core.collection.ListUtil;
-import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.io.resource.ResourceUtil;
 import cn.hutool.core.lang.Assert;
-import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ObjectUtil;
-import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.core.util.URLUtil;
 import cn.hutool.extra.spring.SpringUtil;
@@ -27,9 +23,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import lombok.extern.slf4j.Slf4j;
 
-import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Slf4j
 public class OpenListUploadNotification implements BaseNotification {
@@ -59,13 +56,7 @@ public class OpenListUploadNotification implements BaseNotification {
 
         HttpReq.get(openListUploadHost + "/api/me")
                 .header(Header.AUTHORIZATION, openListUploadApiKey)
-                .then(res -> {
-                    HttpReq.assertStatus(res);
-                    JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                    int code = jsonObject.get("code").getAsInt();
-                    String message = jsonObject.get("message").getAsString();
-                    Assert.isTrue(code == 200, message);
-                });
+                .then(res -> requireSuccess(res, "me"));
     }
 
     /**
@@ -92,9 +83,8 @@ public class OpenListUploadNotification implements BaseNotification {
         String openListUploadOvaPath = notificationConfig.getOpenListUploadOvaPath();
         Boolean deleteOldEpisode = notificationConfig.getOpenListUploadDeleteOldEpisode();
 
-        // 本地位置
         DownloadService downloadService = SpringUtil.getBean(DownloadService.class);
-        String localPath = downloadService.getDownloadPath(ani);
+        OwnershipService ownershipService = SpringUtil.getBean(OwnershipService.class);
 
         // 新的位置; 设置自定义下载位置同时启用, 用以获取新的位置
         Boolean ova = ani.getOva();
@@ -113,234 +103,164 @@ public class OpenListUploadNotification implements BaseNotification {
         ani.setCustomDownloadPath(true);
 
         String target = downloadService.getDownloadPath(ani);
-        target = ReUtil.replaceAll(target, "^[A-z]:", "");
-
-        if (ova) {
-            uploadOva(localPath, target);
-            return true;
-        }
+        target = target.replaceFirst("^[A-Za-z]:", "");
 
         if (deleteOldEpisode) {
-            deleteOldEpisode(localPath, target);
+            log.warn("已忽略无法证明远端归属的 OpenList 洗版设置 subscriptionId:{}", ani.getId());
         }
 
-        upload(localPath, target);
+        List<OwnershipService.VerifiedOwnedFile> files = ownershipService.verifiedSubscriptionFiles(ani.getId());
+        uploadOwnedFiles(files, target);
+
+        if (Boolean.TRUE.equals(notificationConfig.getOpenListUploadDeleteLocalFile()) && !files.isEmpty()) {
+            QuarantineService quarantineService = SpringUtil.getBean(QuarantineService.class);
+            String operationId = quarantineService.quarantineSubscription(ani.getId());
+            log.info("OpenList 上传后隔离本地归属文件 operationId:{}", operationId);
+        }
 
         return true;
     }
 
-    public void uploadOva(String localFilePath, String cloudFilePath) {
-        List<File> files = FileUtils.listFileList(localFilePath);
-        for (File file : files) {
-            if (file.isDirectory()) {
-                // 文件夹 跳过
-                continue;
+    private void uploadOwnedFiles(List<OwnershipService.VerifiedOwnedFile> ownedFiles, String cloudFilePath) {
+        Map<String, OwnershipService.VerifiedOwnedFile> candidates = new LinkedHashMap<>();
+        for (OwnershipService.VerifiedOwnedFile ownedFile : ownedFiles) {
+            Path fileName = ownedFile.path().getFileName();
+            if (fileName == null) {
+                throw new IllegalStateException("owned OpenList upload path has no file name");
             }
-            String name = file.getName();
-
-            if (!FileUtils.isSubtitleFormat(name) && !FileUtils.isVideoFormat(name)) {
-                // 非视频与字幕 跳过
-                continue;
+            String name = fileName.toString();
+            OwnershipService.VerifiedOwnedFile collision = candidates.putIfAbsent(name, ownedFile);
+            if (collision != null && !collision.path().equals(ownedFile.path())) {
+                throw new IllegalStateException("multiple owned files map to the same OpenList target");
             }
+        }
 
-            // 开始上传
-            uploadFile(file.getAbsolutePath(), cloudFilePath);
+        Set<String> remoteNames = new HashSet<>();
+        for (OpenListFileInfo file : fileList(cloudFilePath)) {
+            if (!remoteNames.add(file.getName())) {
+                throw new IllegalStateException("OpenList returned duplicate target names");
+            }
+        }
+        for (String name : candidates.keySet()) {
+            if (remoteNames.contains(name)) {
+                throw new IllegalStateException("OpenList target already exists; overwrite was refused: " + name);
+            }
+        }
+
+        for (Map.Entry<String, OwnershipService.VerifiedOwnedFile> entry : candidates.entrySet()) {
+            OwnershipService.VerifiedOwnedFile ownedFile = entry.getValue();
+            revalidateOwnedFile(ownedFile);
+            log.info("OpenList 上传归属文件 name:{}", entry.getKey());
+            uploadFile(ownedFile.path(), cloudFilePath, entry.getKey());
         }
     }
 
-    public void deleteOldEpisode(String localFilePath, String cloudFilePath) {
-        // 本地文件列表
-        List<File> localFileList = FileUtils.listFileList(localFilePath)
-                .stream()
-                .filter(FileUtil::isFile)
-                .toList();
-
-        // 存储为MAP便于根据文件名寻找
-        Map<String, File> localFileMap = localFileList.stream()
-                .collect(Collectors.toMap(File::getName, i -> i));
-
-        // 本地集数列表
-        Set<String> localEpisodeSet = localFileList
-                .stream()
-                .map(File::getName)
-                .filter(name -> FileUtils.isVideoFormat(name) || FileUtils.isSubtitleFormat(name))
-                .filter(name -> ReUtil.contains(StringEnum.SEASON_REG, name))
-                .map(name -> ReUtil.get(StringEnum.SEASON_REG, name, 0))
-                .map(String::toUpperCase)
-                .collect(Collectors.toSet());
-
-        List<OpenListFileInfo> fileInfos = fileList(cloudFilePath);
-        for (OpenListFileInfo fileInfo : fileInfos) {
-            String name = fileInfo.getName();
-            if (!FileUtils.isVideoFormat(name) && !FileUtils.isSubtitleFormat(name)) {
-                // 非视频与字幕文件
-                continue;
+    private static void revalidateOwnedFile(OwnershipService.VerifiedOwnedFile ownedFile) {
+        try {
+            Path path = ownedFile.path();
+            if (!Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(path) ||
+                    Files.size(path) != ownedFile.size() ||
+                    Files.getLastModifiedTime(path, LinkOption.NOFOLLOW_LINKS).toMillis() != ownedFile.lastModified()) {
+                throw new IllegalStateException("owned file changed before OpenList upload");
             }
-            if (!ReUtil.contains(StringEnum.SEASON_REG, name)) {
-                // 确保命名
-                continue;
-            }
-
-            if (localFileMap.containsKey(name)) {
-                long cloudFileLength = fileInfo.getSize();
-                long localFileLength = localFileMap.get(name).length();
-                if (cloudFileLength == localFileLength) {
-                    // 文件名与大小一致 跳过删除
-                    continue;
-                }
-            }
-
-            String episode = ReUtil.get(StringEnum.SEASON_REG, name, 0);
-            episode = episode.toUpperCase();
-            if (!localEpisodeSet.contains(episode)) {
-                // 新位置没有旧的同集文件 不需要删除
-                continue;
-            }
-
-            log.info("因洗版需要删除: {}", name);
-
-            // 删除 洗版
-            postApi("fs/remove")
-                    .body(GsonStatic.toJson(Map.of(
-                            "dir", cloudFilePath,
-                            "names", List.of(name)
-                    ))).then(HttpResponse::isOk);
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("revalidate owned file failed", e);
         }
     }
 
-    private void upload(String localFilePath, String cloudFilePath) {
-        Boolean openListUploadDeleteLocalFile = notificationConfig.getOpenListUploadDeleteLocalFile();
-
-        // 云端文件列表 存储为MAP便于根据文件名寻找
-        Map<String, OpenListFileInfo> cloudFileMap = fileList(cloudFilePath)
-                .stream()
-                .collect(Collectors.toMap(OpenListFileInfo::getName, i -> i));
-
-        for (File file : FileUtils.listFileList(localFilePath)) {
-            if (file.isDirectory()) {
-                // 过滤掉文件夹
-                continue;
-            }
-
-            String name = file.getName();
-            if (!FileUtils.isVideoFormat(name) && !FileUtils.isSubtitleFormat(name)) {
-                // 非视频与字幕文件
-                continue;
-            }
-            if (!ReUtil.contains(StringEnum.SEASON_REG, name)) {
-                // 确保命名
-                continue;
-            }
-
-            if (cloudFileMap.containsKey(name)) {
-                long localFileLength = file.length();
-                long cloudFileLength = cloudFileMap.get(name)
-                        .getSize();
-                if (localFileLength == cloudFileLength) {
-                    // 文件名与大小一致 跳过上传
-                    continue;
-                }
-            }
-
-            log.info("文件上传: {} => {}", file, cloudFilePath);
-
-            uploadFile(file.getAbsolutePath(), cloudFilePath);
-
-            if (openListUploadDeleteLocalFile) {
-                log.info("删除本地文件 {}", file);
-                FileUtil.del(file);
-            }
-        }
-    }
-
-    /**
-     * 上传文件
-     *
-     * @param localFilePath 本地文件位置
-     * @param cloudFilePath 云端文件位置
-     */
-    private void uploadFile(String localFilePath, String cloudFilePath) {
-        Assert.isTrue(FileUtil.exist(localFilePath), "文件不存在 {}", localFilePath);
-
-        if (FileUtil.isDirectory(localFilePath)) {
-            List<File> files = FileUtils.listFileList(localFilePath);
-            for (File file : files) {
-                uploadFile(file.getAbsolutePath(), cloudFilePath);
-            }
-            return;
-        }
-
+    private void uploadFile(Path localFile, String cloudFilePath, String filename) {
         String openListUploadHost = notificationConfig.getOpenListUploadHost();
         String openListUploadApiKey = notificationConfig.getOpenListUploadApiKey();
-
         String url = StrUtil.format("{}/api/fs/put", openListUploadHost);
 
-
-        String filename = FileUtil.getName(localFilePath);
-
-        HttpReq
-                .put(url)
+        HttpReq.put(url)
                 .timeout(1000 * 60 * 2)
                 .setConfig(httpConfig)
                 .header(Header.AUTHORIZATION, openListUploadApiKey)
                 .header("As-Task", "false")
                 .header("File-Path", URLUtil.encode(cloudFilePath + "/" + filename))
                 .contentType("application/octet-stream")
-                .body(ResourceUtil.getResourceObj(localFilePath))
+                .body(ResourceUtil.getResourceObj(localFile.toString()))
                 .then(res -> {
-                    Assert.isTrue(res.isOk(), "上传失败 {} 状态码:{}", localFilePath, res.getStatus());
-                    JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                    int code = jsonObject.get("code").getAsInt();
-                    log.debug("OpenList 上传响应 code:{}", code);
-                    Assert.isTrue(code == 200, "上传失败 {} 状态码:{}", localFilePath, code);
-
-                    log.info("OpenList 上传完成 {}", filename);
+                    requireSuccess(res, "fs/put");
+                    log.info("OpenList 上传完成 name:{}", filename);
                 });
     }
 
-    /**
-     * 文件列表
-     *
-     * @param path 目录
-     * @return 文件列表
-     */
     public List<OpenListFileInfo> fileList(String path) {
-        try {
-            return postApi("fs/list")
+        final int pageSize = 1000;
+        final int maxEntries = 50_000;
+        List<OpenListFileInfo> result = new ArrayList<>();
+        for (int page = 1; result.size() < maxEntries; page++) {
+            int currentPage = page;
+            RemotePage remotePage = postApi("fs/list")
                     .body(GsonStatic.toJson(Map.of(
                             "path", path,
-                            "page", 1,
-                            "per_page", 256,
-                            "refresh", true
+                            "page", currentPage,
+                            "per_page", pageSize,
+                            "refresh", currentPage == 1
                     )))
-                    .thenFunction(res -> {
-                        JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                        int code = jsonObject.get("code").getAsInt();
-                        if (code != 200) {
-                            return List.of();
-                        }
-                        JsonElement data = jsonObject.get("data");
-                        if (Objects.isNull(data) || data.isJsonNull()) {
-                            return List.of();
-                        }
-                        JsonElement content = data.getAsJsonObject()
-                                .get("content");
-                        if (Objects.isNull(content) || content.isJsonNull()) {
-                            return List.of();
-                        }
-                        List<OpenListFileInfo> infos = GsonStatic.fromJsonList(content.getAsJsonArray(), OpenListFileInfo.class);
-                        for (OpenListFileInfo info : infos) {
-                            info.setPath(path);
-                        }
-                        return ListUtil.sort(new ArrayList<>(infos), Comparator.comparing(fileInfo -> {
-                            Long size = fileInfo.getSize();
-                            return Long.MAX_VALUE - ObjectUtil.defaultIfNull(size, 0L);
-                        }));
-                    });
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
+                    .thenFunction(res -> parseRemotePage(res, path));
+            result.addAll(remotePage.files());
+            if (result.size() > maxEntries) {
+                throw new IllegalStateException("OpenList directory exceeds safe listing limit");
+            }
+            if (remotePage.files().size() < pageSize ||
+                    (remotePage.total() >= 0 && result.size() >= remotePage.total())) {
+                return List.copyOf(result);
+            }
         }
-        return List.of();
+        throw new IllegalStateException("OpenList directory exceeds safe listing limit");
+    }
+
+    private static RemotePage parseRemotePage(HttpResponse response, String path) {
+        JsonObject root = requireSuccess(response, "fs/list");
+        JsonElement dataElement = root.get("data");
+        if (dataElement == null || dataElement.isJsonNull() || !dataElement.isJsonObject()) {
+            throw new IllegalStateException("OpenList fs/list response has no data object");
+        }
+        JsonObject data = dataElement.getAsJsonObject();
+        JsonElement content = data.get("content");
+        if (content == null || content.isJsonNull()) {
+            return new RemotePage(List.of(), number(data, "total", 0));
+        }
+        if (!content.isJsonArray()) {
+            throw new IllegalStateException("OpenList fs/list response has invalid content");
+        }
+        List<OpenListFileInfo> files = GsonStatic.fromJsonList(content.getAsJsonArray(), OpenListFileInfo.class);
+        for (OpenListFileInfo file : files) {
+            file.setPath(path);
+        }
+        return new RemotePage(List.copyOf(files), number(data, "total", -1));
+    }
+
+    private static JsonObject requireSuccess(HttpResponse response, String action) {
+        if (response == null || !response.isOk()) {
+            int status = response == null ? 0 : response.getStatus();
+            throw new IllegalStateException("OpenList " + action + " HTTP failure: " + status);
+        }
+        JsonObject root;
+        try {
+            root = GsonStatic.fromJson(response.body(), JsonObject.class);
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("OpenList " + action + " returned invalid JSON", e);
+        }
+        if (root == null || root.get("code") == null || !root.get("code").isJsonPrimitive()) {
+            throw new IllegalStateException("OpenList " + action + " response has no code");
+        }
+        int code = root.get("code").getAsInt();
+        if (code != 200) {
+            throw new IllegalStateException("OpenList " + action + " rejected request with code " + code);
+        }
+        return root;
+    }
+
+    private static long number(JsonObject object, String name, long fallback) {
+        JsonElement element = object.get(name);
+        return element == null || element.isJsonNull() ? fallback : element.getAsLong();
+    }
+
+    private record RemotePage(List<OpenListFileInfo> files, long total) {
     }
 
     /**
@@ -350,7 +270,6 @@ public class OpenListUploadNotification implements BaseNotification {
      * @return HttpReq
      */
     public HttpRequest postApi(String action) {
-        ThreadUtil.sleep(2000);
         String openListUploadHost = notificationConfig.getOpenListUploadHost();
         String openListUploadApiKey = notificationConfig.getOpenListUploadApiKey();
         return HttpReq.post(openListUploadHost + "/api/" + action)

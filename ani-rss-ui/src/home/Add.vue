@@ -194,7 +194,6 @@ const getRss = () => {
         let match = ani.value['match'];
         ani.value = res['data']
         ani.value['match'] = match
-        ani.value.showDownlaod = false
         showRss.value = false
       })
       .finally(() => {

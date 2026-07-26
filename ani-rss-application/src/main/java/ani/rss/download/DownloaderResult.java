@@ -19,8 +19,17 @@ public record DownloaderResult<T>(
         return new DownloaderResult<>(DownloaderStatus.REJECTED, errorCode, false, null, null);
     }
 
+    public static <T> DownloaderResult<T> rejected(String errorCode, String remoteTaskId) {
+        return new DownloaderResult<>(DownloaderStatus.REJECTED, errorCode, false, remoteTaskId, null);
+    }
+
     public static <T> DownloaderResult<T> failed(String errorCode, boolean retryable) {
         return new DownloaderResult<>(DownloaderStatus.FAILED, errorCode, retryable, null, null);
+    }
+
+    public static <T> DownloaderResult<T> failed(
+            String errorCode, boolean retryable, String remoteTaskId) {
+        return new DownloaderResult<>(DownloaderStatus.FAILED, errorCode, retryable, remoteTaskId, null);
     }
 
     public boolean isSuccess() {

@@ -5,6 +5,7 @@ import ani.rss.commons.FileUtils;
 import ani.rss.commons.PinyinUtils;
 import ani.rss.download.DownloaderClientFactory;
 import ani.rss.download.DownloaderClient;
+import ani.rss.download.DownloaderResult;
 import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
 import ani.rss.entity.Item;
@@ -31,7 +32,12 @@ import java.util.List;
  */
 @Slf4j
 public class TorrentUtil {
-    public static volatile DownloaderClient CLIENT;
+    private static final Object CLIENT_LOCK = new Object();
+    private static volatile DownloaderClient CLIENT;
+
+    public static DownloaderClient client() {
+        return CLIENT;
+    }
 
     /**
      * 获取任务列表
@@ -39,16 +45,29 @@ public class TorrentUtil {
      * @return 种子列表
      */
     public static List<TorrentsInfo> getTorrentsInfos() {
+        DownloaderResult<List<TorrentsInfo>> result = getTorrentsInfosResult();
+        return result.isSuccess() && result.value() != null ? result.value() : List.of();
+    }
+
+    public static DownloaderResult<List<TorrentsInfo>> getTorrentsInfosResult() {
         ThreadUtil.sleep(1000);
-        List<TorrentsInfo> tasks = CLIENT.torrents().value();
-        if (tasks == null) {
-            return List.of();
+        DownloaderClient client = CLIENT;
+        if (client == null) {
+            return DownloaderResult.failed("DOWNLOADER_NOT_INITIALIZED", false);
         }
-        ownershipService().observeTasks(tasks);
-        if ("Aria2".equals(ConfigUtil.CONFIG.getDownloadToolType())) {
-            return tasks.stream().filter(task -> ownershipService().findOwned(task).isPresent()).toList();
+        DownloaderResult<List<TorrentsInfo>> result = client.torrents();
+        if (!result.isSuccess()) {
+            return result;
         }
-        return tasks;
+        List<TorrentsInfo> tasks = result.value() == null ? List.of() : result.value();
+        String downloaderType = client.configurationSnapshot().getDownloadToolType();
+        ownershipService().observeTasks(downloaderType, tasks);
+        if ("Aria2".equals(downloaderType)) {
+            tasks = tasks.stream()
+                    .filter(task -> ownershipService().findOwned(downloaderType, task).isPresent())
+                    .toList();
+        }
+        return DownloaderResult.success(List.copyOf(tasks));
     }
 
     /**
@@ -146,7 +165,7 @@ public class TorrentUtil {
             log.error("下载种子时出现问题 {}", message);
             log.error(message, e);
             // 种子未下载异常，删除
-            FileUtil.del(saveTorrentFile);
+            FileUtils.deleteRegularFile(saveTorrentFile);
         }
         return saveTorrentFile;
     }
@@ -164,8 +183,13 @@ public class TorrentUtil {
             log.warn("下载位置未设置");
             return false;
         }
+        DownloaderClient activeClient = CLIENT;
+        if (activeClient == null) {
+            log.warn("下载工具尚未初始化");
+            return false;
+        }
         try {
-            return CLIENT.connect(false).isSuccess();
+            return activeClient.connect(false).isSuccess();
         } catch (Exception e) {
             return false;
         }
@@ -206,7 +230,14 @@ public class TorrentUtil {
      */
     public static Boolean delete(TorrentsInfo torrentsInfo, Boolean forcedDelete, Boolean deleteFiles) {
         OwnershipService ownershipService = ownershipService();
-        ani.rss.ownership.DownloadOwnership ownership = ownershipService.requireManagedTask(torrentsInfo);
+        DownloaderClient activeClient = CLIENT;
+        if (activeClient == null) {
+            log.error("删除任务失败 code:DOWNLOADER_NOT_INITIALIZED");
+            return false;
+        }
+        String downloaderType = activeClient.configurationSnapshot().getDownloadToolType();
+        ani.rss.ownership.DownloadOwnership ownership =
+                ownershipService.requireManagedTask(downloaderType, torrentsInfo);
         String name = torrentsInfo.getName();
 
         if (!forcedDelete) {
@@ -229,7 +260,7 @@ public class TorrentUtil {
         if (deleteFiles) {
             quarantineOperation = quarantineService().quarantineOwnership(ownership.ownershipId());
         }
-        Boolean b = CLIENT.delete(torrentsInfo, false).isSuccess();
+        Boolean b = activeClient.delete(torrentsInfo, false).isSuccess();
         if (!b) {
             if (quarantineOperation != null) {
                 quarantineService().restore(quarantineOperation);
@@ -258,7 +289,12 @@ public class TorrentUtil {
      * @param torrentsInfo 种子信息
      */
     public static void rename(TorrentsInfo torrentsInfo) {
-        ownershipService().requireOwned(torrentsInfo);
+        DownloaderClient activeClient = CLIENT;
+        if (activeClient == null) {
+            throw new IllegalStateException("downloader is not initialized");
+        }
+        String downloaderType = activeClient.configurationSnapshot().getDownloadToolType();
+        ownershipService().requireOwned(downloaderType, torrentsInfo);
         Config config = ConfigUtil.CONFIG;
         Boolean rename = config.getRename();
         if (!rename) {
@@ -271,7 +307,7 @@ public class TorrentUtil {
         }
 
         ThreadUtil.sleep(1000);
-        Boolean renamed = CLIENT.rename(torrentsInfo).isSuccess();
+        Boolean renamed = activeClient.rename(torrentsInfo).isSuccess();
         if (renamed) {
             addTags(torrentsInfo, TorrentsTagEnum.RENAME.getValue());
         }
@@ -288,12 +324,17 @@ public class TorrentUtil {
         if (StrUtil.isBlank(tags)) {
             return false;
         }
-        ownershipService().requireOwned(torrentsInfo);
+        DownloaderClient activeClient = CLIENT;
+        if (activeClient == null) {
+            return false;
+        }
+        String downloaderType = activeClient.configurationSnapshot().getDownloadToolType();
+        ownershipService().requireOwned(downloaderType, torrentsInfo);
         String name = torrentsInfo.getName();
         log.debug("添加标签 {} {}", name, tags);
         boolean b = false;
         try {
-            b = CLIENT.addTags(torrentsInfo, tags).isSuccess();
+            b = activeClient.addTags(torrentsInfo, tags).isSuccess();
         } catch (Exception e) {
             log.error(e.getMessage(), e);
         }
@@ -312,31 +353,34 @@ public class TorrentUtil {
             return;
         }
         OwnershipService ownershipService = ownershipService();
-        ownershipService.requireOwned(torrentsInfo);
-        try {
-            log.info("修改保存位置 {} ==> {}", torrentsInfo.getName(), path);
-            if (!CLIENT.setSavePath(torrentsInfo, path).isSuccess()) {
-                throw new IllegalStateException("下载器拒绝修改保存位置");
-            }
-        } catch (Exception e) {
-            log.error(e.getMessage(), e);
+        DownloaderClient activeClient = CLIENT;
+        if (activeClient == null) {
+            throw new IllegalStateException("downloader is not initialized");
+        }
+        String downloaderType = activeClient.configurationSnapshot().getDownloadToolType();
+        ownershipService.requireOwned(downloaderType, torrentsInfo);
+        log.info("修改保存位置 {} ==> {}", torrentsInfo.getName(), path);
+        if (!activeClient.setSavePath(torrentsInfo, path).isSuccess()) {
+            throw new IllegalStateException("downloader rejected the save-path change");
         }
     }
 
     /**
      * 初始化下载工具
      */
-    public static synchronized void loadDownloadTool() {
-        Config config = ConfigUtil.CONFIG;
+    public static void loadDownloadTool() {
+        Config config = ConfigUtil.snapshot();
         String download = config.getDownloadToolType();
-
-        if (download.equals("Alist")) {
+        if ("Alist".equals(download)) {
             download = "OpenList";
             config.setDownloadToolType(download);
-            ConfigUtil.sync();
+            ConfigUtil.sync(config);
         }
 
-        CLIENT = DownloaderClientFactory.createClient(config);
+        DownloaderClient replacement = DownloaderClientFactory.createClient(config);
+        synchronized (CLIENT_LOCK) {
+            CLIENT = replacement;
+        }
         log.info("下载工具 {}", download);
     }
 

@@ -13,7 +13,9 @@
               label="头像"
               align="center"
           >
-            <el-avatar :src="me['avatar']['large']" size="large"/>
+            <el-avatar size="large">
+              <SafeImage :src-url="me['avatar']['large']" alt="avatar" class="avatar-image"/>
+            </el-avatar>
           </el-descriptions-item>
           <el-descriptions-item label="用户名">
             <el-text v-if="me['username']">
@@ -27,8 +29,9 @@
             <el-link
                 type="primary"
                 class="text-extra-small"
-                :href="me['url']"
-                target="_blank">
+                :href="safeHttpUrl(me['url'])"
+                target="_blank"
+                rel="noopener noreferrer">
               {{ me['url'] }}
             </el-link>
           </el-descriptions-item>
@@ -66,6 +69,8 @@
 
 import {ref} from "vue";
 import * as http from "@/js/http.js";
+import {safeHttpUrl} from '@/js/url.js'
+import SafeImage from '@/other/SafeImage.vue'
 
 let me = ref({
   "avatar": {
@@ -124,5 +129,11 @@ defineExpose({show})
   display: flex;
   justify-content: center;
   align-items: center;
+}
+
+.avatar-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 </style>

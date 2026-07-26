@@ -1,14 +1,14 @@
 <template>
-  <Edit ref="editRef"/>
-  <PlayList ref="playListRef"/>
-  <Cover ref="coverRef"/>
-  <Del ref="delRef"/>
-  <BgmRate ref="bgmRateRef"/>
+  <Edit v-if="mounted.edit" ref="editRef"/>
+  <PlayList v-if="mounted.playlist" ref="playListRef"/>
+  <Cover v-if="mounted.cover" ref="coverRef"/>
+  <Del v-if="mounted.delete" ref="delRef"/>
+  <BgmRate v-if="mounted.rate" ref="bgmRateRef"/>
   <div class="list-container" v-loading="loading">
     <el-scrollbar class="hide-scrollbar">
       <div class="list-content">
         <template v-if="showWeek">
-          <div v-for="weekItem in filterList">
+          <div v-for="weekItem in filterList" :key="weekItem.weekLabel">
             <h2 class="list-week-title">
               {{ weekItem.weekLabel }}
             </h2>
@@ -16,11 +16,11 @@
               <div v-for="item in weekItem.items" :key="item.id">
                 <AniCard
                     :item="item"
-                    @edit="editRef?.show"
-                    @playlist="playListRef?.show"
-                    @cover="coverRef?.show"
-                    @del="delRef?.show"
-                    @rate="bgmRateRef?.show"
+                    @edit="item => openLazy('edit', editRef, item)"
+                    @playlist="item => openLazy('playlist', playListRef, item)"
+                    @cover="item => openLazy('cover', coverRef, item)"
+                    @del="item => openLazy('delete', delRef, item)"
+                    @rate="item => openLazy('rate', bgmRateRef, item)"
                 />
               </div>
             </div>
@@ -28,14 +28,14 @@
         </template>
         <template v-else>
           <div class="grid-container">
-            <div v-for="item in flatFilterList">
+            <div v-for="item in flatFilterList" :key="item.id">
               <AniCard
                   :item="item"
-                  @edit="editRef?.show"
-                  @playlist="playListRef?.show"
-                  @cover="coverRef?.show"
-                  @del="delRef?.show"
-                  @rate="bgmRateRef?.show"
+                  @edit="item => openLazy('edit', editRef, item)"
+                  @playlist="item => openLazy('playlist', playListRef, item)"
+                  @cover="item => openLazy('cover', coverRef, item)"
+                  @del="item => openLazy('delete', delRef, item)"
+                  @rate="item => openLazy('rate', bgmRateRef, item)"
               />
             </div>
           </div>
@@ -47,22 +47,37 @@
 </template>
 
 <script setup>
-import {onMounted, ref} from "vue";
-import Edit from "./Edit.vue";
-import PlayList from "@/play/PlayList.vue";
-import Cover from "./Cover.vue";
-import Del from "./Del.vue";
-import BgmRate from "./BgmRate.vue";
+import {defineAsyncComponent, onMounted, reactive, ref, watch} from "vue";
 import formatTime from "@/js/format-time.js";
 import {listAni} from "@/js/http.js";
 import AniCard from "@/home/AniCard.vue";
 import {showWeek} from "@/js/global.js";
+
+const Edit = defineAsyncComponent(() => import('./Edit.vue'))
+const PlayList = defineAsyncComponent(() => import('@/play/PlayList.vue'))
+const Cover = defineAsyncComponent(() => import('./Cover.vue'))
+const Del = defineAsyncComponent(() => import('./Del.vue'))
+const BgmRate = defineAsyncComponent(() => import('./BgmRate.vue'))
 
 const editRef = ref()
 const delRef = ref()
 const coverRef = ref()
 const playListRef = ref()
 const bgmRateRef = ref()
+const mounted = reactive({edit: false, playlist: false, cover: false, delete: false, rate: false})
+
+const openLazy = (name, componentRef, ...args) => {
+  mounted[name] = true
+  if (componentRef.value) {
+    componentRef.value.show(...args)
+    return
+  }
+  const stop = watch(componentRef, component => {
+    if (!component) return
+    stop()
+    component.show(...args)
+  }, {flush: 'post'})
+}
 
 const weekList = ref([])
 const filterList = ref([])
@@ -126,10 +141,11 @@ const getList = () => {
 
 let updateGridLayout = () => {
   const app = document.querySelector('#app');
+  if (!(app instanceof HTMLElement)) return
   let gridColumns = Math.max(1, Math.floor(app.offsetWidth / 400));
 
   const el = document.documentElement
-  el.style.setProperty('--grid-columns', gridColumns)
+  el.style.setProperty('--grid-columns', String(gridColumns))
 }
 
 onMounted(() => {

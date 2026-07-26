@@ -13,11 +13,13 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.context.request.ServletWebRequest;
 
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
 
@@ -39,16 +41,28 @@ public class MediaController {
         response.setHeader(HttpHeaders.ETAG, etag);
         response.setDateHeader(HttpHeaders.LAST_MODIFIED, resource.lastModified());
         response.setHeader(HttpHeaders.ACCEPT_RANGES, "bytes");
-        if (etag.equals(request.getHeader(HttpHeaders.IF_NONE_MATCH))) {
-            response.setStatus(HttpServletResponse.SC_NOT_MODIFIED);
+        String ifNoneMatch = request.getHeader(HttpHeaders.IF_NONE_MATCH);
+        if (ifNoneMatch != null) {
+            if (matchesIfNoneMatch(ifNoneMatch, etag)) {
+                response.setStatus(HttpServletResponse.SC_NOT_MODIFIED);
+                return;
+            }
+        } else if (new ServletWebRequest(request, response)
+                .checkNotModified(resource.lastModified())) {
             return;
         }
 
-        String contentType = MediaTypeFactory.getMediaType(resource.path().getFileName().toString())
+        Path fileName = resource.path().getFileName();
+        String contentType = fileName == null ? MediaType.APPLICATION_OCTET_STREAM_VALUE :
+                MediaTypeFactory.getMediaType(fileName.toString())
                 .map(MediaType::toString)
                 .orElse(MediaType.APPLICATION_OCTET_STREAM_VALUE);
         response.setContentType(contentType);
         String rangeHeader = request.getHeader(HttpHeaders.RANGE);
+        if (rangeHeader != null && !rangeHeader.isBlank() &&
+                !ifRangeMatches(request, etag, resource.lastModified())) {
+            rangeHeader = null;
+        }
         long start = 0;
         long end = resource.length() - 1;
         if (rangeHeader != null && !rangeHeader.isBlank()) {
@@ -109,5 +123,36 @@ public class MediaController {
     }
 
     public record ExternalMediaHandle(String handle) {
+    }
+
+    private static boolean ifRangeMatches(HttpServletRequest request, String etag, long lastModified) {
+        String ifRange = request.getHeader(HttpHeaders.IF_RANGE);
+        if (ifRange == null || ifRange.isBlank()) {
+            return true;
+        }
+        if (ifRange.startsWith("\"") || ifRange.startsWith("W/")) {
+            return !ifRange.startsWith("W/") && etag.equals(ifRange);
+        }
+        try {
+            long date = request.getDateHeader(HttpHeaders.IF_RANGE);
+            return date >= 0 && lastModified / 1000 * 1000 <= date;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    private static boolean matchesIfNoneMatch(String header, String etag) {
+        String normalizedEtag = stripWeakPrefix(etag);
+        for (String candidate : header.split(",")) {
+            String value = candidate.trim();
+            if ("*".equals(value) || normalizedEtag.equals(stripWeakPrefix(value))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String stripWeakPrefix(String value) {
+        return value.startsWith("W/") ? value.substring(2) : value;
     }
 }

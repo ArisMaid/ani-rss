@@ -59,8 +59,8 @@ public class ConfigV2Controller {
                     result.getOperationId(),
                     Map.of(
                             "failureType", result.getFailureType() == null ? "UNKNOWN" : result.getFailureType(),
-                            "upstreamStatus", result.getStatus() == null ? 0 : result.getStatus(),
-                            "elapsedMillis", result.getTime() == null ? 0 : result.getTime()));
+                            "upstreamStatus", java.util.Objects.requireNonNullElse(result.getStatus(), 0),
+                            "elapsedMillis", java.util.Objects.requireNonNullElse(result.getTime(), 0L)));
         }
         return result;
     }

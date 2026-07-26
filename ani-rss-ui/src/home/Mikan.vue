@@ -5,7 +5,7 @@
              :close-on-press-escape="false"
              :show-close="false">
     <div>
-      <el-progress :percentage="Number.parseInt((batchAdditionNum / rssList.length) * 100.0)"/>
+      <el-progress :percentage="Math.round((batchAdditionNum / rssList.length) * 100.0)"/>
     </div>
     <div>
       {{ batchAdditionNum }} / {{ rssList.length }}
@@ -14,12 +14,14 @@
   <el-dialog v-model="matchDialogVisible" align-center center title="匹配" width="auto">
     <div class="match-content">
       <el-radio-group v-model="addAni.match">
-        <div v-for="regexItems in regexList" class="match-item">
+        <div v-for="regexItems in regexList" :key="JSON.stringify(regexItems)" class="match-item">
           <el-radio :label="JSON.stringify(regexItems)"
                     :value="JSON.stringify(regexItems.map(it => it.regex))">
-            <el-tag v-if="regexItems.length" v-for="regexItem in regexItems" class="tag-margin">
-              {{ regexItem.label }}
-            </el-tag>
+            <template v-if="regexItems.length">
+              <el-tag v-for="regexItem in regexItems" :key="regexItem.regex || regexItem.label" class="tag-margin">
+                {{ regexItem.label }}
+              </el-tag>
+            </template>
             <el-tag v-else type="success">全部</el-tag>
           </el-radio>
         </div>
@@ -62,7 +64,7 @@
         <div v-loading="loading" class="scroll-container">
           <el-scrollbar>
             <el-collapse v-model="activeName">
-              <el-collapse-item v-for="week in data.weeks" :name="week.weekLabel">
+              <el-collapse-item v-for="week in data.weeks" :key="week.weekLabel" :name="week.weekLabel">
                 <template #title>
                   <span style="margin-left: 4px;font-weight: bold;">
                     {{ week.weekLabel }}
@@ -70,7 +72,7 @@
                 </template>
                 <div class="collapse-content">
                   <el-collapse accordion @change="collapseChange">
-                    <el-collapse-item v-for="it in week.items" :name="it.url">
+                    <el-collapse-item v-for="it in week.items" :key="it.url" :name="it.url">
                       <template #title>
                         <div class="flex collapse-title">
                           <SafeImage :src-url="it['cover']" class="cover" @click.stop="open(it.url)"/>
@@ -92,7 +94,8 @@
                       <div v-if="selectName === it.url" v-loading="groupLoading"
                            class="group-content">
                         <el-collapse accordion>
-                          <el-collapse-item v-for="group in groups[it.url]">
+                          <el-collapse-item v-for="group in groups[it.url]"
+                                            :key="group.url || group.label || JSON.stringify(group.groupRegex)">
                             <template #title>
                               <div class="group-title-wrapper">
                                 <div class="group-checkbox-wrapper">
@@ -104,7 +107,7 @@
                                   <el-text class="mx-1" size="small">{{ group['updateDay'] }}</el-text>
                                 </div>
                                 <div v-if="showTag()">
-                                  <el-tag v-for="tag in group['groupRegex']['tags']"
+                                  <el-tag v-for="tag in group['groupRegex']['tags']" :key="tag"
                                           class="tag-margin">
                                     {{ tag }}
                                   </el-tag>
@@ -117,7 +120,8 @@
                               </div>
                             </template>
                             <div class="group-items">
-                              <div v-for="ti in group.items" class="item-margin">
+                              <div v-for="ti in group.items" :key="ti.magnet || ti.torrent || ti.title"
+                                   class="item-margin">
                                 <el-card shadow="never">
                                   <div>
                                     <h5>
@@ -157,6 +161,7 @@ import {ref} from "vue";
 import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy, Download as DownloadIcon} from "@element-plus/icons-vue";
 import SafeImage from '@/other/SafeImage.vue'
+import {openHttpUrl} from '@/js/url.js'
 import * as http from "@/js/http.js";
 
 // 批量添加订阅
@@ -168,7 +173,8 @@ let dialogVisible = ref(false)
 let loading = ref(false)
 let data = ref({
   'seasons': [],
-  'items': []
+  'items': [],
+  'weeks': []
 })
 
 let seasonSelect = ref('')
@@ -179,7 +185,8 @@ let show = (name) => {
   text.value = ''
   data.value = {
     'seasons': [],
-    'items': []
+    'items': [],
+    'weeks': []
   }
   rssList.value = []
   if (name) {
@@ -271,9 +278,11 @@ let collapseChange = (v) => {
 let matchDialogVisible = ref(false)
 
 let addAni = ref({
+  'bgmUrl': '',
   'url': '',
   'match': '',
-  'group': ''
+  'group': '',
+  'subgroup': ''
 })
 
 let regexList = ref([])
@@ -296,7 +305,7 @@ let showTag = () => {
 }
 
 let open = url => {
-  window.open(url);
+  openHttpUrl(url);
 }
 
 defineExpose({show})
@@ -373,7 +382,7 @@ let copy = (v) => {
   ElMessage.success('已复制')
 }
 
-let openUrl = (url) => window.open(url)
+let openUrl = (url) => openHttpUrl(url)
 
 </script>
 

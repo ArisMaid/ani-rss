@@ -23,22 +23,27 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class ImageCacheService {
     private static final long TTL = Duration.ofHours(2).toMillis();
+    private static final int MAX_URL_LENGTH = 8192;
+    private static final int LOCK_STRIPES = 256;
     private static final SecureRandom RANDOM = new SecureRandom();
     private final Map<String, Entry> entries = new ConcurrentHashMap<>();
     private final Map<String, String> sourceIndex = new ConcurrentHashMap<>();
-    private final Map<String, Object> sourceLocks = new ConcurrentHashMap<>();
+    private final Object[] sourceLocks = createLocks();
 
     public ImageRef cache(String url, HttpServletRequest request) {
         if (!AuthService.validateRequest(request)) {
             throw new AuthenticationFailureException("session required");
         }
+        if (url == null || url.isBlank() || url.length() > MAX_URL_LENGTH) {
+            throw new IllegalArgumentException("image URL is invalid or too long");
+        }
         String binding = AuthService.sessionBinding(request);
-        String sourceKey = binding + ":" + SecureUtil.sha256(url == null ? "" : url);
+        String sourceKey = binding + ":" + SecureUtil.sha256(url);
         ImageRef existing = existing(sourceKey);
         if (existing != null) {
             return existing;
         }
-        Object lock = sourceLocks.computeIfAbsent(sourceKey, ignored -> new Object());
+        Object lock = sourceLocks[Math.floorMod(sourceKey.hashCode(), sourceLocks.length)];
         try {
             synchronized (lock) {
                 existing = existing(sourceKey);
@@ -61,8 +66,12 @@ public class ImageCacheService {
                 if (Files.isSymbolicLink(root)) {
                     throw new IOException("image cache directory is a symbolic link");
                 }
-                PathPolicy.requireNoSymbolicLinks(root.getParent(), root);
-                PathPolicy.realPathWithin(root.getParent(), root);
+                Path rootParent = root.getParent();
+                if (rootParent == null) {
+                    throw new IOException("image cache directory must have a parent");
+                }
+                PathPolicy.requireNoSymbolicLinks(rootParent, root);
+                PathPolicy.realPathWithin(rootParent, root);
                 Path temporary = Files.createTempFile(root, ".image-", ".part");
                 try {
                     Files.write(temporary, fetched.bytes());
@@ -78,9 +87,13 @@ public class ImageCacheService {
             }
         } catch (IOException e) {
             throw new IllegalStateException("cache image failed", e);
-        } finally {
-            sourceLocks.remove(sourceKey, lock);
         }
+    }
+
+    private static Object[] createLocks() {
+        Object[] locks = new Object[LOCK_STRIPES];
+        java.util.Arrays.setAll(locks, ignored -> new Object());
+        return locks;
     }
 
     public CachedImage resolve(String id, HttpServletRequest request) {

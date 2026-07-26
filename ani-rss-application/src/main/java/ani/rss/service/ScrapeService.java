@@ -21,7 +21,14 @@ import wushuo.tmdb.api.entity.*;
 import wushuo.tmdb.api.enums.TmdbTypeEnum;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -312,26 +319,76 @@ public class ScrapeService {
             return;
         }
 
-        if (!force) {
-            if (saveFile.exists()) {
+        Path target = saveFile.toPath().toAbsolutePath().normalize();
+        boolean replace = Boolean.TRUE.equals(force);
+        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            if (Files.isSymbolicLink(target) ||
+                    !Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IllegalStateException("scraped image target is unsafe");
+            }
+            if (!replace) {
                 return;
             }
         }
-
-        FileUtil.del(saveFile);
 
         Config config = ConfigUtil.CONFIG;
         String tmdbImage = config.getTmdbImage();
 
         HttpReq.get(tmdbImage + "/t/p/original" + tmdbPath)
                 .then(res -> {
+                    HttpReq.assertStatus(res);
                     try (InputStream inputStream = res.bodyStream()) {
-                        FileUtil.writeFromStream(inputStream, saveFile, true);
-                    } catch (Exception ignored) {
+                        writeImageAtomically(target, inputStream, replace);
+                    } catch (IOException | RuntimeException e) {
+                        throw new IllegalStateException("save scraped image failed", e);
                     }
                 });
 
         log.info("已保存图片 {}", saveFile);
+    }
+
+    static void writeImageAtomically(Path target, InputStream inputStream, boolean replace)
+            throws IOException {
+        Path absoluteTarget = target.toAbsolutePath().normalize();
+        Path parent = absoluteTarget.getParent();
+        if (parent == null) {
+            throw new IOException("scraped image target has no parent directory");
+        }
+        Files.createDirectories(parent);
+        if (Files.isSymbolicLink(parent)) {
+            throw new IOException("scraped image parent is a symbolic link");
+        }
+        if (Files.exists(absoluteTarget, LinkOption.NOFOLLOW_LINKS) &&
+                (Files.isSymbolicLink(absoluteTarget) ||
+                        !Files.isRegularFile(absoluteTarget, LinkOption.NOFOLLOW_LINKS))) {
+            throw new IOException("scraped image target is unsafe");
+        }
+
+        Path temporary = Files.createTempFile(parent, ".ani-rss-image-", ".part");
+        try {
+            try (FileOutputStream outputStream = new FileOutputStream(temporary.toFile())) {
+                inputStream.transferTo(outputStream);
+                outputStream.flush();
+                outputStream.getChannel().force(true);
+            }
+            moveImageIntoPlace(temporary, absoluteTarget, replace);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    private static void moveImageIntoPlace(Path temporary, Path target, boolean replace)
+            throws IOException {
+        if (!replace) {
+            Files.move(temporary, target);
+            return;
+        }
+        try {
+            Files.move(temporary, target,
+                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (AtomicMoveNotSupportedException e) {
+            Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     /**

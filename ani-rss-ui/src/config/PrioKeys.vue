@@ -1,6 +1,6 @@
 <template>
   <el-dialog title="关键词设置" v-if="add" v-model:model-value="add" center align-center width="300"
-             @open="$nextTick(() => $refs.keywordInput?.focus())">
+             @open="$nextTick(focusKeywordInput)">
     <el-form @submit.prevent="addKeyword" label-width="auto">
       <el-form-item label="关键词">
         <el-input ref="keywordInput" placeholder="如：简体、繁体、1080p" v-model="keyword"
@@ -57,6 +57,8 @@ const handleClose = (index) => {
 
 const add = ref(false)
 const keyword = ref('')
+const keywordInput = ref()
+const focusKeywordInput = () => keywordInput.value?.focus()
 
 const addKeyword = () => {
   if (!keyword.value.trim()) {

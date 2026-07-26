@@ -94,7 +94,9 @@ const initTheme = () => {
         onChanged: dark => {
             // 自动根据夜间模式修改沉浸式状态栏
             const meta = document.getElementById('themeColorMeta');
-            meta.content = dark ? '#000000' : '#ffffff';
+            if (meta instanceof HTMLMetaElement) {
+                meta.content = dark ? '#000000' : '#ffffff';
+            }
         }
     })
 
@@ -107,12 +109,12 @@ const initTheme = () => {
  */
 const initLayout = () => {
     let app = document.querySelector('#app');
+    if (!(app instanceof HTMLElement)) return
 
     // 设置最大布局宽度
     maxContentWidth.value = Math.max(maxContentWidth.value, 1200)
 
-    app
-        .style.maxWidth = `${maxContentWidth.value}px`
+    app.style.maxWidth = `${maxContentWidth.value}px`
 
     const el = document.documentElement
     el.style.setProperty('--max-content-width', `${maxContentWidth.value}px`)
@@ -157,7 +159,8 @@ const initAuth = async () => {
             localStorage.removeItem('authorization')
             return true
         }
-    } catch (e) {
+    } catch {
+        // Continue with the IP whitelist login fallback.
     }
     try {
         const response = await fetch(`${getBaseUrl()}api/v2/auth/ip-login`, {
@@ -170,7 +173,8 @@ const initAuth = async () => {
             localStorage.removeItem('authorization')
             return true
         }
-    } catch (e) {
+    } catch {
+        // Continue with remembered credentials or legacy migration.
     }
     const rememberedCredentials = legacyRememberedCredentials
     legacyRememberedCredentials = null
@@ -188,7 +192,8 @@ const initAuth = async () => {
                 localStorage.removeItem('authorization')
                 return true
             }
-        } catch (e) {
+        } catch {
+            // Continue with the one-time legacy token migration.
         }
     }
     const legacyToken = localStorage.getItem('authorization') || ''
@@ -205,7 +210,8 @@ const initAuth = async () => {
                 markAuthenticated(body.csrfToken)
                 return true
             }
-        } catch (e) {
+        } catch {
+            // Authentication remains unavailable below.
         }
     }
     clearAuthentication()

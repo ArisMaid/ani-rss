@@ -80,7 +80,10 @@ class TransmissionContractTest {
         authFailure = true;
         Transmission client = new Transmission();
 
-        assertTrue(!client.login(true, config()));
+        DownloaderResult<Void> result = new DownloaderClient(client, config()).connect(true);
+        assertTrue(!result.isSuccess());
+        assertEquals("TRANSMISSION_AUTHENTICATION_FAILED", result.errorCode());
+        assertTrue(!result.retryable());
         assertEquals(1, calls.get());
     }
 

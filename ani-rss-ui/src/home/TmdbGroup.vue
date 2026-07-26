@@ -1,7 +1,7 @@
 <template>
   <el-dialog v-model="dialogVisible" align-center center title="剧集组" width="400">
     <el-scrollbar v-loading="loading" class="tmdb-scrollbar">
-      <el-card v-for="group in groupList" shadow="never" class="tmdb-card">
+      <el-card v-for="group in groupList" :key="group.id" shadow="never" class="tmdb-card">
         <template #header>
           <div class="flex tmdb-header">
             <div>

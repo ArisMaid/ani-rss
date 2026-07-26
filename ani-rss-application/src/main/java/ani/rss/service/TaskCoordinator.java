@@ -67,8 +67,8 @@ public final class TaskCoordinator {
 
     public final class MaintenanceLease implements AutoCloseable {
         private final State previous;
-        private boolean completed;
-        private boolean closed;
+        private volatile boolean completed;
+        private volatile boolean closed;
 
         private MaintenanceLease(State previous) {
             this.previous = previous;

@@ -256,7 +256,7 @@ const downloadLoginTest = () => {
 }
 
 let testPathTemplate = (path) => {
-  return new RegExp('\\$\{[A-z]+\}').test(path);
+  return /\$\{[A-Za-z]+\}/.test(path);
 }
 
 let activeName = ref([])

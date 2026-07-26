@@ -41,7 +41,7 @@ public class TorrentController extends BaseController {
             String name = FileUtil.mainName(file);
             if (hashList.contains(name)) {
                 log.info("删除种子 {}", file);
-                FileUtil.del(file);
+                FileUtils.deleteRegularFile(file);
             }
         }
         return Result.success("删除完成");

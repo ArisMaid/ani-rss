@@ -98,7 +98,7 @@ public class WebHookNotification implements BaseNotification {
                 .addHeaders(headerMap)
                 .method(Method.valueOf(webHookMethod));
 
-        log.debug("webhook url: {}", HttpReq.sanitizeUrl(webHookUrl));
+        log.debug("webhook origin: {}", HttpReq.sanitizeOrigin(webHookUrl));
 
         if (StrUtil.isNotBlank(webHookBody)) {
             httpRequest.body(webHookBody);

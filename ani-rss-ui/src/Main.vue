@@ -10,10 +10,11 @@
 
 <script setup>
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import Login from "@/Login.vue";
-import App from "@/home/App.vue";
 import {authorization, init} from "@/js/global.js";
-import {reactive} from "vue";
+import {defineAsyncComponent, reactive} from "vue";
+
+const Login = defineAsyncComponent(() => import('@/Login.vue'))
+const App = defineAsyncComponent(() => import('@/home/App.vue'))
 
 /**
  * 链接配置

@@ -19,7 +19,7 @@ watch(() => props.srcUrl, async (value) => {
     const response = await http.cacheImage(value)
     if (current !== generation) return
     resolved.value = new URL(`api/v2/images/${encodeURIComponent(response.data.id)}`, document.baseURI).toString()
-  } catch (e) {
+  } catch {
     if (current === generation) resolved.value = ''
   }
 }, {immediate: true})

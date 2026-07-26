@@ -20,7 +20,11 @@
         <java.version>17</java.version>
         <spring-ai.version>2.0.0</spring-ai.version>
         <commons-compress.version>1.27.1</commons-compress.version>
-        <bouncycastle.version>1.81.1</bouncycastle.version>
+        <bouncycastle.version>1.84</bouncycastle.version>
+        <jackson2-bom.version>2.21.5</jackson2-bom.version>
+        <jacoco.version>0.8.15</jacoco.version>
+        <spotbugs-maven-plugin.version>4.10.3.0</spotbugs-maven-plugin.version>
+        <cyclonedx-maven-plugin.version>2.9.2</cyclonedx-maven-plugin.version>
     </properties>
 
     <modules>
@@ -37,6 +41,13 @@
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson2-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>ani.rss</groupId>
                 <artifactId>ani-rss-ui</artifactId>
@@ -162,6 +173,21 @@
                     <groupId>com.github.eirslett</groupId>
                     <artifactId>frontend-maven-plugin</artifactId>
                     <version>2.0.1</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>${jacoco.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>com.github.spotbugs</groupId>
+                    <artifactId>spotbugs-maven-plugin</artifactId>
+                    <version>${spotbugs-maven-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.cyclonedx</groupId>
+                    <artifactId>cyclonedx-maven-plugin</artifactId>
+                    <version>${cyclonedx-maven-plugin.version}</version>
                 </plugin>
             </plugins>
         </pluginManagement>

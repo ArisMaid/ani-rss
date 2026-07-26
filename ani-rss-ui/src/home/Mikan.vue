@@ -63,16 +63,18 @@
         </div>
         <div v-loading="loading" class="scroll-container">
           <el-scrollbar>
-            <el-collapse v-model="activeName">
-              <el-collapse-item v-for="week in data.weeks" :key="week.weekLabel" :name="week.weekLabel">
+          <el-collapse :key="listEpoch" v-model="activeName">
+              <el-collapse-item v-for="(week, weekIndex) in data.weeks"
+                                :key="`${listEpoch}:${week.weekLabel}:${weekIndex}`" :name="week.weekLabel">
                 <template #title>
                   <span style="margin-left: 4px;font-weight: bold;">
                     {{ week.weekLabel }}
                   </span>
                 </template>
                 <div class="collapse-content">
-                  <el-collapse accordion @change="collapseChange">
-                    <el-collapse-item v-for="it in week.items" :key="it.url" :name="it.url">
+                  <el-collapse :key="`${listEpoch}:${week.weekLabel}:${weekIndex}`" accordion @change="collapseChange">
+                    <el-collapse-item v-for="(it, itemIndex) in week.items"
+                                      :key="`${listEpoch}:${it.url}:${itemIndex}`" :name="it.url">
                       <template #title>
                         <div class="flex collapse-title">
                           <SafeImage :src-url="it['cover']" class="cover" @click.stop="open(it.url)"/>
@@ -157,12 +159,82 @@
 </template>
 
 <script setup>
-import {ref} from "vue";
+import {onBeforeUnmount, ref} from "vue";
 import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy, Download as DownloadIcon} from "@element-plus/icons-vue";
 import SafeImage from '@/other/SafeImage.vue'
 import {openHttpUrl} from '@/js/url.js'
 import * as http from "@/js/http.js";
+
+const SCORE_BATCH_SIZE = 48
+const SCORE_RETRY_DELAYS_MILLIS = [0, 500, 1_500]
+
+const emptyMikanData = () => ({
+  seasons: [],
+  items: [],
+  weeks: []
+})
+
+const cloneSeasons = seasons => Array.isArray(seasons)
+    ? seasons.filter(Boolean).map(season => ({...season}))
+    : []
+
+const cloneWeeks = weeks => Array.isArray(weeks)
+    ? weeks.filter(Boolean).map(week => ({
+      ...week,
+      items: Array.isArray(week.items)
+          ? week.items.filter(Boolean).map(item => ({...item}))
+          : []
+    }))
+    : []
+
+const mikanIdFromUrl = value => {
+  try {
+    const path = new URL(String(value || ''), window.location.origin).pathname
+    return path.match(/\/Home\/Bangumi\/(\d+)\/?$/i)?.[1] || ''
+  } catch {
+    return String(value || '').match(/\/Home\/Bangumi\/(\d+)\/?(?:[?#].*)?$/i)?.[1] || ''
+  }
+}
+
+const scoreBatches = ids => {
+  const batches = []
+  for (let index = 0; index < ids.length; index += SCORE_BATCH_SIZE) {
+    batches.push(ids.slice(index, index + SCORE_BATCH_SIZE))
+  }
+  return batches
+}
+
+const seasonRequest = season => {
+  if (!season || !Number.isInteger(season.year) || !season.season) {
+    return {}
+  }
+  return {year: season.year, season: season.season, seasonLabel: season.seasonLabel}
+}
+
+const isAborted = error => error?.code === 'REQUEST_ABORTED' || error?.cause?.name === 'AbortError'
+
+const isRetryableScoreError = error => error?.code === 'NETWORK_ERROR'
+    || error?.status === 0
+    || error?.status === 429
+    || Number(error?.status) >= 500
+
+const waitForScoreRetry = (milliseconds, signal) => new Promise((resolve, reject) => {
+  if (signal?.aborted) {
+    reject(Object.assign(new Error('Score request aborted'), {code: 'REQUEST_ABORTED'}))
+    return
+  }
+  let timeoutId
+  const abort = () => {
+    clearTimeout(timeoutId)
+    reject(Object.assign(new Error('Score request aborted'), {code: 'REQUEST_ABORTED'}))
+  }
+  timeoutId = setTimeout(() => {
+    signal?.removeEventListener('abort', abort)
+    resolve()
+  }, milliseconds)
+  signal?.addEventListener('abort', abort, {once: true})
+})
 
 // 批量添加订阅
 let rssList = ref([]);
@@ -171,18 +243,32 @@ let groupLoading = ref(false)
 let activeName = ref("")
 let dialogVisible = ref(false)
 let loading = ref(false)
-let data = ref({
-  'seasons': [],
-  'items': [],
-  'weeks': []
-})
+let data = ref(emptyMikanData())
+let listEpoch = ref(0)
 
 let seasonSelect = ref('')
+let text = ref('')
+let searchLoading = ref(false)
 let selectName = ref('')
 let groups = ref({})
 let listRequestId = 0
 let groupRequestId = 0
 let scoreRequestId = 0
+let searchRequestId = 0
+let listStateId = 0
+let listAbortController
+let scoreAbortController
+
+let cancelScoreRequest = () => {
+  scoreAbortController?.abort()
+  scoreAbortController = undefined
+}
+
+let cancelMikanRequests = () => {
+  listAbortController?.abort()
+  listAbortController = undefined
+  cancelScoreRequest()
+}
 
 let resetListInteractionState = () => {
   activeName.value = ''
@@ -192,144 +278,212 @@ let resetListInteractionState = () => {
   groupRequestId += 1
 }
 
+let isCurrentList = (requestId, currentScoreRequestId) =>
+    requestId === listRequestId && currentScoreRequestId === scoreRequestId
+
 let show = (name) => {
+  cancelMikanRequests()
   listRequestId += 1
+  scoreRequestId += 1
+  searchRequestId += 1
   seasonSelect.value = ''
   dialogVisible.value = true
   text.value = ''
-  data.value = {
-    'seasons': [],
-    'items': [],
-    'weeks': []
-  }
+  data.value = emptyMikanData()
+  listStateId += 1
+  listEpoch.value += 1
   resetListInteractionState()
   if (name) {
     name = name.replace(/ ?\((19|20)\d{2}\)/g, "").trim()
     name = name.replace(/ ?\[tmdbid=(\d+)]/g, "").trim()
     if (name.length > 2) {
       text.value = name
-      search()
+      void search()
       return
     }
   }
-  list({})
+  void list({})
 }
 
-let text = ref('')
-
-let searchLoading = ref(false)
-let search = () => {
+let search = async () => {
   if (text.value.length === 1) {
     ElMessage.error("搜索最少需要两个字符")
     return
   }
+  let requestId = ++searchRequestId
   searchLoading.value = true
-  list({}, text.value).finally(() => {
-    searchLoading.value = false
-  })
+  try {
+    await list({}, text.value)
+  } finally {
+    if (requestId === searchRequestId) {
+      searchLoading.value = false
+    }
+  }
 }
 
-let list = async (body, text) => {
+let list = async (body = {}, searchText = '') => {
+  cancelMikanRequests()
   let requestId = ++listRequestId
   let currentScoreRequestId = ++scoreRequestId
+  let controller = new AbortController()
+  listAbortController = controller
   loading.value = true
-  text = text ? text : ''
-  body = body ? body : {}
+
+  const query = String(searchText || '').trim()
+  const retainedSeasons = query ? [] : cloneSeasons(data.value.seasons)
+  const requestBody = seasonRequest(body)
   resetListInteractionState()
-  data.value.weeks = []
-  if (text) {
-    data.value.seasons = []
+  data.value = {seasons: retainedSeasons, items: [], weeks: []}
+  listStateId += 1
+  listEpoch.value += 1
+  if (query) {
     seasonSelect.value = ''
   }
-  return http.mikan(text, body)
-      .then(res => {
-        if (requestId !== listRequestId) {
-          return
-        }
-        let {seasons = [], weeks = [], totalItem, totalItems} = res.data || {};
-        seasons = Array.isArray(seasons) ? seasons : []
-        weeks = Array.isArray(weeks) ? weeks : []
-        const itemCount = Number.isFinite(totalItem)
-            ? totalItem
-            : Number.isFinite(totalItems)
-                ? totalItems
-                : weeks.reduce((count, week) => count + (Array.isArray(week?.items) ? week.items.length : 0), 0)
 
-        if (itemCount < 1) {
-          ElMessage.warning("搜索结果为空")
-        }
+  try {
+    const res = await http.mikan(query, requestBody, {signal: controller.signal, silent: true})
+    if (!isCurrentList(requestId, currentScoreRequestId)) {
+      return
+    }
+    const payload = res?.data || {}
+    const seasons = cloneSeasons(payload.seasons)
+    const weeks = cloneWeeks(payload.weeks)
+    const itemCount = Number.isFinite(payload.totalItem)
+        ? payload.totalItem
+        : Number.isFinite(payload.totalItems)
+            ? payload.totalItems
+            : weeks.reduce((count, week) => count + week.items.length, 0)
 
-        if (seasons.length || text) {
-          data.value.seasons = seasons
-        }
-        data.value.weeks = weeks
-        enrichScores(requestId, currentScoreRequestId)
-        if (weeks.length) {
-          activeName.value = weeks[0].weekLabel
-        }
-        for (let season of data.value.seasons) {
-          if (season['select'] && !seasonSelect.value) {
-            seasonSelect.value = season['seasonLabel']
-            return
-          }
-        }
-      })
-      .finally(() => {
-        if (requestId === listRequestId) {
-          loading.value = false
-        }
-      });
+    if (itemCount < 1) {
+      ElMessage.warning("搜索结果为空")
+    }
+
+    const listState = {
+      seasons: seasons.length || query ? seasons : retainedSeasons,
+      items: [],
+      weeks
+    }
+    const currentListStateId = ++listStateId
+    data.value = listState
+    // Week labels repeat for every season. Remounting this subtree prevents
+    // Element Plus from retaining an old accordion child during the first swap.
+    listEpoch.value += 1
+    void enrichScores(requestId, currentScoreRequestId, currentListStateId, listState)
+    if (weeks.length) {
+      activeName.value = weeks[0].weekLabel
+    }
+    for (const season of listState.seasons) {
+      if (season.select && !seasonSelect.value) {
+        seasonSelect.value = season.seasonLabel
+        break
+      }
+    }
+  } catch (error) {
+    if (isCurrentList(requestId, currentScoreRequestId) && !isAborted(error)) {
+      ElMessage.error(error?.message || 'Mikan 列表加载失败')
+    }
+  } finally {
+    if (listAbortController === controller) {
+      listAbortController = undefined
+    }
+    if (isCurrentList(requestId, currentScoreRequestId)) {
+      loading.value = false
+    }
+  }
 }
 
-let enrichScores = (requestId, currentScoreRequestId) => {
+let applyScoreBatch = (listState, scores, subscribedBgmIds) => ({
+  ...listState,
+  weeks: listState.weeks.map(week => {
+    const items = week.items.map(item => {
+      const mikanId = mikanIdFromUrl(item.url)
+      const score = mikanId ? scores[mikanId] : null
+      if (!score) {
+        return item
+      }
+      const bgmId = score.bgmId || item.bgmId
+      return {
+        ...item,
+        score: Number(score.score) || 0,
+        bgmId,
+        exists: Boolean(item.exists) || Boolean(bgmId && subscribedBgmIds.has(bgmId))
+      }
+    }).sort((left, right) => Number(right.score || 0) - Number(left.score || 0))
+    return {...week, items}
+  })
+})
+
+let enrichScores = async (requestId, currentScoreRequestId, currentListStateId, initialListState) => {
   const mikanIds = [...new Set(
-    data.value.weeks
-        .flatMap(week => Array.isArray(week?.items) ? week.items : [])
-        .map(item => String(item?.url || '').match(/\/Home\/Bangumi\/(\d+)\/?$/)?.[1])
+    initialListState.weeks
+        .flatMap(week => week.items)
+        .map(item => mikanIdFromUrl(item.url))
         .filter(Boolean)
   )]
   if (!mikanIds.length) {
     return
   }
 
-  http.mikanScores(mikanIds)
-      .then(res => {
-        if (requestId !== listRequestId || currentScoreRequestId !== scoreRequestId) {
-          return
+  const controller = new AbortController()
+  scoreAbortController = controller
+  let listState = initialListState
+  try {
+    for (const batch of scoreBatches(mikanIds)) {
+      let retryIds = [...batch]
+      for (let attempt = 0;
+           retryIds.length && attempt < SCORE_RETRY_DELAYS_MILLIS.length;
+           attempt += 1) {
+        if (attempt > 0) {
+          await waitForScoreRetry(SCORE_RETRY_DELAYS_MILLIS[attempt], controller.signal)
         }
-        const scores = res?.data?.scores || {}
-        const subscribedBgmIds = new Set(res?.data?.subscribedBgmIds || [])
-        for (const week of data.value.weeks) {
-          if (!Array.isArray(week?.items)) {
-            continue
+        const requestedIds = [...retryIds]
+        try {
+          const res = await http.mikanScores(requestedIds, {signal: controller.signal, silent: true})
+          if (!isCurrentList(requestId, currentScoreRequestId) || currentListStateId !== listStateId) {
+            return
           }
-          for (const item of week.items) {
-            const mikanId = String(item?.url || '').match(/\/Home\/Bangumi\/(\d+)\/?$/)?.[1]
-            const score = mikanId ? scores[mikanId] : null
-            if (!score) {
-              continue
-            }
-            item.score = Number(score.score) || 0
-            item.bgmId = score.bgmId || item.bgmId
-            if (item.bgmId && subscribedBgmIds.has(item.bgmId)) {
-              item.exists = true
-            }
+          const scores = res?.data?.scores || {}
+          const subscribedBgmIds = new Set(res?.data?.subscribedBgmIds || [])
+          listState = applyScoreBatch(listState, scores, subscribedBgmIds)
+          data.value = listState
+          const retryableMikanIds = new Set(res?.data?.retryableMikanIds || [])
+          retryIds = requestedIds.filter(id => retryableMikanIds.has(id))
+        } catch (error) {
+          if (isAborted(error)) {
+            return
           }
-          week.items.sort((left, right) => Number(right.score || 0) - Number(left.score || 0))
+          if (!isRetryableScoreError(error)) {
+            console.debug('Mikan public score enrichment failed')
+            break
+          }
         }
-        data.value.weeks = [...data.value.weeks]
-      })
-      .catch(() => {
-        // Scores are an optional enhancement; leave the season list usable.
-      })
-}
-
-let change = (v) => {
-  let body = data.value.seasons.find(item => item['seasonLabel'] === v)
-  if (body) {
-    list(body)
+      }
+    }
+  } catch (error) {
+    // Scores are optional. Requests superseded by a season change are silent.
+    if (!isAborted(error)) {
+      console.debug('Mikan public score enrichment failed')
+    }
+  } finally {
+    if (scoreAbortController === controller) {
+      scoreAbortController = undefined
+    }
   }
 }
+
+let change = v => {
+  searchRequestId += 1
+  searchLoading.value = false
+  const season = data.value.seasons.find(item => item.seasonLabel === v)
+  if (season) {
+    void list(seasonRequest(season))
+  }
+}
+
+onBeforeUnmount(() => {
+  cancelMikanRequests()
+  groupRequestId += 1
+})
 
 let collapseChange = (v) => {
   if (!v) {

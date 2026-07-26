@@ -21,6 +21,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -38,8 +39,8 @@ import java.util.regex.Pattern;
 @Service
 public class PublicScoreService {
     private static final int REQUEST_TIMEOUT_MILLIS = 4_000;
-    static final long BGM_BATCH_TIMEOUT_MILLIS = 8_000;
-    static final long MIKAN_BATCH_TIMEOUT_MILLIS = 12_000;
+    static final long BGM_BATCH_TIMEOUT_MILLIS = 12_000;
+    static final long MIKAN_MAPPING_BATCH_TIMEOUT_MILLIS = 12_000;
     static final int MAX_CONCURRENT_REQUESTS = 8;
     static final int MAX_SCORE_LOOKUPS_PER_BATCH = 64;
     static final int MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH = 48;
@@ -70,17 +71,18 @@ public class PublicScoreService {
 
     /**
      * Returns a score for every valid requested subject id. Failed lookups are
-     * represented by 0.0 so listing a season remains available during an
-     * upstream outage.
+     * represented by 0.0 in this response, but are deliberately not cached so
+     * a transient upstream outage does not hide a score for ten minutes.
      */
     public Map<String, Double> getBgmScores(Collection<String> subjectIds) {
-        return getBgmScores(subjectIds, deadlineAfter(BGM_BATCH_TIMEOUT_MILLIS));
+        return getBgmScoreLookup(subjectIds, deadlineAfter(BGM_BATCH_TIMEOUT_MILLIS)).scores();
     }
 
-    private Map<String, Double> getBgmScores(Collection<String> subjectIds, long deadlineNanos) {
+    private BgmScoreLookup getBgmScoreLookup(Collection<String> subjectIds, long deadlineNanos) {
         LinkedHashSet<String> ids = normalizedIds(subjectIds);
         Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, String> missing = new LinkedHashMap<>();
+        Set<String> retryableBgmIds = new LinkedHashSet<>();
 
         for (String subjectId : ids) {
             Double cached = CacheUtils.get(BGM_SCORE_CACHE_PREFIX + subjectId);
@@ -92,6 +94,7 @@ public class PublicScoreService {
         }
 
         Map<String, String> attempted = takeFirst(missing, MAX_SCORE_LOOKUPS_PER_BATCH);
+        Set<String> completed = new LinkedHashSet<>();
         for (LookupResult<String, Double> result : resolveScoreBounded(attempted, subjectId -> {
             BgmInfo info = bgmInfoLoader.load(subjectId);
             return Optional.ofNullable(info)
@@ -100,6 +103,11 @@ public class PublicScoreService {
                     .filter(score -> score > 0)
                     .orElse(0.0);
         }, deadlineNanos)) {
+            completed.add(result.key());
+            if (!result.completed()) {
+                retryableBgmIds.add(result.key());
+                continue;
+            }
             double score = Optional.ofNullable(result.value()).filter(value -> value > 0).orElse(0.0);
             CacheUtils.put(
                     BGM_SCORE_CACHE_PREFIX + result.key(),
@@ -110,16 +118,23 @@ public class PublicScoreService {
         }
 
         for (String subjectId : attempted.keySet()) {
-            if (!scores.containsKey(subjectId)) {
-                CacheUtils.put(BGM_SCORE_CACHE_PREFIX + subjectId, 0.0, NEGATIVE_CACHE_TTL);
-                scores.put(subjectId, 0.0);
+            if (!completed.contains(subjectId)) {
+                // invokeAll cancels queued work once the bounded deadline is
+                // reached. It was never a completed zero-score lookup.
+                retryableBgmIds.add(subjectId);
             }
         }
-
         for (String subjectId : ids) {
             scores.putIfAbsent(subjectId, 0.0);
         }
-        return scores;
+        // Callers are normally capped below this limit, but preserve the
+        // distinction if this service is used directly with a larger set.
+        for (String subjectId : missing.keySet()) {
+            if (!attempted.containsKey(subjectId)) {
+                retryableBgmIds.add(subjectId);
+            }
+        }
+        return new BgmScoreLookup(scores, retryableBgmIds);
     }
 
     /**
@@ -128,7 +143,15 @@ public class PublicScoreService {
      * local cache and the list response did not already contain a BGM URL.
      */
     public Map<String, MikanBgm> getMikanScores(Collection<MikanInfo> mikanInfos) {
-        long deadlineNanos = deadlineAfter(MIKAN_BATCH_TIMEOUT_MILLIS);
+        return getMikanScoreLookup(mikanInfos).scores();
+    }
+
+    /**
+     * Resolves Mikan scores and reports only entries whose remote lookup was
+     * interrupted or rejected by an upstream. Entries without a Bangumi link
+     * are deliberately not retryable.
+     */
+    public MikanScoreLookup getMikanScoreLookup(Collection<MikanInfo> mikanInfos) {
         Map<String, String> knownBgmIds = new LinkedHashMap<>();
         Map<String, String> mikanUrls = new LinkedHashMap<>();
 
@@ -152,17 +175,27 @@ public class PublicScoreService {
         }
 
         mikanUrls.keySet().removeAll(knownBgmIds.keySet());
-        Map<String, String> resolvedBgmIds = resolveMikanBgmIds(mikanUrls, deadlineNanos);
-        knownBgmIds.putAll(resolvedBgmIds);
-        Map<String, Double> scores = getBgmScores(knownBgmIds.values(), deadlineNanos);
+        // Resolving Mikan-to-Bangumi links and obtaining Bangumi ratings are
+        // independent network stages. A slow Mikan page must not consume the
+        // full rating budget for entries whose Bangumi id is already known.
+        MikanBgmResolution resolution = resolveMikanBgmIds(
+                mikanUrls, deadlineAfter(MIKAN_MAPPING_BATCH_TIMEOUT_MILLIS));
+        knownBgmIds.putAll(resolution.bgmIds());
+        BgmScoreLookup scoreLookup = getBgmScoreLookup(
+                knownBgmIds.values(), deadlineAfter(BGM_BATCH_TIMEOUT_MILLIS));
+        Map<String, Double> scores = scoreLookup.scores();
+        Set<String> retryableMikanIds = new LinkedHashSet<>(resolution.retryableMikanIds());
 
         Map<String, MikanBgm> result = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : knownBgmIds.entrySet()) {
             String mikanId = entry.getKey();
             String bgmId = entry.getValue();
             result.put(mikanId, new MikanBgm(mikanId, bgmId, scores.getOrDefault(bgmId, 0.0)));
+            if (scoreLookup.retryableBgmIds().contains(bgmId)) {
+                retryableMikanIds.add(mikanId);
+            }
         }
-        return result;
+        return new MikanScoreLookup(result, retryableMikanIds);
     }
 
     /**
@@ -220,9 +253,10 @@ public class PublicScoreService {
         return matcher.find() ? matcher.group(1) : "";
     }
 
-    private Map<String, String> resolveMikanBgmIds(Map<String, String> mikanUrls, long deadlineNanos) {
+    private MikanBgmResolution resolveMikanBgmIds(Map<String, String> mikanUrls, long deadlineNanos) {
         Map<String, String> bgmIds = new LinkedHashMap<>();
         Map<String, String> missing = new LinkedHashMap<>();
+        Set<String> retryableMikanIds = new LinkedHashSet<>();
 
         for (Map.Entry<String, String> entry : mikanUrls.entrySet()) {
             String mikanId = entry.getKey();
@@ -239,11 +273,17 @@ public class PublicScoreService {
         }
 
         Map<String, String> attempted = takeFirst(missing, MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH);
+        Set<String> completed = new LinkedHashSet<>();
         for (LookupResult<String, String> result : resolveStringBounded(
                 attempted,
                 mikanBgmIdResolver::load,
                 deadlineNanos
         )) {
+            completed.add(result.key());
+            if (!result.completed()) {
+                retryableMikanIds.add(result.key());
+                continue;
+            }
             String bgmId = extractBgmSubjectId(result.value());
             String cacheKey = MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanUrls.get(result.key()));
             CacheUtils.put(
@@ -255,16 +295,17 @@ public class PublicScoreService {
                 bgmIds.put(result.key(), bgmId);
             }
         }
-        for (Map.Entry<String, String> entry : attempted.entrySet()) {
-            if (!bgmIds.containsKey(entry.getKey())) {
-                CacheUtils.put(
-                        MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(entry.getValue()),
-                        "",
-                        NEGATIVE_CACHE_TTL
-                );
+        for (String mikanId : attempted.keySet()) {
+            if (!completed.contains(mikanId)) {
+                retryableMikanIds.add(mikanId);
             }
         }
-        return bgmIds;
+        for (String mikanId : missing.keySet()) {
+            if (!attempted.containsKey(mikanId)) {
+                retryableMikanIds.add(mikanId);
+            }
+        }
+        return new MikanBgmResolution(bgmIds, retryableMikanIds);
     }
 
     private <K> List<LookupResult<K, String>> resolveStringBounded(
@@ -274,7 +315,13 @@ public class PublicScoreService {
     ) {
         List<Callable<LookupResult<K, String>>> tasks = new ArrayList<>();
         for (Map.Entry<K, String> entry : values.entrySet()) {
-            tasks.add(() -> new LookupResult<>(entry.getKey(), loader.load(entry.getValue())));
+            tasks.add(() -> {
+                try {
+                    return new LookupResult<>(entry.getKey(), loader.load(entry.getValue()), true);
+                } catch (Exception ignored) {
+                    return new LookupResult<>(entry.getKey(), null, false);
+                }
+            });
         }
         return invokeBounded(tasks, deadlineNanos);
     }
@@ -286,7 +333,13 @@ public class PublicScoreService {
     ) {
         List<Callable<LookupResult<K, Double>>> tasks = new ArrayList<>();
         for (Map.Entry<K, String> entry : values.entrySet()) {
-            tasks.add(() -> new LookupResult<>(entry.getKey(), loader.load(entry.getValue())));
+            tasks.add(() -> {
+                try {
+                    return new LookupResult<>(entry.getKey(), loader.load(entry.getValue()), true);
+                } catch (Exception ignored) {
+                    return new LookupResult<>(entry.getKey(), null, false);
+                }
+            });
         }
         return invokeBounded(tasks, deadlineNanos);
     }
@@ -415,6 +468,19 @@ public class PublicScoreService {
         Double load(String value) throws Exception;
     }
 
-    private record LookupResult<K, V>(K key, V value) {
+    public record MikanScoreLookup(Map<String, MikanBgm> scores, Set<String> retryableMikanIds) {
+        public MikanScoreLookup {
+            scores = Map.copyOf(scores);
+            retryableMikanIds = Set.copyOf(retryableMikanIds);
+        }
+    }
+
+    private record BgmScoreLookup(Map<String, Double> scores, Set<String> retryableBgmIds) {
+    }
+
+    private record MikanBgmResolution(Map<String, String> bgmIds, Set<String> retryableMikanIds) {
+    }
+
+    private record LookupResult<K, V>(K key, V value, boolean completed) {
     }
 }

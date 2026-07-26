@@ -1,19 +1,34 @@
 package ani.rss.service;
 
+import ani.rss.entity.Config;
 import ani.rss.entity.Mikan;
 import ani.rss.entity.MikanBgm;
 import ani.rss.entity.MikanInfo;
+import ani.rss.exception.UpstreamServiceException;
+import ani.rss.util.other.ConfigUtil;
+import cn.hutool.core.bean.BeanUtil;
+import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MikanServiceTest {
+    private final Config original = ConfigUtil.copy(ConfigUtil.CONFIG);
+
+    @AfterEach
+    void restoreConfiguration() {
+        BeanUtil.copyProperties(original, ConfigUtil.CONFIG);
+    }
+
     @Test
     void appliesScoresToEverySeasonResponseAndResetsMissingScoresToZero() {
         Mikan spring = season("101", "102");
@@ -42,6 +57,40 @@ class MikanServiceTest {
         List<MikanInfo> summerItems = summer.getWeeks().get(0).getItems();
         assertEquals(9.1, summerItems.get(0).getScore());
         assertEquals(0.0, summerItems.get(1).getScore());
+    }
+
+    @Test
+    void reportsAnUpstreamFailureInsteadOfReturningAnIndistinguishableEmptyList() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            exchange.sendResponseHeaders(503, -1);
+            exchange.close();
+        });
+        server.start();
+        try {
+            ConfigUtil.CONFIG.setMikanHost("http://127.0.0.1:" + server.getAddress().getPort())
+                    .setProxy(false);
+
+            assertThrows(UpstreamServiceException.class,
+                    () -> new MikanService().search("", new Mikan.Season()));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void resolvesRelativeAndAbsoluteMikanAssetsWithoutConcatenatingHosts() {
+        ConfigUtil.CONFIG.setMikanHost("https://mikan.example/proxy").setProxy(false);
+
+        assertEquals("https://mikan.example/proxy/images/cover.webp",
+                MikanService.resolveMikanUrl("images/cover.webp"));
+        assertEquals("https://mikan.example/images/cover.webp",
+                MikanService.resolveMikanUrl("/images/cover.webp"));
+        assertEquals("https://cdn.example/cover.webp",
+                MikanService.resolveMikanUrl("https://cdn.example/cover.webp"));
+        assertEquals("https://cdn.example/cover.webp",
+                MikanService.resolveMikanUrl("//cdn.example/cover.webp"));
+        assertEquals("", MikanService.resolveMikanUrl("javascript:alert(1)"));
     }
 
     private static Mikan season(String first, String second) {

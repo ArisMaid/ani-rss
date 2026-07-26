@@ -88,14 +88,15 @@ export let update = () => api.post('api/v2/update')
  * @param season 季度
  * @returns {Promise<any>}
  */
-export let mikan = (text, season) => api.post(withQuery('api/mikan', {text}), season)
+export let mikan = (text, season, options = {}) =>
+    api.post(withQuery('api/mikan', {text}), season, options)
 
 /**
  * Loads public scores after the Mikan season list is rendered.
  * @param {string[]} mikanIds Mikan bangumi ids from the trusted list response
  * @returns {Promise<any>}
  */
-export let mikanScores = (mikanIds) => api.post('api/mikanScores', mikanIds)
+export let mikanScores = (mikanIds, options = {}) => api.post('api/mikanScores', mikanIds, options)
 
 /**
  * 获取Mikan番剧的字幕组列表

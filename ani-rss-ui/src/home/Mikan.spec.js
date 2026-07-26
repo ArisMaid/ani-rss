@@ -1,5 +1,5 @@
 import {flushPromises, mount} from '@vue/test-utils'
-import {beforeEach, describe, expect, it, vi} from 'vitest'
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import Mikan from './Mikan.vue'
 import * as http from '@/js/http.js'
 import {ElMessage} from 'element-plus'
@@ -80,6 +80,10 @@ describe('Mikan season changes', () => {
     })
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('renders the newest season score and ignores an older in-flight response', async () => {
     const initial = deferred()
     const spring = deferred()
@@ -104,6 +108,8 @@ describe('Mikan season changes', () => {
     const select = wrapper.findComponent({name: 'ElSelect'})
     select.vm.$emit('change', '2026 春')
     select.vm.$emit('change', '2026 夏')
+
+    expect(vi.mocked(http.mikan).mock.calls[1][2].signal.aborted).toBe(true)
 
     summer.resolve(response('2026 夏', '夏季新番', 9.2))
     await flushPromises()
@@ -134,7 +140,8 @@ describe('Mikan season changes', () => {
 
     expect(wrapper.text()).toContain('先显示的番剧')
     expect(ElMessage.warning).not.toHaveBeenCalled()
-    expect(http.mikanScores).toHaveBeenCalledWith(['0'])
+    expect(vi.mocked(http.mikanScores).mock.calls[0][0]).toEqual(['0'])
+    expect(vi.mocked(http.mikanScores).mock.calls[0][1].signal).toBeDefined()
 
     scores.resolve({
       data: {
@@ -145,5 +152,94 @@ describe('Mikan season changes', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('8.6')
+  })
+
+  it('retries only score ids the backend marks as temporarily unresolved', async () => {
+    vi.useFakeTimers()
+    vi.mocked(http.mikan).mockResolvedValue(response('2026 春', '延迟评分作品', 0))
+    vi.mocked(http.mikanScores)
+        .mockResolvedValueOnce({
+          data: {
+            scores: {},
+            subscribedBgmIds: [],
+            retryableMikanIds: ['0']
+          }
+        })
+        .mockResolvedValueOnce({
+          data: {
+            scores: {'0': {bgmId: '43', score: 9.1}},
+            subscribedBgmIds: [],
+            retryableMikanIds: []
+          }
+        })
+
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    wrapper.vm.show()
+    await flushPromises()
+
+    expect(http.mikanScores).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(http.mikanScores).mock.calls[0][0]).toEqual(['0'])
+
+    await vi.advanceTimersByTimeAsync(500)
+    await flushPromises()
+
+    expect(http.mikanScores).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(http.mikanScores).mock.calls[1][0]).toEqual(['0'])
+    expect(wrapper.text()).toContain('9.1')
+  })
+
+  it('splits a large season into backend-safe score batches', async () => {
+    const items = Array.from({length: 49}, (_, index) => ({
+      url: `https://mikanani.me/Home/Bangumi/${index + 1}`,
+      title: `作品 ${index + 1}`,
+      cover: '',
+      score: 0,
+      exists: false
+    }))
+    vi.mocked(http.mikan).mockResolvedValue({
+      data: {
+        seasons: [],
+        weeks: [{weekLabel: '星期一', items}],
+        totalItem: items.length
+      }
+    })
+
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    wrapper.vm.show()
+    await flushPromises()
+    await flushPromises()
+
+    expect(http.mikanScores).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(http.mikanScores).mock.calls[0][0]).toHaveLength(48)
+    expect(vi.mocked(http.mikanScores).mock.calls[1][0]).toEqual(['49'])
+  })
+
+  it('shows an upstream error instead of presenting a failed list as empty', async () => {
+    vi.mocked(http.mikan).mockRejectedValue(new Error('Mikan 服务暂时不可用，请检查网络或代理设置后重试'))
+
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    wrapper.vm.show()
+    await flushPromises()
+
+    expect(ElMessage.error).toHaveBeenCalledWith('Mikan 服务暂时不可用，请检查网络或代理设置后重试')
+    expect(ElMessage.warning).not.toHaveBeenCalled()
   })
 })

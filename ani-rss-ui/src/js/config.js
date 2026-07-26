@@ -84,7 +84,7 @@ export let configData = {
     "trackersUpdateUrls": "https://cf.trackerslist.com/best.txt",
     "notificationTemplate": "",
     "autoUpdate": false,
-    "version": "3.2.0.20",
+    "version": "3.2.0.22",
     "bgmImage": "large",
     "customCss": "",
     "customJs": "",

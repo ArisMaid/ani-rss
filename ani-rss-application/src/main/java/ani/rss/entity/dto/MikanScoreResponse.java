@@ -13,4 +13,6 @@ import java.util.Set;
 public class MikanScoreResponse {
     private Map<String, MikanBgm> scores;
     private Set<String> subscribedBgmIds;
+    /** Mikan ids that need a bounded client retry after an upstream failure. */
+    private Set<String> retryableMikanIds;
 }

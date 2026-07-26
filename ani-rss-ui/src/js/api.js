@@ -50,14 +50,16 @@ let fetch_ = async (url, method, body, options = {}) => {
             method: method,
             body: body ? (isForm ? body : JSON.stringify(body)) : null,
             headers: headers,
-            credentials: 'include'
+            credentials: 'include',
+            signal: options.signal
         })
     } catch (cause) {
+        const aborted = cause?.name === 'AbortError' || options.signal?.aborted
         const error = /** @type {ApiError} */ (new Error('网络请求失败'))
-        error.code = 'NETWORK_ERROR'
+        error.code = aborted ? 'REQUEST_ABORTED' : 'NETWORK_ERROR'
         error.status = 0
         error.cause = cause
-        if (!options.silent) ElMessage.error(error.message)
+        if (!aborted && !options.silent) ElMessage.error(error.message)
         throw error
     }
     /** @type {any} */

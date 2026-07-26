@@ -62,13 +62,15 @@ class PublicScoreServiceTest {
     }
 
     @Test
-    void upstreamFailuresDegradeToZeroInsteadOfFailingTheList() {
+    void transientScoreFailuresDegradeToZeroButAreRetried() {
         String subjectId = uniqueNumericId();
         AtomicInteger requests = new AtomicInteger();
         PublicScoreService service = new PublicScoreService(
                 id -> {
-                    requests.incrementAndGet();
-                    throw new IllegalStateException("upstream unavailable");
+                    if (requests.incrementAndGet() == 1) {
+                        throw new IllegalStateException("upstream unavailable");
+                    }
+                    return rated(id, 8.4);
                 },
                 url -> ""
         );
@@ -77,9 +79,80 @@ class PublicScoreServiceTest {
         Map<String, Double> second = service.getBgmScores(List.of(subjectId));
 
         assertEquals(0.0, scores.get(subjectId));
-        assertEquals(0.0, second.get(subjectId));
+        assertEquals(8.4, second.get(subjectId));
         assertFalse(scores.isEmpty());
-        assertEquals(1, requests.get(), "failed public lookups should be short-lived cached too");
+        assertEquals(2, requests.get(), "transient failures must not poison the public score cache");
+    }
+
+    @Test
+    void transientMikanMappingFailuresAreRetried() {
+        String mikanId = uniqueNumericId();
+        String bgmId = uniqueNumericId();
+        AtomicInteger mappingRequests = new AtomicInteger();
+        PublicScoreService service = new PublicScoreService(
+                id -> rated(id, 9.0),
+                url -> mappingRequests.incrementAndGet() == 1
+                        ? failMapping()
+                        : bgmId
+        );
+        MikanInfo entry = new MikanInfo().setUrl(
+                "https://mikanani.me/Home/Bangumi/" + mikanId);
+
+        PublicScoreService.MikanScoreLookup first = service.getMikanScoreLookup(List.of(entry));
+
+        assertTrue(first.scores().isEmpty());
+        assertTrue(first.retryableMikanIds().contains(mikanId));
+
+        Map<String, MikanBgm> recovered = service.getMikanScores(List.of(entry));
+
+        assertEquals(bgmId, recovered.get(mikanId).getBgmId());
+        assertEquals(9.0, recovered.get(mikanId).getScore());
+        assertEquals(2, mappingRequests.get());
+    }
+
+    @Test
+    void reportsRetryableMikanIdsWhenTheScoreEndpointIsTemporarilyUnavailable() {
+        String mikanId = uniqueNumericId();
+        String bgmId = uniqueNumericId();
+        AtomicInteger scoreRequests = new AtomicInteger();
+        PublicScoreService service = new PublicScoreService(
+                id -> {
+                    if (scoreRequests.incrementAndGet() == 1) {
+                        throw new IllegalStateException("Bangumi temporarily unavailable");
+                    }
+                    return rated(id, 8.8);
+                },
+                url -> bgmId
+        );
+        MikanInfo entry = new MikanInfo().setUrl(
+                "https://mikanani.me/Home/Bangumi/" + mikanId);
+
+        PublicScoreService.MikanScoreLookup first = service.getMikanScoreLookup(List.of(entry));
+
+        assertEquals(0.0, first.scores().get(mikanId).getScore());
+        assertTrue(first.retryableMikanIds().contains(mikanId));
+
+        PublicScoreService.MikanScoreLookup recovered = service.getMikanScoreLookup(List.of(entry));
+
+        assertEquals(8.8, recovered.scores().get(mikanId).getScore());
+        assertTrue(recovered.retryableMikanIds().isEmpty());
+        assertEquals(2, scoreRequests.get());
+    }
+
+    @Test
+    void doesNotRetryMikanEntriesThatHaveNoBangumiLink() {
+        String mikanId = uniqueNumericId();
+        PublicScoreService service = new PublicScoreService(
+                id -> rated(id, 9.1),
+                url -> ""
+        );
+
+        PublicScoreService.MikanScoreLookup lookup = service.getMikanScoreLookup(List.of(
+                new MikanInfo().setUrl("https://mikanani.me/Home/Bangumi/" + mikanId)
+        ));
+
+        assertTrue(lookup.scores().isEmpty());
+        assertTrue(lookup.retryableMikanIds().isEmpty());
     }
 
     @Test
@@ -142,6 +215,10 @@ class PublicScoreServiceTest {
         return new BgmInfo()
                 .setId(id)
                 .setRating(new BgmInfo.Rating().setScore(score));
+    }
+
+    private static String failMapping() {
+        throw new IllegalStateException("Mikan temporarily unavailable");
     }
 
     private static String uniqueNumericId() {

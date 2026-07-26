@@ -3,6 +3,7 @@ package ani.rss.service;
 import ani.rss.commons.GroupRegexUtils;
 import ani.rss.entity.*;
 import ani.rss.entity.dto.MikanScoreResponse;
+import ani.rss.exception.UpstreamServiceException;
 import ani.rss.util.basic.HttpReq;
 import ani.rss.util.other.AniUtil;
 import ani.rss.util.other.BgmUtil;
@@ -86,21 +87,47 @@ public class MikanService {
                 .toList();
 
         Map<String, MikanBgm> scores = Map.of();
+        Set<String> retryableMikanIds = Set.of();
         if (!mikanInfos.isEmpty()) {
             try {
-                scores = publicScoreService.getMikanScores(mikanInfos);
+                PublicScoreService.MikanScoreLookup lookup = publicScoreService.getMikanScoreLookup(mikanInfos);
+                scores = lookup.scores();
+                retryableMikanIds = lookup.retryableMikanIds();
             } catch (RuntimeException e) {
                 // Scores are optional and must never turn a usable list into an error.
                 log.warn("Unable to enrich the Mikan list with public scores");
+                retryableMikanIds = mikanInfos.stream()
+                        .map(MikanInfo::getUrl)
+                        .map(PublicScoreService::extractMikanId)
+                        .filter(StrUtil::isNotBlank)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
             }
         }
         return new MikanScoreResponse()
                 .setScores(scores)
-                .setSubscribedBgmIds(subscribedBgmIds());
+                .setSubscribedBgmIds(subscribedBgmIds())
+                .setRetryableMikanIds(retryableMikanIds);
     }
 
     private static String mikanBangumiUrl(String id) {
-        return StrUtil.removeSuffix(getMikanHost().trim(), "/") + "/Home/Bangumi/" + id;
+        return resolveMikanUrl("Home/Bangumi/" + id);
+    }
+
+    static String resolveMikanUrl(String reference) {
+        if (StrUtil.isBlank(reference)) {
+            return "";
+        }
+        try {
+            String host = StrUtil.removeSuffix(getMikanHost().trim(), "/") + "/";
+            URI resolved = URI.create(host).resolve(reference.trim());
+            String scheme = resolved.getScheme();
+            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+                return "";
+            }
+            return resolved.toString();
+        } catch (IllegalArgumentException e) {
+            return "";
+        }
     }
 
     private static Set<String> subscribedBgmIds() {
@@ -157,6 +184,9 @@ public class MikanService {
     }
 
     public Mikan search(String text, Mikan.Season season) {
+        if (season == null) {
+            season = new Mikan.Season();
+        }
         Set<String> bangumiIdSet = AniUtil.ANI_LIST.stream()
                 .map(AniUtil::getBangumiId)
                 .filter(StrUtil::isNotBlank)
@@ -203,7 +233,11 @@ public class MikanService {
             HttpReq.get(url)
                     .timeout(MIKAN_REQUEST_TIMEOUT_MILLIS)
                     .then(res -> {
+                    HttpReq.assertStatus(res);
                     Document document = Jsoup.parse(res.body());
+                    if (document.select(".date-select, .sk-bangumi, .an-ul").isEmpty()) {
+                        throw new IllegalStateException("Mikan response does not contain a supported list");
+                    }
                     Elements dateSelects = document.select(".date-select");
                     if (!dateSelects.isEmpty()) {
                         Element dateSelect = dateSelects.get(0);
@@ -241,12 +275,12 @@ public class MikanService {
                         Elements lis = el.select("li");
                         for (Element li : lis) {
                             Element image = li.selectFirst("span");
-                            String img = image == null ? "" : getMikanHost() + image.attr("data-src");
+                            String img = image == null ? "" : resolveMikanUrl(image.attr("data-src"));
                             Elements aa = li.select("a");
                             if (aa.isEmpty()) {
                                 continue;
                             }
-                            String href = getMikanHost() + aa.get(0).attr("href");
+                            String href = resolveMikanUrl(aa.get(0).attr("href"));
                             String title = aa.get(0).text();
 
                             String id = ReUtil.get("\\d+(/)?$", href, 0);
@@ -292,8 +326,9 @@ public class MikanService {
                     }
                     });
         } catch (Exception e) {
-            // Keep the Mikan picker responsive when its upstream is unavailable or stalls.
-            log.warn("Mikan list request failed");
+            log.warn("Mikan list request failed origin:{} type:{}", HttpReq.sanitizeOrigin(url),
+                    e.getClass().getSimpleName());
+            throw new UpstreamServiceException("Mikan 服务暂时不可用，请检查网络或代理设置后重试", e);
         }
 
         int totalItems = weeks
@@ -349,7 +384,7 @@ public class MikanService {
                         }
                         String attr = rss.attr("href");
                         group.setLabel(label)
-                                .setRss(getMikanHost() + attr);
+                                .setRss(resolveMikanUrl(attr));
                         groups.add(group);
                         // 字幕组更新日期
                         String day = subgroupText.select(".date").text().trim();
@@ -369,15 +404,13 @@ public class MikanService {
 
                             String torrent = tr.select("a").get(2).attr("href");
 
-                            String mikanHost = getMikanHost();
-
                             items.add(
                                     new Mikan.Item()
                                             .setTitle(title)
                                             .setMagnet(magnet)
                                             .setFormatSize(formatSize)
                                             .setCreatedAt(DateUtil.parse(dateStr))
-                                            .setTorrent(mikanHost + torrent)
+                                            .setTorrent(resolveMikanUrl(torrent))
                             );
                         }
                     }
@@ -397,8 +430,7 @@ public class MikanService {
     }
 
     public static MikanInfo getMikanInfo(String bangumiId) {
-        URI host = URLUtil.getHost(URLUtil.url(getMikanHost()));
-        String url = host + "/Home/Bangumi/" + bangumiId;
+        String url = mikanBangumiUrl(bangumiId);
         return HttpReq.get(url)
                 .timeout(MIKAN_REQUEST_TIMEOUT_MILLIS)
                 .thenFunction(res -> {
@@ -410,7 +442,7 @@ public class MikanService {
 
                     Element cover = html.selectFirst(".content > img");
                     if (Objects.nonNull(cover)) {
-                        mikanInfo.setCover(host + cover.attr("src"));
+                        mikanInfo.setCover(resolveMikanUrl(cover.attr("src")));
                     }
 
                     Element bangumiTitle = html.selectFirst(".bangumi-title");
@@ -455,7 +487,7 @@ public class MikanService {
 
                         group.setLabel(label)
                                 .setSubgroupId(id.replace("#", "").trim())
-                                .setRss(getMikanHost() + attr);
+                                .setRss(resolveMikanUrl(attr));
 
                         // 字幕组更新日期
                         String day = subgroupText.select(".date").text().trim();
@@ -476,15 +508,13 @@ public class MikanService {
 
                             String torrent = tr.select("a").get(2).attr("href");
 
-                            String mikanHost = getMikanHost();
-
                             items.add(
                                     new Mikan.Item()
                                             .setTitle(title)
                                             .setMagnet(magnet)
                                             .setFormatSize(formatSize)
                                             .setCreatedAt(DateUtil.parse(dateStr))
-                                            .setTorrent(mikanHost + torrent)
+                                            .setTorrent(resolveMikanUrl(torrent))
                             );
                         }
                     }

@@ -156,8 +156,7 @@ public class OwnershipMigrationService {
     static boolean cachedTorrentMatches(File file, String infoHash) {
         if (file == null || StrUtil.isBlank(infoHash) ||
                 !Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS) ||
-                Files.isSymbolicLink(file.toPath()) ||
-                !FileUtil.mainName(file).equalsIgnoreCase(infoHash)) {
+                Files.isSymbolicLink(file.toPath())) {
             return false;
         }
         try {

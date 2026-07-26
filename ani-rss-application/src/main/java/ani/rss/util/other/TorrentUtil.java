@@ -62,11 +62,12 @@ public class TorrentUtil {
         List<TorrentsInfo> tasks = result.value() == null ? List.of() : result.value();
         String downloaderType = client.configurationSnapshot().getDownloadToolType();
         ownershipService().observeTasks(downloaderType, tasks);
-        if ("Aria2".equals(downloaderType)) {
-            tasks = tasks.stream()
-                    .filter(task -> ownershipService().findOwned(downloaderType, task).isPresent())
-                    .toList();
-        }
+        // Downstream callers can rename, tag, move, or delete a task. Keep
+        // unverified candidates in the ownership workflow only, never in the
+        // operational task stream.
+        tasks = tasks.stream()
+                .filter(task -> ownershipService().findOwned(downloaderType, task).isPresent())
+                .toList();
         return DownloaderResult.success(List.copyOf(tasks));
     }
 
@@ -399,8 +400,8 @@ public class TorrentUtil {
      * @return 磁力链接
      */
     public static String getMagnet(File file) {
-        String hexHash = FileUtil.mainName(file);
-        if (file.length() < 1) {
+        String hexHash = getInfoHash(file);
+        if (file == null || file.length() < 1) {
             return StrFormatter.format("magnet:?xt=urn:btih:{}", hexHash);
         }
         String extName = FileUtil.extName(file);
@@ -415,6 +416,41 @@ public class TorrentUtil {
             log.error(e.getMessage(), e);
         }
         return StrFormatter.format("magnet:?xt=urn:btih:{}", hexHash);
+    }
+
+    /**
+     * Resolve the canonical BitTorrent info-hash for a cached input.
+     *
+     * RSS enclosure filenames are opaque in many feeds, so treating a local
+     * filename as the remote task hash breaks ownership reconciliation.  A
+     * magnet cache already contains its hash; a .torrent cache must be parsed.
+     */
+    public static String getInfoHash(File file) {
+        if (file == null) {
+            return "";
+        }
+        String fallback = FileUtil.mainName(file).trim().toLowerCase();
+        if (!file.isFile() || file.length() < 1) {
+            return fallback;
+        }
+        try {
+            String extension = FileUtil.extName(file);
+            if ("torrent".equalsIgnoreCase(extension)) {
+                synchronized (TorrentFile.class) {
+                    return new TorrentFile(file).getHexHash().toLowerCase();
+                }
+            }
+            if ("txt".equalsIgnoreCase(extension)) {
+                String magnet = FileUtil.readUtf8String(file);
+                String hash = ReUtil.get("(?i)btih:([a-z0-9]+)", magnet, 1);
+                if (StrUtil.isNotBlank(hash)) {
+                    return hash.toLowerCase();
+                }
+            }
+        } catch (Exception e) {
+            log.warn("解析缓存种子的 info-hash 失败 type:{}", e.getClass().getSimpleName());
+        }
+        return fallback;
     }
 
 }

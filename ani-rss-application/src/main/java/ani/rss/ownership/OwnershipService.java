@@ -76,7 +76,11 @@ public class OwnershipService {
     }
 
     public void activate(String ownershipId, String remoteTaskId, TorrentsInfo task) {
-        String observedTaskId = task == null ? remoteTaskId : task.getId();
+        String observedTaskId = remoteTaskId;
+        if (task != null) {
+            observedTaskId = StrUtil.blankToDefault(task.getId(),
+                    StrUtil.blankToDefault(remoteTaskId, task.getHash()));
+        }
         repository.activate(ownershipId, observedTaskId);
         if (task != null) {
             captureFiles(ownershipId, task);

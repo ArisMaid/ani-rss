@@ -54,7 +54,7 @@ const clickable = {template: '<button><slot/></button>'}
 describe('home toolbar lazy dialogs', () => {
   beforeEach(() => {
     vi.mocked(http.about).mockResolvedValue({
-      data: {version: '3.1.75.12', latest: '3.1.75', update: true, markdownBody: ''}
+      data: {version: '3.1.75.15', latest: '3.1.75', update: true, markdownBody: ''}
     })
     vi.mocked(http.refreshAll).mockResolvedValue({message: 'ok'})
   })

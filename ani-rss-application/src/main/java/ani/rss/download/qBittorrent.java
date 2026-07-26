@@ -13,6 +13,7 @@ import ani.rss.service.DownloadService;
 import ani.rss.util.basic.HttpReq;
 import ani.rss.util.basic.ScopedCookieJar;
 import ani.rss.util.other.ConfigUtil;
+import ani.rss.util.other.TorrentUtil;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.lang.Assert;
@@ -141,6 +142,8 @@ public class qBittorrent implements BaseDownload {
         Boolean qbUseDownloadPath = config.getQbUseDownloadPath();
 
         List<String> tags = newTags(ani, item, config);
+        String hash = StrUtil.blankToDefault(TorrentUtil.getInfoHash(torrentFile),
+                StrUtil.blankToDefault(item.getInfoHash(), FileUtil.mainName(torrentFile)));
 
         Integer ratioLimit = config.getRatioLimit();
         Integer seedingTimeLimit = config.getSeedingTimeLimit();
@@ -188,10 +191,73 @@ public class qBittorrent implements BaseDownload {
                         .form("urls", "magnet:?xt=urn:btih:" + FileUtil.mainName(torrentFile));
             }
         }
-        execute(httpRequest, qBittorrent::requireSuccess);
-
-        String hash = StrUtil.blankToDefault(item.getInfoHash(), FileUtil.mainName(torrentFile));
+        try {
+            execute(httpRequest, qBittorrent::requireSuccess);
+        } catch (DownloaderOperationException exception) {
+            if (!"QBITTORRENT_HTTP_409".equals(exception.errorCode())) {
+                throw exception;
+            }
+            return recoverDuplicateSubmission(hash, tags, savePath);
+        }
         return DownloaderResult.success(null, hash);
+    }
+
+    /**
+     * qBittorrent uses 409 for a request that races with, or repeats after, a
+     * prior accepted add.  Recover only after proving that the remote task is
+     * the exact ANI-RSS submission; a same-hash task from another application
+     * must remain untouched.
+     */
+    private DownloaderResult<Void> recoverDuplicateSubmission(
+            String hash, List<String> expectedTags, String expectedSavePath) {
+        DownloaderResult<TorrentsInfo> existingResult = findTorrentByHash(hash);
+        if (!existingResult.isSuccess()) {
+            if (existingResult.retryable()) {
+                return DownloaderResult.failed(existingResult.errorCode(), true);
+            }
+            return DownloaderResult.rejected("QBITTORRENT_DUPLICATE_UNVERIFIED");
+        }
+        TorrentsInfo existing = existingResult.value();
+        if (existing == null || !isVerifiedDuplicate(existing, hash, expectedTags, expectedSavePath)) {
+            return DownloaderResult.rejected("QBITTORRENT_DUPLICATE_UNOWNED");
+        }
+        log.info("qBittorrent duplicate submission verified hash:{}", hash);
+        return DownloaderResult.success(null, hash);
+    }
+
+    private DownloaderResult<TorrentsInfo> findTorrentByHash(String hash) {
+        if (StrUtil.isBlank(hash)) {
+            return DownloaderResult.rejected("QBITTORRENT_INVALID_INFO_HASH");
+        }
+        String host = config.getDownloadToolHost();
+        try {
+            return execute(HttpReq.get(host + "/api/v2/torrents/info", config)
+                    .form("hashes", hash), response -> {
+                requireSuccess(response);
+                return GsonStatic.fromJsonList(response.body(), qBittorrentTorrentsInfo.class).stream()
+                        .map(value -> value.toTorrentsInfo(task -> files(task, true)))
+                        .filter(task -> StrUtil.equalsIgnoreCase(hash, task.getHash()))
+                        .findFirst()
+                        .map(DownloaderResult::success)
+                        .orElseGet(() -> DownloaderResult.rejected("QBITTORRENT_TASK_NOT_FOUND"));
+            });
+        } catch (Exception exception) {
+            return DownloaderFailures.result(exception);
+        }
+    }
+
+    private static boolean isVerifiedDuplicate(
+            TorrentsInfo task, String hash, List<String> expectedTags, String expectedSavePath) {
+        if (!StrUtil.equalsIgnoreCase(hash, task.getHash()) ||
+                !TorrentsTagEnum.ANI_RSS.getValue().equals(task.getCategory())) {
+            return false;
+        }
+        List<String> actualTags = task.getTagList();
+        if (actualTags == null || !actualTags.containsAll(expectedTags)) {
+            return false;
+        }
+        return StrUtil.equals(FileUtils.getAbsolutePath(expectedSavePath),
+                FileUtils.getAbsolutePath(task.getSavePath()));
     }
 
     /**

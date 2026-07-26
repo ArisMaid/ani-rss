@@ -102,27 +102,18 @@ public class DownloadService {
 
         // 实时保存文件
         boolean sync = false;
+        boolean failedSubmission = false;
 
         for (Item item : items) {
             log.debug("RSS 条目 name:{} episode:{}", item.getReName(), item.getEpisode());
             String reName = item.getReName();
             File torrent = TorrentUtil.getTorrent(ani, item);
             Boolean master = item.getMaster();
-            String hash = FileUtil.mainName(torrent)
-                    .trim().toLowerCase();
+            String hash = TorrentUtil.getInfoHash(torrent);
 
             Double episode = item.getEpisode();
             // .5 集
             boolean is5 = ItemsUtil.is5(episode);
-
-            // 已经下载过
-            if (torrent.exists()) {
-                log.debug("种子记录已存在 {}", reName);
-                if (master && !is5) {
-                    currentDownloadCount++;
-                }
-                continue;
-            }
 
             if (notDownload.contains(episode)) {
                 if (master && !is5) {
@@ -214,6 +205,7 @@ public class DownloadService {
                             // hash 相同
                             torrentsInfo.getHash().equals(hash))) {
                 log.info("已有下载任务 hash:{} name:{}", hash, reName);
+                sync = true;
                 if (master && !is5) {
                     currentDownloadCount++;
                 }
@@ -223,6 +215,7 @@ public class DownloadService {
             // 未开启rename不进行检测
             if (itemDownloaded(ani, item, true)) {
                 log.info("本地文件已存在 {}", reName);
+                sync = true;
                 if (master && !is5) {
                     currentDownloadCount++;
                 }
@@ -237,7 +230,16 @@ public class DownloadService {
                 }
             }
 
-            File saveTorrent = TorrentUtil.saveTorrent(ani, item);
+            // A cached torrent only proves that the input was fetched. A prior
+            // process may have stopped before the remote downloader accepted it.
+            // Reuse the exact cache, but retry submission when no remote task
+            // with the same hash was observed above.
+            boolean cachedTorrent = torrent.exists();
+            File saveTorrent = cachedTorrent ? torrent : TorrentUtil.saveTorrent(ani, item);
+
+            if (cachedTorrent) {
+                log.info("复用未关联远端任务的缓存种子并重试下载 {}", reName);
+            }
 
             if (!saveTorrent.exists()) {
                 // 种子下载失败
@@ -250,9 +252,12 @@ public class DownloadService {
                 return;
             }
 
-            sync = true;
+            if (!download(ani, item, savePath, saveTorrent)) {
+                failedSubmission = true;
+                continue;
+            }
 
-            download(ani, item, savePath, saveTorrent);
+            sync = true;
 
             if (master && !is5) {
                 currentDownloadCount++;
@@ -260,7 +265,7 @@ public class DownloadService {
             count++;
         }
 
-        if (sync) {
+        if (sync && !failedSubmission) {
             int size = ItemsUtil.currentEpisodeNumber(ani, items);
             // 更新当前集数
             ani.setCurrentEpisodeNumber(size);
@@ -354,7 +359,7 @@ public class DownloadService {
      * @param savePath    保存位置
      * @param torrentFile 种子文件
      */
-    public void download(Ani ani, Item item, String savePath, File torrentFile) {
+    public boolean download(Ani ani, Item item, String savePath, File torrentFile) {
         ani = ObjectUtil.clone(ani);
 
         String name = item.getReName();
@@ -367,7 +372,7 @@ public class DownloadService {
 
         if (!torrentFile.exists()) {
             log.error("种子下载出现问题 {} {}", name, FileUtils.getAbsolutePath(torrentFile));
-            return;
+            return false;
         }
         ThreadUtil.sleep(1000);
         savePath = FileUtils.getAbsolutePath(savePath);
@@ -382,16 +387,23 @@ public class DownloadService {
         DownloaderClient activeClient = TorrentUtil.client();
         if (activeClient == null) {
             log.error("{} 下载失败 code:DOWNLOADER_NOT_INITIALIZED retryable:false", name);
-            return;
+            return false;
         }
+        Item submittedItem = ObjectUtil.clone(item);
+        String infoHash = TorrentUtil.getInfoHash(torrentFile);
+        if (StrUtil.isBlank(infoHash)) {
+            log.error("{} 下载失败 code:TORRENT_INFO_HASH_UNAVAILABLE retryable:false", name);
+            return false;
+        }
+        submittedItem.setInfoHash(infoHash);
         String downloaderType = activeClient.configurationSnapshot().getDownloadToolType();
         DownloadOwnership ownership = ownershipService.registerPending(
-                downloaderType, ani, item, savePath);
+                downloaderType, ani, submittedItem, savePath);
 
         Integer downloadRetry = ObjectUtil.defaultIfNull(config.getDownloadRetry(), 1);
         String lastRemoteTaskId = null;
         for (int i = 1; i <= downloadRetry; i++) {
-            DownloaderResult<Void> result = activeClient.download(ani, item, savePath, torrentFile);
+            DownloaderResult<Void> result = activeClient.download(ani, submittedItem, savePath, torrentFile);
             if (StrUtil.isNotBlank(result.remoteTaskId())) {
                 lastRemoteTaskId = result.remoteTaskId();
             }
@@ -401,12 +413,12 @@ public class DownloadService {
                         ? tasksResult.value()
                         : List.of();
                 TorrentsInfo task = observedTasks.stream()
-                        .filter(info -> StrUtil.equalsIgnoreCase(info.getHash(), item.getInfoHash()) ||
+                        .filter(info -> StrUtil.equalsIgnoreCase(info.getHash(), infoHash) ||
                                 StrUtil.equals(info.getId(), result.remoteTaskId()))
                         .findFirst()
                         .orElse(null);
                 ownershipService.activate(ownership.ownershipId(), result.remoteTaskId(), task);
-                return;
+                return true;
             }
             log.error("{} 下载失败 code:{} retryable:{}", name, result.errorCode(), result.retryable());
             if (!result.retryable()) {
@@ -420,13 +432,16 @@ public class DownloadService {
 
         if (StrUtil.isBlank(lastRemoteTaskId)) {
             // No remote task was created, so the cached input can be retried from scratch.
-            FileUtils.deleteRegularFile(torrentFile);
+            // A missing remote id does not prove that the cached input is bad.
+            // Keep it for a later safe reconciliation or retry.
+            log.warn("{} has no confirmed remote task; retaining cached input", name);
         }
 
-        log.error("{} 添加失败，疑似为坏种", name);
+        log.error("{} 添加失败，下载器未确认接收", name);
         NotificationUtil.send(ConfigUtil.CONFIG, ani,
-                StrFormatter.format("{} 添加失败，疑似为坏种", name),
+                StrFormatter.format("{} 添加失败，下载器未确认接收", name),
                 NotificationStatusEnum.ERROR);
+        return false;
     }
 
     /**

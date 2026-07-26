@@ -69,7 +69,7 @@
           </el-dropdown>
         </div>
         <div style="margin: 0 4px;">
-          <el-button data-testid="open-torrents" bg text @click="openLazy('torrents')">
+          <el-button data-testid="open-torrents" :loading="opening.torrents" bg text @click="openLazy('torrents')">
             <el-icon :class="elIconClass">
               <Download/>
             </el-icon>
@@ -93,7 +93,7 @@
           </popconfirm>
         </div>
         <div style="margin: 0 4px;">
-          <el-button data-testid="open-manage" text bg @click="openLazy('manage')">
+          <el-button data-testid="open-manage" :loading="opening.manage" text bg @click="openLazy('manage')">
             <el-icon :class="elIconClass">
               <Fold/>
             </el-icon>
@@ -104,7 +104,7 @@
         </div>
         <div style="margin: 0 4px;">
           <el-badge :is-dot="about.update" class="item">
-            <el-button data-testid="open-config" @click="openLazy('config', about.update)" text bg>
+            <el-button data-testid="open-config" :loading="opening.config" @click="openLazy('config', about.update)" text bg>
               <el-icon :class="elIconClass">
                 <Setting/>
               </el-icon>
@@ -115,7 +115,7 @@
           </el-badge>
         </div>
         <div style="margin-left: 4px;">
-          <el-button data-testid="open-logs" @click="openLazy('logs')" text bg>
+          <el-button data-testid="open-logs" :loading="opening.logs" @click="openLazy('logs')" text bg>
             <el-icon :class="elIconClass">
               <Tickets/>
             </el-icon>
@@ -172,17 +172,30 @@ const mounted = reactive({
   collection: false,
   torrents: false
 })
+const opening = reactive({
+  config: false,
+  add: false,
+  logs: false,
+  manage: false,
+  collection: false,
+  torrents: false
+})
 
 const openLazy = (name, ...args) => {
   const componentRef = componentRefs[name]
-  mounted[name] = true
   if (componentRef.value) {
     componentRef.value.show(...args)
     return
   }
+  if (opening[name]) {
+    return
+  }
+  opening[name] = true
+  mounted[name] = true
   const stop = watch(componentRef, component => {
     if (!component) return
     stop()
+    opening[name] = false
     component.show(...args)
   }, {flush: 'post'})
 }

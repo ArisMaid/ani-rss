@@ -11,6 +11,7 @@ import lombok.experimental.Accessors;
 import java.io.Serial;
 import java.io.Serializable;
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Supplier;
 
 /**
@@ -109,6 +110,23 @@ public class TorrentsInfo implements Serializable {
         this.setSize(size);
         this.setFormatSize(formatSize);
         return this;
+    }
+
+    /**
+     * Whether the remote task has actually completed its payload transfer.
+     * A seeding-like state alone is not sufficient when progress is below
+     * 100 percent.
+     */
+    public boolean finished() {
+        if (Objects.nonNull(progress) && progress < 100D) {
+            return false;
+        }
+        return List.of(
+                TorrentsStateEnum.queuedUP,
+                TorrentsStateEnum.uploading,
+                TorrentsStateEnum.stalledUP,
+                TorrentsStateEnum.stoppedUP
+        ).contains(state);
     }
 
 }

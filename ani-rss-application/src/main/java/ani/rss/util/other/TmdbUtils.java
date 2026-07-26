@@ -57,8 +57,21 @@ public class TmdbUtils {
             return "";
         }
 
-        String themoviedbName = tmdb.get().getName();
-        return getFinalName(themoviedbName, tmdb.get());
+        return getFinalName(tmdb.get());
+    }
+
+    /**
+     * Selects the localized or original TMDB title according to the global
+     * setting, then applies the existing year and TMDB-id formatting rules.
+     */
+    public static String getFinalName(Tmdb tmdb) {
+        if (Objects.isNull(tmdb)) {
+            return "";
+        }
+        String title = Boolean.TRUE.equals(ConfigUtil.CONFIG.getTmdbOriginalName())
+                ? StrUtil.blankToDefault(tmdb.getOriginalName(), tmdb.getName())
+                : tmdb.getName();
+        return getFinalName(title, tmdb);
     }
 
     /**

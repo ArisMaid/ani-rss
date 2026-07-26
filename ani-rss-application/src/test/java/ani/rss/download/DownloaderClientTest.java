@@ -64,6 +64,20 @@ class DownloaderClientTest {
         assertEquals("remote-123", result.remoteTaskId());
     }
 
+    @Test
+    void exposesAMutableTaskSnapshotToOperationalCallers() {
+        DownloaderClient client = new DownloaderClient(new StubDownload(true) {
+            @Override
+            public List<TorrentsInfo> getTorrentsInfos() {
+                return List.of(new TorrentsInfo().setHash("one"));
+            }
+        }, new Config());
+
+        List<TorrentsInfo> tasks = client.torrents().value();
+        tasks.remove(0);
+        assertTrue(tasks.isEmpty());
+    }
+
     private static class StubDownload implements BaseDownload {
         private final boolean result;
 

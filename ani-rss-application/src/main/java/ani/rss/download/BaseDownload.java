@@ -50,7 +50,7 @@ public interface BaseDownload {
     List<TorrentsInfo> getTorrentsInfos();
 
     default DownloaderResult<List<TorrentsInfo>> torrentsResult() {
-        return DownloaderResult.success(List.copyOf(getTorrentsInfos()));
+        return DownloaderResult.success(new ArrayList<>(getTorrentsInfos()));
     }
 
     /**

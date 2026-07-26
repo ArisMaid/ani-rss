@@ -56,14 +56,8 @@ public class FileMoveNotification implements BaseNotification {
         String fileMoveTarget = notificationConfig.getFileMoveTarget();
         String fileMoveOvaTarget = notificationConfig.getFileMoveOvaTarget();
         boolean fileMoveDeleteOldEpisode = notificationConfig.getFileMoveDeleteOldEpisode();
-        if (ova) {
-            ani.setDownloadPath(fileMoveOvaTarget);
-        } else {
-            ani.setDownloadPath(fileMoveTarget);
-        }
-        ani.setCustomDownloadPath(true);
-
-        String target = downloadService.getDownloadPath(ani);
+        String targetTemplate = ova ? fileMoveOvaTarget : fileMoveTarget;
+        String target = downloadService.getDownloadPath(ani, targetTemplate);
         if (fileMoveDeleteOldEpisode) {
             log.warn("已忽略无法证明归属的目标目录洗版设置 subscriptionId:{}", ani.getId());
         }

@@ -158,6 +158,7 @@ public class ConfigUtil {
                 .setTmdbId(false)
                 .setTmdbLanguage("zh-CN")
                 .setTmdbRomaji(false)
+                .setTmdbOriginalName(false)
                 .setIpWhitelist(false)
                 .setIpWhitelistStr("")
                 .setOmit(true)

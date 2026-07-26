@@ -196,7 +196,8 @@ public class Ani implements Serializable {
      * 自定义下载位置
      */
     @Schema(description = "自定义下载位置路径")
-    private String downloadPath;
+    @SerializedName(value = "customDownloadPathTemplate", alternate = "downloadPath")
+    private String customDownloadPathTemplate;
 
     /**
      * 评分
@@ -337,4 +338,21 @@ public class Ani implements Serializable {
      */
     @Schema(description = "单个订阅自定义标签")
     private List<String> customTags;
+
+    /**
+     * Java-side compatibility for integrations compiled against 3.1.75.
+     * Gson writes {@code customDownloadPathTemplate} and still accepts the
+     * legacy {@code downloadPath} JSON field.
+     */
+    @Deprecated
+    public String getDownloadPath() {
+        return customDownloadPathTemplate;
+    }
+
+    /** @see #getDownloadPath() */
+    @Deprecated
+    public Ani setDownloadPath(String downloadPath) {
+        this.customDownloadPathTemplate = downloadPath;
+        return this;
+    }
 }

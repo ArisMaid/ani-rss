@@ -12,7 +12,6 @@ import ani.rss.download.DownloaderClient;
 import ani.rss.download.DownloaderResult;
 import ani.rss.enums.NotificationStatusEnum;
 import ani.rss.enums.StringEnum;
-import ani.rss.enums.TorrentsStateEnum;
 import ani.rss.enums.TorrentsTagEnum;
 import ani.rss.ownership.DownloadOwnership;
 import ani.rss.ownership.OwnershipService;
@@ -88,16 +87,7 @@ public class DownloadService {
 
         long count = torrentsInfos
                 .stream()
-                .filter(it -> {
-                    TorrentsStateEnum torrentsState = it.getState();
-                    // 未下载完成
-                    return !List.of(
-                            TorrentsStateEnum.queuedUP,
-                            TorrentsStateEnum.uploading,
-                            TorrentsStateEnum.stalledUP,
-                            TorrentsStateEnum.stoppedUP
-                    ).contains(torrentsState);
-                })
+                .filter(it -> !it.finished())
                 .count();
 
         String savePath = getDownloadPath(ani);
@@ -366,8 +356,7 @@ public class DownloadService {
 
         List<TorrentsInfo> torrentsInfos = TorrentUtil.getTorrentsInfos();
 
-        torrentsInfos
-                .stream()
+        torrentsInfos.stream()
                 .filter(torrentsInfo -> {
                     if (!ownershipService.belongsTo(torrentsInfo, ani.getId())) {
                         return false;
@@ -383,8 +372,7 @@ public class DownloadService {
                     String s = ReUtil.get(StringEnum.SEASON_REG, name, 0);
                     return s.equalsIgnoreCase(episode);
                 })
-                .findFirst()
-                .ifPresent(standbyRSS -> {
+                .forEach(standbyRSS -> {
                     String ownershipId = ownershipService.requireOwned(standbyRSS).ownershipId();
                     ownershipService.captureFiles(ownershipId, standbyRSS);
                     quarantineService.quarantineOwnership(ownershipId);
@@ -508,15 +496,9 @@ public class DownloadService {
      * @param torrentsInfo 种子信息
      */
     public void notification(TorrentsInfo torrentsInfo) {
-        TorrentsStateEnum torrentsState = torrentsInfo.getState();
         String name = torrentsInfo.getName();
 
-        if (!List.of(
-                TorrentsStateEnum.queuedUP,
-                TorrentsStateEnum.uploading,
-                TorrentsStateEnum.stalledUP,
-                TorrentsStateEnum.stoppedUP
-        ).contains(torrentsState)) {
+        if (!torrentsInfo.finished()) {
             return;
         }
         // 添加下载完成标签，防止重复通知
@@ -589,6 +571,14 @@ public class DownloadService {
         return getDownloadPath(ani, ConfigUtil.CONFIG);
     }
 
+    /** Resolve a one-off path template without mutating runtime state. */
+    public String getDownloadPath(Ani ani, String downloadPathTemplate) {
+        Ani candidate = ObjectUtil.clone(ani);
+        candidate.setCustomDownloadPathTemplate(downloadPathTemplate)
+                .setCustomDownloadPath(true);
+        return getDownloadPath(candidate, ConfigUtil.CONFIG);
+    }
+
     /**
      * 获取下载位置
      *
@@ -597,7 +587,7 @@ public class DownloadService {
      */
     public String getDownloadPath(Ani ani, Config config) {
         Boolean customDownloadPath = ani.getCustomDownloadPath();
-        String aniDownloadPath = ani.getDownloadPath();
+        String customDownloadPathTemplate = ani.getCustomDownloadPathTemplate();
         Boolean ova = ani.getOva();
 
         String downloadPathTemplate = config.getDownloadPathTemplate();
@@ -607,9 +597,9 @@ public class DownloadService {
             downloadPathTemplate = ovaDownloadPathTemplate;
         }
 
-        if (customDownloadPath && StrUtil.isNotBlank(aniDownloadPath)) {
+        if (customDownloadPath && StrUtil.isNotBlank(customDownloadPathTemplate)) {
             // 自定义下载位置
-            downloadPathTemplate = StrUtil.split(aniDownloadPath, "\n", true, true)
+            downloadPathTemplate = StrUtil.split(customDownloadPathTemplate, "\n", true, true)
                     .stream()
                     .map(FileUtils::getAbsolutePath)
                     .findFirst()

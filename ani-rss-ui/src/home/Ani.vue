@@ -13,7 +13,7 @@
             <el-form-item label="标题">
               <div class="full-width">
                 <div>
-                  <el-input v-model:model-value="props.ani.title" class="full-width"/>
+                  <el-input v-model.trim="props.ani.title" class="full-width"/>
                 </div>
                 <div class="change-title-button">
                   <el-button :loading="getBgmNameLoading"
@@ -57,7 +57,7 @@
               </div>
             </el-form-item>
             <el-form-item label="BgmUrl">
-              <el-input v-model:model-value="props.ani.bgmUrl" placeholder="https://xxx.xxx"/>
+              <el-input v-model.trim="props.ani.bgmUrl" placeholder="https://xxx.xxx"/>
             </el-form-item>
             <el-form-item label="主 RSS">
               <div class="full-width">
@@ -165,7 +165,7 @@
                 <div>
                   <el-input type="textarea" class="full-width" :disabled="!props.ani.customDownloadPath"
                             :autosize="{ minRows: 2}"
-                            v-model:model-value="props.ani.downloadPath"/>
+                            v-model:model-value="props.ani.customDownloadPathTemplate"/>
                 </div>
                 <div style="display: flex;justify-content: space-between;margin-top: 6px;">
                   <el-button :disabled="!props.ani.customDownloadPath" :loading="downloadPathLoading" bg icon="Refresh"
@@ -403,7 +403,7 @@ let downloadPath = () => {
   newAni.customDownloadPath = false
   http.downloadPath(newAni)
       .then(res => {
-        props.ani.downloadPath = res.data.downloadPath
+        props.ani.customDownloadPathTemplate = res.data.downloadPath
       })
       .finally(() => {
         downloadPathLoading.value = false

@@ -28,7 +28,7 @@ export let aniData = {
     "type": "mikan",
     "bgmUrl": "",
     "customDownloadPath": false,
-    "downloadPath": "",
+    "customDownloadPathTemplate": "",
     "score": 8,
     "customEpisode": false,
     "customEpisodeStr": "",
@@ -39,6 +39,7 @@ export let aniData = {
     "tmdb": {
         "id": "0",
         "name": "",
+        "originalName": "",
         "date": "2025-01-01 00:00:00"
     },
     "upload": true,

@@ -37,6 +37,7 @@
         </el-text>
         <br>
         <el-checkbox v-model="props.config['tmdbAnime']" label="仅获取动漫"/>
+        <el-checkbox v-model="props.config['tmdbOriginalName']" label="使用原标题"/>
       </div>
     </el-form-item>
     <el-form-item label="TMDB语言">

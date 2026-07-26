@@ -351,6 +351,12 @@ public class Config implements Serializable {
     private Boolean tmdbRomaji;
 
     /**
+     * 使用 TMDB 返回的原标题，而不是当前语言对应的标题。
+     */
+    @Schema(description = "使用 TMDB 原标题")
+    private Boolean tmdbOriginalName;
+
+    /**
      * 开启ip白名单
      */
     @Schema(description = "开启 IP 白名单")

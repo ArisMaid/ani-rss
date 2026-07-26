@@ -1,2 +1,6 @@
-- refactor: 更改 UA
-- refactor: 优化清理空文件夹
+- feat: 同步上游 v3.1.75 至 v3.2.0 的功能行为，版本升级为 v3.2.0.19
+- feat: qBittorrent 5.2+ 支持 ApiKey 授权，并兼容旧版用户名/密码
+- feat: 支持使用 TMDB 原标题，原标题缺失时自动回退本地化标题
+- refactor: 自定义下载路径使用 customDownloadPathTemplate，并兼容旧 downloadPath 配置
+- fix: 修复任务列表不可修改、完成态误判及备用 RSS 多任务清理不完整问题
+- fix: 下载器测试继续使用隔离配置；危险删除仍由本地归属与隔离机制接管

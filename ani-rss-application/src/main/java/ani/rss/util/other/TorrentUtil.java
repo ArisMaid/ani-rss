@@ -25,6 +25,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.eclipse.bittorrent.TorrentFile;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -46,7 +47,9 @@ public class TorrentUtil {
      */
     public static List<TorrentsInfo> getTorrentsInfos() {
         DownloaderResult<List<TorrentsInfo>> result = getTorrentsInfosResult();
-        return result.isSuccess() && result.value() != null ? result.value() : List.of();
+        return result.isSuccess() && result.value() != null
+                ? new ArrayList<>(result.value())
+                : new ArrayList<>();
     }
 
     public static DownloaderResult<List<TorrentsInfo>> getTorrentsInfosResult() {
@@ -68,7 +71,7 @@ public class TorrentUtil {
         tasks = tasks.stream()
                 .filter(task -> ownershipService().findOwned(downloaderType, task).isPresent())
                 .toList();
-        return DownloaderResult.success(List.copyOf(tasks));
+        return DownloaderResult.success(new ArrayList<>(tasks));
     }
 
     /**
@@ -213,12 +216,7 @@ public class TorrentUtil {
             return torrentsState == TorrentsStateEnum.stoppedUP;
         }
 
-        return List.of(
-                TorrentsStateEnum.queuedUP,
-                TorrentsStateEnum.uploading,
-                TorrentsStateEnum.stalledUP,
-                TorrentsStateEnum.stoppedUP
-        ).contains(torrentsState);
+        return torrentsInfo.finished();
     }
 
 

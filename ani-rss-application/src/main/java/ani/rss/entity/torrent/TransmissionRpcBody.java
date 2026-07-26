@@ -66,6 +66,18 @@ public class TransmissionRpcBody implements Serializable {
         return transmissionRpcBody;
     }
 
+    public static TransmissionRpcBody torrentStart(String id) {
+        TransmissionRpcBody transmissionRpcBody = getInstance(TransmissionMethodEnum.torrentStart);
+        transmissionRpcBody.getArguments().put("ids", List.of(id));
+        return transmissionRpcBody;
+    }
+
+    public static TransmissionRpcBody torrentVerify(String id) {
+        TransmissionRpcBody transmissionRpcBody = getInstance(TransmissionMethodEnum.torrentVerify);
+        transmissionRpcBody.getArguments().put("ids", List.of(id));
+        return transmissionRpcBody;
+    }
+
     public static TransmissionRpcBody sessionGet() {
         return getInstance(TransmissionMethodEnum.sessionGet);
     }

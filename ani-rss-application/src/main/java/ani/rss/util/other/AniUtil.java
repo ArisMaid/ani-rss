@@ -452,104 +452,10 @@ public class AniUtil {
      * @param ani 订阅
      */
     public static void completed(Ani ani) {
-        ani = ObjectUtil.clone(ani);
-
-        String title = ani.getTitle();
-        Boolean completed = ani.getCompleted();
-        boolean ova = ani.getOva();
-        boolean enable = ani.getEnable();
-        int currentEpisodeNumber = ani.getCurrentEpisodeNumber();
-        int totalEpisodeNumber = ani.getTotalEpisodeNumber();
-
-        if (!completed) {
-            // 未开启
+        if (ani == null) {
             return;
         }
-
-        if (totalEpisodeNumber < 1) {
-            // 总集数为空
-            return;
-        }
-
-        if (currentEpisodeNumber < totalEpisodeNumber) {
-            // 未完结
-            return;
-        }
-
-        if (enable) {
-            // 仍是启用的话 主RSS仍未完结
-            return;
-        }
-
-        if (ova) {
-            // 剧场版不进行迁移
-            return;
-        }
-
-        Config config = ObjectUtil.clone(ConfigUtil.CONFIG);
-
-        boolean autoDisabled = config.getAutoDisabled();
-        if (!autoDisabled) {
-            // 未开启自动禁用订阅
-            return;
-        }
-
-        completed = config.getCompleted();
-        if (!completed) {
-            // 未开启
-            return;
-        }
-
-        String completedPathTemplate = config.getCompletedPathTemplate();
-
-        Boolean customCompleted = ani.getCustomCompleted();
-        if (customCompleted) {
-            // 自定义完结迁移
-            completedPathTemplate = ani.getCustomCompletedPathTemplate();
-        }
-
-        if (StrUtil.isBlank(completedPathTemplate)) {
-            // 路径为空
-            return;
-        }
-
-        // 旧文件路径
-        DownloadService downloadService = SpringUtil.getBean(DownloadService.class);
-        Ani pathAni = ObjectUtil.clone(ani);
-        String oldPath = downloadService.getDownloadPath(pathAni, config);
-
-        config.setDownloadPathTemplate(completedPathTemplate);
-        // 因为临时修改下载位置模版以获取对应下载位置, 要关闭自定义下载位置
-        pathAni.setCustomDownloadPath(false);
-
-        // 新文件路径
-        String newPath = downloadService.getDownloadPath(pathAni, config);
-
-        if (!FileUtil.exist(oldPath)) {
-            // 旧文件不存在
-            return;
-        }
-
-        FileUtil.mkdir(newPath);
-
-        List<TorrentsInfo> torrentsInfos = TorrentUtil.getTorrentsInfos();
-        OwnershipService ownershipService = SpringUtil.getBean(OwnershipService.class);
-        ownershipService.validateSubscriptionMove(ani.getId(), newPath);
-
-        for (TorrentsInfo torrentsInfo : torrentsInfos) {
-            if (!ownershipService.belongsTo(torrentsInfo, ani.getId())) {
-                continue;
-            }
-            // 修改保存位置
-            TorrentUtil.setSavePath(torrentsInfo, newPath);
-        }
-
-        if (!torrentsInfos.isEmpty()) {
-            ThreadUtil.sleep(3000);
-        }
-
-        ownershipService.moveSubscriptionFiles(ani.getId(), newPath);
-        log.info("订阅已完结 {}, 已移动归属清单文件", title);
+        SpringUtil.getBean(ani.rss.completion.CompletionMigrationService.class).complete(ani);
     }
 
     public static Ani createAni() {

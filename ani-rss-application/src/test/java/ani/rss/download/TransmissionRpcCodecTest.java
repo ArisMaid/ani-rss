@@ -37,6 +37,19 @@ class TransmissionRpcCodecTest {
     }
 
     @Test
+    void encodesVerifyAndStartForBothTransmissionDialects() {
+        JsonObject legacyVerify = TransmissionRpcCodec.encode(
+                TransmissionRpcBody.torrentVerify("42"), TransmissionDialect.LEGACY, 9);
+        JsonObject modernStart = TransmissionRpcCodec.encode(
+                TransmissionRpcBody.torrentStart("42"), TransmissionDialect.JSON_RPC_2, 10);
+
+        assertEquals("torrent-verify", legacyVerify.get("method").getAsString());
+        assertEquals("torrent_start", modernStart.get("method").getAsString());
+        assertEquals("42", modernStart.getAsJsonObject("params")
+                .getAsJsonArray("ids").get(0).getAsString());
+    }
+
+    @Test
     void parsesBothResponseShapesAndRejectsRpcErrors() {
         String legacy = "{\"arguments\":{\"torrent-added\":{\"id\":\"1\"}},\"result\":\"success\"}";
         String modern = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"id\":\"1\"}}";

@@ -17,6 +17,21 @@
         <Bug pattern="EI_EXPOSE_REP2"/>
     </Match>
     <Match>
+        <Class name="ani.rss.completion.CompletionMigrationService"/>
+        <Field name="~(repository|downloadService|deletionService)"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.controller.v2.SubscriptionController"/>
+        <Field name="deletionService"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <!-- ObjectProvider resolution is a Spring lifecycle boundary, not untrusted input. -->
+    <Match>
+        <Class name="ani.rss.ownership.QuarantineService"/>
+        <Bug pattern="CT_CONSTRUCTOR_THROW"/>
+    </Match>
+    <Match>
         <Class name="ani.rss.service.BackupService"/>
         <Field name="clearService"/>
         <Bug pattern="EI_EXPOSE_REP2"/>

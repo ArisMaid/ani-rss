@@ -261,6 +261,14 @@ public class OpenList implements BaseDownload {
 
     }
 
+    @Override
+    public DownloaderResult<Void> recoverResult(TorrentsInfo torrentsInfo) {
+        // OpenList does not expose a safe local recheck. Its idempotent
+        // download workflow is reused only after the recovery service has
+        // verified that the expected target is absent.
+        return DownloaderResult.rejected("OPENLIST_RECOVERY_REQUEUE_REQUIRED");
+    }
+
     private void ensureDirectory(String path, Workflow workflow) {
         if (workflow.directoryReady) {
             return;
@@ -637,6 +645,26 @@ public class OpenList implements BaseDownload {
         String password = config.getDownloadToolPassword();
         return HttpReq.post(host + "/api/" + action, config)
                 .header(Header.AUTHORIZATION, password);
+    }
+
+    /**
+     * Checks the exact expected media name at an OpenList target. A transport
+     * or API error returns empty so recovery will not blindly resubmit work.
+     */
+    public Optional<Boolean> hasExpectedMedia(String savePath, String expectedName) {
+        if (StrUtil.isBlank(savePath) || StrUtil.isBlank(expectedName)) {
+            return Optional.empty();
+        }
+        try {
+            String remotePath = ReUtil.replaceAll(savePath, "^[A-z]:", "");
+            boolean present = findFiles(remotePath).stream()
+                    .filter(file -> FileUtils.isVideoFormat(file.getName()))
+                    .anyMatch(file -> expectedName.equalsIgnoreCase(FileUtil.mainName(file.getName())));
+            return Optional.of(present);
+        } catch (RuntimeException e) {
+            log.warn("OpenList 目标验证失败 type:{}", e.getClass().getSimpleName());
+            return Optional.empty();
+        }
     }
 
     private Optional<String> findExistingTaskId(String magnet) {

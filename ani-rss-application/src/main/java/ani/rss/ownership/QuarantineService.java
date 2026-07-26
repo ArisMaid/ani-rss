@@ -1,6 +1,9 @@
 package ani.rss.ownership;
 
 import ani.rss.commons.PathPolicy;
+import ani.rss.recovery.MissingEpisodeRecoveryService;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -34,11 +37,23 @@ public class QuarantineService {
 
     private final OwnershipService ownershipService;
     private final OwnershipRepository repository;
+    private final MissingEpisodeRecoveryService recoveryService;
     private final ConcurrentMap<String, PlanState> plans = new ConcurrentHashMap<>();
 
     public QuarantineService(OwnershipService ownershipService, OwnershipRepository repository) {
         this.ownershipService = ownershipService;
         this.repository = repository;
+        this.recoveryService = null;
+    }
+
+    @Autowired
+    public QuarantineService(
+            OwnershipService ownershipService,
+            OwnershipRepository repository,
+            ObjectProvider<MissingEpisodeRecoveryService> recoveryService) {
+        this.ownershipService = ownershipService;
+        this.repository = repository;
+        this.recoveryService = recoveryService.getIfAvailable();
     }
 
     public DestructiveOperationPlan planOwnership(String ownershipId) {
@@ -139,6 +154,11 @@ public class QuarantineService {
                                 file.ownership().state().name()))
                         .toList();
                 repository.addQuarantineEntries(entries);
+                if (recoveryService != null) {
+                    for (DownloadOwnership ownership : plan.ownerships().values()) {
+                        recoveryService.cancel(ownership.subscriptionId(), ownership.infoHash());
+                    }
+                }
                 plans.remove(operationId, plan);
                 return operationId;
             } catch (Exception failure) {

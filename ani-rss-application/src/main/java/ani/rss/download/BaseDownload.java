@@ -140,6 +140,15 @@ public interface BaseDownload {
     }
 
     /**
+     * Ask a downloader to verify an owned task and resume it. Implementations
+     * must not delete local payload data. Callers use a typed unsupported
+     * result to choose a safe re-enqueue fallback where appropriate.
+     */
+    default DownloaderResult<Void> recoverResult(TorrentsInfo torrentsInfo) {
+        return DownloaderResult.rejected("RECOVERY_UNSUPPORTED");
+    }
+
+    /**
      * 获取重命名结果
      *
      * @param name   文件名

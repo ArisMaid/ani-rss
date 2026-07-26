@@ -82,6 +82,22 @@ public class OwnershipRepository {
         });
     }
 
+    public Optional<DownloadOwnership> findByInfoHash(String downloaderType, String infoHash) {
+        return DatabaseManager.withConnection(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT * FROM download_ownership
+                    WHERE downloader_type = ? AND info_hash = ?
+                    LIMIT 1
+                    """)) {
+                statement.setString(1, downloaderType);
+                statement.setString(2, normalizeHash(infoHash));
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    return resultSet.next() ? Optional.of(mapOwnership(resultSet)) : Optional.empty();
+                }
+            }
+        });
+    }
+
     public List<DownloadOwnership> listBySubscription(String subscriptionId) {
         return list("SELECT * FROM download_ownership WHERE subscription_id = ? ORDER BY created_at", subscriptionId);
     }

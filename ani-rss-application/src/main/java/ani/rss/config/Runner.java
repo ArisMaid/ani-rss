@@ -5,6 +5,7 @@ import ani.rss.commons.MavenUtils;
 import ani.rss.auth.AuthService;
 import ani.rss.service.BackupService;
 import ani.rss.service.TaskService;
+import ani.rss.completion.CompletionMigrationService;
 import ani.rss.ownership.OwnershipMigrationService;
 import ani.rss.util.other.AniUtil;
 import ani.rss.util.other.ConfigUtil;
@@ -35,6 +36,9 @@ public class Runner implements ApplicationRunner {
     @Resource
     private OwnershipMigrationService ownershipMigrationService;
 
+    @Resource
+    private CompletionMigrationService completionMigrationService;
+
     @Value("${server.port}")
     private String port;
 
@@ -51,6 +55,7 @@ public class Runner implements ApplicationRunner {
             } catch (Exception e) {
                 log.warn("旧下载任务归属扫描失败: {}", ExceptionUtils.getMessage(e));
             }
+            completionMigrationService.reconcilePendingFinalizations();
             taskService.start();
             String version = MavenUtils.getVersion();
             log.info("version {}", version);

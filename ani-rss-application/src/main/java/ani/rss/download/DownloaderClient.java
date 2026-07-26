@@ -53,6 +53,10 @@ public final class DownloaderClient {
         return operation(() -> adapter.setSavePathResult(torrent, path));
     }
 
+    public DownloaderResult<Void> recover(TorrentsInfo torrent) {
+        return operation(() -> adapter.recoverResult(torrent));
+    }
+
     public Config configurationSnapshot() {
         return ConfigUtil.copy(configuration);
     }

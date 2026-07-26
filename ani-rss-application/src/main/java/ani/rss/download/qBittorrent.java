@@ -282,6 +282,23 @@ public class qBittorrent implements BaseDownload {
     }
 
     @Override
+    public DownloaderResult<Void> recoverResult(TorrentsInfo torrentsInfo) {
+        String hash = torrentsInfo == null ? "" : torrentsInfo.getHash();
+        if (StrUtil.isBlank(hash)) {
+            return DownloaderResult.rejected("QBITTORRENT_RECOVERY_HASH_MISSING");
+        }
+        String host = config.getDownloadToolHost();
+        boolean checked = execute(HttpReq.post(host + "/api/v2/torrents/recheck", config)
+                .form("hashes", hash), qBittorrent::requireSuccess);
+        if (!checked) {
+            return DownloaderResult.rejected("QBITTORRENT_RECHECK_REJECTED");
+        }
+        return start(torrentsInfo)
+                ? DownloaderResult.success(null)
+                : DownloaderResult.rejected("QBITTORRENT_RESUME_REJECTED");
+    }
+
+    @Override
     public List<TorrentsInfo> getTorrentsInfos() {
         String host = config.getDownloadToolHost();
         return execute(HttpReq.get(host + "/api/v2/torrents/info", config), res -> {

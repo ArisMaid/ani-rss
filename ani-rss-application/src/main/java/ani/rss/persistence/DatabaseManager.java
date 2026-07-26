@@ -253,6 +253,100 @@ public final class DatabaseManager {
                 current.setAutoCommit(autoCommit);
             }
         }
+        if (version < 3) {
+            boolean autoCommit = current.getAutoCommit();
+            current.setAutoCommit(false);
+            try (Statement statement = current.createStatement()) {
+                statement.executeUpdate("""
+                        CREATE TABLE IF NOT EXISTS missing_episode_recovery (
+                            recovery_id TEXT PRIMARY KEY,
+                            subscription_id TEXT NOT NULL,
+                            info_hash TEXT NOT NULL,
+                            season INTEGER,
+                            episode TEXT,
+                            item_json TEXT NOT NULL,
+                            state TEXT NOT NULL,
+                            attempts INTEGER NOT NULL,
+                            next_attempt_at INTEGER NOT NULL,
+                            last_error_code TEXT,
+                            created_at INTEGER NOT NULL,
+                            updated_at INTEGER NOT NULL,
+                            UNIQUE(subscription_id, info_hash)
+                        )
+                        """);
+                statement.executeUpdate("""
+                        CREATE INDEX IF NOT EXISTS idx_missing_episode_recovery_due
+                        ON missing_episode_recovery(subscription_id, state, next_attempt_at)
+                        """);
+                statement.executeUpdate("INSERT INTO schema_migrations(version, applied_at) VALUES (3, "
+                        + System.currentTimeMillis() + ")");
+                current.commit();
+            } catch (SQLException e) {
+                current.rollback();
+                throw e;
+            } finally {
+                current.setAutoCommit(autoCommit);
+            }
+        }
+        if (version < 4) {
+            boolean autoCommit = current.getAutoCommit();
+            current.setAutoCommit(false);
+            try (Statement statement = current.createStatement()) {
+                statement.executeUpdate("""
+                        CREATE TABLE IF NOT EXISTS completed_migration_finalization (
+                            subscription_id TEXT PRIMARY KEY,
+                            subscription_fingerprint TEXT NOT NULL,
+                            target_root TEXT NOT NULL,
+                            state TEXT NOT NULL,
+                            created_at INTEGER NOT NULL,
+                            updated_at INTEGER NOT NULL
+                        )
+                        """);
+                statement.executeUpdate("INSERT INTO schema_migrations(version, applied_at) VALUES (4, "
+                        + System.currentTimeMillis() + ")");
+                current.commit();
+            } catch (SQLException e) {
+                current.rollback();
+                throw e;
+            } finally {
+                current.setAutoCommit(autoCommit);
+            }
+        }
+        if (version < 5) {
+            boolean autoCommit = current.getAutoCommit();
+            current.setAutoCommit(false);
+            try (Statement statement = current.createStatement()) {
+                if (!hasColumn(current, "missing_episode_recovery", "source_hash")) {
+                    statement.executeUpdate("ALTER TABLE missing_episode_recovery ADD COLUMN source_hash TEXT");
+                }
+                // Existing records predate canonical torrent hash resolution.
+                // Their prior key is also the only safe cache-input identifier.
+                statement.executeUpdate("UPDATE missing_episode_recovery SET source_hash = info_hash "
+                        + "WHERE source_hash IS NULL OR TRIM(source_hash) = ''");
+                statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_missing_episode_recovery_source "
+                        + "ON missing_episode_recovery(subscription_id, source_hash)");
+                statement.executeUpdate("INSERT INTO schema_migrations(version, applied_at) VALUES (5, "
+                        + System.currentTimeMillis() + ")");
+                current.commit();
+            } catch (SQLException e) {
+                current.rollback();
+                throw e;
+            } finally {
+                current.setAutoCommit(autoCommit);
+            }
+        }
+    }
+
+    private static boolean hasColumn(Connection connection, String table, String column) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("PRAGMA table_info(" + table + ")");
+             ResultSet resultSet = statement.executeQuery()) {
+            while (resultSet.next()) {
+                if (column.equalsIgnoreCase(resultSet.getString("name"))) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     @FunctionalInterface

@@ -120,6 +120,34 @@ public class OwnershipService {
                         ownership.state() == OwnershipState.QUARANTINED);
     }
 
+    public Optional<DownloadOwnership> findManagedByInfoHash(String downloaderType, String infoHash) {
+        if (StrUtil.isBlank(downloaderType) || StrUtil.isBlank(infoHash)) {
+            return Optional.empty();
+        }
+        return repository.findByInfoHash(downloaderType, infoHash)
+                .filter(ownership -> ownership.state() == OwnershipState.ACTIVE ||
+                        ownership.state() == OwnershipState.LEGACY_ADOPTED ||
+                        ownership.state() == OwnershipState.PENDING ||
+                        ownership.state() == OwnershipState.QUARANTINED ||
+                        ownership.state() == OwnershipState.FAILED);
+    }
+
+    /**
+     * Resolves an exact owned downloader task. A hash match alone is not
+     * enough: a third-party task can reuse the same torrent hash.
+     */
+    public Optional<DownloadOwnership> findRecoverableOwnedTask(
+            String downloaderType, String subscriptionId, String infoHash, TorrentsInfo task) {
+        if (task == null || StrUtil.isBlank(subscriptionId)) {
+            return Optional.empty();
+        }
+        return findManaged(downloaderType, task)
+                .filter(ownership -> subscriptionId.equals(ownership.subscriptionId()))
+                .filter(ownership -> StrUtil.equalsIgnoreCase(ownership.infoHash(), infoHash))
+                .filter(ownership -> ownership.state() == OwnershipState.ACTIVE ||
+                        ownership.state() == OwnershipState.LEGACY_ADOPTED);
+    }
+
     public void observeTasks(List<TorrentsInfo> tasks) {
         observeTasks(ConfigUtil.snapshot().getDownloadToolType(), tasks);
     }
@@ -192,6 +220,71 @@ public class OwnershipService {
 
     public List<OwnedFile> listFiles(String ownershipId) {
         return repository.listFiles(ownershipId);
+    }
+
+    /**
+     * Verifies the exact media manifest without following links. An absent
+     * manifest is deliberately reported as unknown, never as a missing file.
+     */
+    public MediaVerification verifyMediaFiles(DownloadOwnership ownership) {
+        if (ownership == null) {
+            return new MediaVerification(false, List.of());
+        }
+        List<OwnedFile> manifest = repository.listFiles(ownership.ownershipId());
+        if (manifest.isEmpty()) {
+            return new MediaVerification(false, List.of());
+        }
+        List<OwnedFile> missing = new ArrayList<>();
+        try {
+            Path root = Path.of(ownership.saveRoot()).toAbsolutePath().normalize();
+            if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(root)) {
+                return new MediaVerification(true, List.copyOf(manifest));
+            }
+            for (OwnedFile file : manifest) {
+                Path candidate = PathPolicy.resolveWithin(root, file.relativePath());
+                if (!Files.isRegularFile(candidate, LinkOption.NOFOLLOW_LINKS) ||
+                        Files.isSymbolicLink(candidate)) {
+                    missing.add(file);
+                    continue;
+                }
+                PathPolicy.requireNoSymbolicLinks(root, candidate);
+                Path real = PathPolicy.realPathWithin(root, candidate);
+                if (file.size() != null && Files.size(real) != file.size()) {
+                    missing.add(file);
+                }
+            }
+            return new MediaVerification(true, List.copyOf(missing));
+        } catch (Exception e) {
+            // An unsafe/unreadable path is not trusted as healthy. Recovery
+            // still operates only on this already-verified ownership record.
+            return new MediaVerification(true, List.copyOf(manifest));
+        }
+    }
+
+    /** Returns whether all exact owned media paths have been moved to a target root. */
+    public boolean isSubscriptionAtRoot(String subscriptionId, String targetRootValue) {
+        if (StrUtil.isBlank(subscriptionId) || StrUtil.isBlank(targetRootValue)) {
+            return false;
+        }
+        try {
+            Path targetRoot = Path.of(targetRootValue).toAbsolutePath().normalize();
+            List<DownloadOwnership> ownerships = activeOwnerships(subscriptionId);
+            if (ownerships.isEmpty()) {
+                return false;
+            }
+            for (DownloadOwnership ownership : ownerships) {
+                if (!targetRoot.equals(Path.of(ownership.saveRoot()).toAbsolutePath().normalize())) {
+                    return false;
+                }
+                MediaVerification verification = verifyMediaFiles(ownership);
+                if (!verification.manifestAvailable() || !verification.healthy()) {
+                    return false;
+                }
+            }
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     public void captureFiles(String ownershipId, TorrentsInfo task) {
@@ -572,5 +665,15 @@ public class OwnershipService {
             Path path,
             long size,
             long lastModified) {
+    }
+
+    public record MediaVerification(boolean manifestAvailable, List<OwnedFile> missingFiles) {
+        public MediaVerification {
+            missingFiles = List.copyOf(missingFiles == null ? List.of() : missingFiles);
+        }
+
+        public boolean healthy() {
+            return manifestAvailable && missingFiles.isEmpty();
+        }
     }
 }

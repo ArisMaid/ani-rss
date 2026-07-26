@@ -8,6 +8,7 @@ import ani.rss.ownership.DownloadOwnership;
 import ani.rss.ownership.OwnershipService;
 import ani.rss.ownership.OwnershipState;
 import ani.rss.ownership.QuarantineService;
+import ani.rss.recovery.MissingEpisodeRecoveryService;
 import ani.rss.util.other.AniUtil;
 import ani.rss.util.other.ConfigUtil;
 import ani.rss.util.other.TorrentUtil;
@@ -39,13 +40,15 @@ public final class SubscriptionDeletionService {
     private final QuarantineService quarantineService;
     private final SubscriptionStore subscriptionStore;
     private final RemoteTaskGateway remoteTasks;
+    private final MissingEpisodeRecoveryService recoveryService;
     private final ConcurrentMap<String, PlanState> plans = new ConcurrentHashMap<>();
 
     @Autowired
     public SubscriptionDeletionService(
             OwnershipService ownershipService,
-            QuarantineService quarantineService) {
-        this(ownershipService, quarantineService, new AniUtilSubscriptionStore(), new TorrentRemoteTaskGateway());
+            QuarantineService quarantineService,
+            MissingEpisodeRecoveryService recoveryService) {
+        this(ownershipService, quarantineService, new AniUtilSubscriptionStore(), new TorrentRemoteTaskGateway(), recoveryService);
     }
 
     SubscriptionDeletionService(
@@ -53,10 +56,20 @@ public final class SubscriptionDeletionService {
             QuarantineService quarantineService,
             SubscriptionStore subscriptionStore,
             RemoteTaskGateway remoteTasks) {
+        this(ownershipService, quarantineService, subscriptionStore, remoteTasks, null);
+    }
+
+    SubscriptionDeletionService(
+            OwnershipService ownershipService,
+            QuarantineService quarantineService,
+            SubscriptionStore subscriptionStore,
+            RemoteTaskGateway remoteTasks,
+            MissingEpisodeRecoveryService recoveryService) {
         this.ownershipService = Objects.requireNonNull(ownershipService, "ownershipService");
         this.quarantineService = Objects.requireNonNull(quarantineService, "quarantineService");
         this.subscriptionStore = Objects.requireNonNull(subscriptionStore, "subscriptionStore");
         this.remoteTasks = Objects.requireNonNull(remoteTasks, "remoteTasks");
+        this.recoveryService = recoveryService;
     }
 
     public DeletionPlan plan(Collection<String> subscriptionIds, boolean deleteFiles) {
@@ -119,6 +132,12 @@ public final class SubscriptionDeletionService {
         return view;
     }
 
+    /** Removes subscription metadata only; owned media and remote tasks stay intact. */
+    public DeletionResult deleteWithoutFiles(Collection<String> subscriptionIds) {
+        DeletionPlan plan = plan(subscriptionIds, false);
+        return execute(plan.operationId());
+    }
+
     public DeletionResult execute(String operationId) {
         PlanState plan = requirePlan(operationId);
         synchronized (plan) {
@@ -151,6 +170,11 @@ public final class SubscriptionDeletionService {
                         .filter(ani -> !ids.contains(ani.getId()))
                         .toList();
                 subscriptionStore.commit(candidate);
+                if (recoveryService != null) {
+                    for (String id : ids) {
+                        recoveryService.cancelSubscription(id);
+                    }
+                }
                 plans.remove(operationId, plan);
                 return new DeletionResult(
                         operationId,

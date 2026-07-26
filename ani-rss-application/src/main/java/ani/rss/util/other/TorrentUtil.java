@@ -426,12 +426,26 @@ public class TorrentUtil {
      * magnet cache already contains its hash; a .torrent cache must be parsed.
      */
     public static String getInfoHash(File file) {
+        String canonical = getCanonicalInfoHash(file);
+        if (StrUtil.isNotBlank(canonical)) {
+            return canonical;
+        }
         if (file == null) {
             return "";
         }
-        String fallback = FileUtil.mainName(file).trim().toLowerCase();
+        return FileUtil.mainName(file).trim().toLowerCase();
+    }
+
+    /**
+     * Returns a parsed BitTorrent identity only. Unlike {@link #getInfoHash(File)},
+     * this method never treats an opaque RSS cache filename as an info-hash.
+     */
+    public static String getCanonicalInfoHash(File file) {
+        if (file == null) {
+            return "";
+        }
         if (!file.isFile() || file.length() < 1) {
-            return fallback;
+            return "";
         }
         try {
             String extension = FileUtil.extName(file);
@@ -450,7 +464,7 @@ public class TorrentUtil {
         } catch (Exception e) {
             log.warn("解析缓存种子的 info-hash 失败 type:{}", e.getClass().getSimpleName());
         }
-        return fallback;
+        return "";
     }
 
 }

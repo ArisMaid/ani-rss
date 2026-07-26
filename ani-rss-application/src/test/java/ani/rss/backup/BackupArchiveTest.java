@@ -65,7 +65,7 @@ class BackupArchiveTest {
         Files.writeString(source.resolve("auth-state.v2.json"), "{\"schemaVersion\":2}", StandardCharsets.UTF_8);
 
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        BackupArchive.create(bytes, source, "3.1.75.18");
+        BackupArchive.create(bytes, source, "3.1.75.19");
         Path archive = tempDir.resolve("fork-backup.zip");
         Files.write(archive, bytes.toByteArray());
 

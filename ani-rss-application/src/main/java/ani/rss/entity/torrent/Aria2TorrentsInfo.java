@@ -88,8 +88,13 @@ public class Aria2TorrentsInfo implements Serializable {
         }
 
         private TorrentsStateEnum getTorrentsStateEnum() {
-            return "complete".equals(status) ?
-                    TorrentsStateEnum.stoppedUP : TorrentsStateEnum.downloading;
+            if ("complete".equals(status)) {
+                return TorrentsStateEnum.stoppedUP;
+            }
+            if ("error".equals(status)) {
+                return TorrentsStateEnum.error;
+            }
+            return TorrentsStateEnum.downloading;
         }
     }
 

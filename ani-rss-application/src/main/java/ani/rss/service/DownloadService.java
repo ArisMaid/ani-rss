@@ -17,6 +17,7 @@ import ani.rss.enums.TorrentsTagEnum;
 import ani.rss.ownership.DownloadOwnership;
 import ani.rss.ownership.OwnershipService;
 import ani.rss.ownership.QuarantineService;
+import ani.rss.recovery.MissingEpisodeRecoveryService;
 import ani.rss.util.other.*;
 import cn.hutool.core.date.DateField;
 import cn.hutool.core.date.DateUtil;
@@ -54,6 +55,9 @@ public class DownloadService {
 
     @Resource
     private QuarantineService quarantineService;
+
+    @Resource
+    private MissingEpisodeRecoveryService missingEpisodeRecoveryService;
 
     /**
      * 下载动漫
@@ -109,7 +113,13 @@ public class DownloadService {
             String reName = item.getReName();
             File torrent = TorrentUtil.getTorrent(ani, item);
             Boolean master = item.getMaster();
-            String hash = TorrentUtil.getInfoHash(torrent);
+            String canonicalHash = TorrentUtil.getCanonicalInfoHash(torrent);
+            String hash = StrUtil.blankToDefault(canonicalHash, TorrentUtil.getInfoHash(torrent));
+            if (!torrent.isFile() || torrent.length() < 1) {
+                hash = item.getInfoHash();
+            }
+            hash = StrUtil.blankToDefault(hash, item.getInfoHash());
+            final String itemHash = hash;
 
             Double episode = item.getEpisode();
             // .5 集
@@ -152,9 +162,25 @@ public class DownloadService {
             if (Objects.nonNull(pubDate) && delayedDownload > 0) {
                 Date now = DateUtil.offset(new Date(), DateField.MINUTE, -delayedDownload);
                 if (now.getTime() < pubDate.getTime()) {
+                    // Preserve this qualified item before delay so it is not
+                    // lost if the source feed expires it before the deadline.
+                    missingEpisodeRecoveryService.observeEligible(ani, item);
+                    if (StrUtil.isNotBlank(canonicalHash)) {
+                        missingEpisodeRecoveryService.promoteCanonicalHash(ani, item, canonicalHash);
+                    }
+                    missingEpisodeRecoveryService.deferUntil(ani, item,
+                            pubDate.getTime() + java.util.concurrent.TimeUnit.MINUTES.toMillis(delayedDownload));
                     log.info("延迟下载 {}", reName);
                     continue;
                 }
+            }
+
+            // The item has passed all user-visible download policies. Persist
+            // it before any network submission so a later RSS window cannot
+            // erase a genuine ANI-RSS download failure.
+            missingEpisodeRecoveryService.observeEligible(ani, item);
+            if (StrUtil.isNotBlank(canonicalHash)) {
+                missingEpisodeRecoveryService.promoteCanonicalHash(ani, item, canonicalHash);
             }
 
             // 仅在主RSS更新后删除备用RSS
@@ -203,8 +229,9 @@ public class DownloadService {
                     .stream()
                     .anyMatch(torrentsInfo ->
                             // hash 相同
-                            torrentsInfo.getHash().equals(hash))) {
+                            StrUtil.equalsIgnoreCase(torrentsInfo.getHash(), itemHash))) {
                 log.info("已有下载任务 hash:{} name:{}", hash, reName);
+                missingEpisodeRecoveryService.markRemoteObserved(ani, item);
                 sync = true;
                 if (master && !is5) {
                     currentDownloadCount++;
@@ -215,6 +242,7 @@ public class DownloadService {
             // 未开启rename不进行检测
             if (itemDownloaded(ani, item, true)) {
                 log.info("本地文件已存在 {}", reName);
+                missingEpisodeRecoveryService.markLocalSatisfied(ani, item);
                 sync = true;
                 if (master && !is5) {
                     currentDownloadCount++;
@@ -243,6 +271,8 @@ public class DownloadService {
 
             if (!saveTorrent.exists()) {
                 // 种子下载失败
+                missingEpisodeRecoveryService.markSubmissionResult(ani, item, false,
+                        "RECOVERY_INPUT_UNAVAILABLE");
                 continue;
             }
 
@@ -253,9 +283,13 @@ public class DownloadService {
             }
 
             if (!download(ani, item, savePath, saveTorrent)) {
+                missingEpisodeRecoveryService.markSubmissionResult(ani, item, false,
+                        "DOWNLOAD_SUBMISSION_FAILED");
                 failedSubmission = true;
                 continue;
             }
+
+            missingEpisodeRecoveryService.markSubmissionResult(ani, item, true, null);
 
             sync = true;
 
@@ -264,6 +298,10 @@ public class DownloadService {
             }
             count++;
         }
+
+        // This is deliberately separate from ItemsUtil.omit(): only durable
+        // RSS acceptance records and verified owned media participate here.
+        missingEpisodeRecoveryService.reconcile(ani, torrentsInfos);
 
         if (sync && !failedSubmission) {
             int size = ItemsUtil.currentEpisodeNumber(ani, items);
@@ -286,6 +324,9 @@ public class DownloadService {
             NotificationUtil.send(config, ani, StrFormatter.format("{} 订阅已完结", title), NotificationStatusEnum.COMPLETED);
             ani.setEnable(false);
             AniUtil.sync();
+            // Completion migration removes only subscription metadata after
+            // every owned file has been moved and revalidated.
+            AniUtil.completed(ani);
         }
     }
 
@@ -360,6 +401,15 @@ public class DownloadService {
      * @param torrentFile 种子文件
      */
     public boolean download(Ani ani, Item item, String savePath, File torrentFile) {
+        return downloadInternal(ani, item, savePath, torrentFile, true);
+    }
+
+    /** Performs a recovery submission without repeating the normal user notification. */
+    public boolean recoverDownload(Ani ani, Item item, String savePath, File torrentFile) {
+        return downloadInternal(ani, item, savePath, torrentFile, false);
+    }
+
+    private boolean downloadInternal(Ani ani, Item item, String savePath, File torrentFile, boolean notify) {
         ani = ObjectUtil.clone(ani);
 
         String name = item.getReName();
@@ -381,7 +431,9 @@ public class DownloadService {
         if (!master) {
             text = StrFormatter.format("(备用RSS) {}", text);
         }
-        NotificationUtil.send(ConfigUtil.CONFIG, ani, text, NotificationStatusEnum.DOWNLOAD_START);
+        if (notify) {
+            NotificationUtil.send(ConfigUtil.CONFIG, ani, text, NotificationStatusEnum.DOWNLOAD_START);
+        }
 
         Config config = ConfigUtil.CONFIG;
         DownloaderClient activeClient = TorrentUtil.client();
@@ -390,10 +442,14 @@ public class DownloadService {
             return false;
         }
         Item submittedItem = ObjectUtil.clone(item);
-        String infoHash = TorrentUtil.getInfoHash(torrentFile);
+        String canonicalHash = TorrentUtil.getCanonicalInfoHash(torrentFile);
+        String infoHash = StrUtil.blankToDefault(canonicalHash, TorrentUtil.getInfoHash(torrentFile));
         if (StrUtil.isBlank(infoHash)) {
             log.error("{} 下载失败 code:TORRENT_INFO_HASH_UNAVAILABLE retryable:false", name);
             return false;
+        }
+        if (StrUtil.isNotBlank(canonicalHash) && missingEpisodeRecoveryService != null) {
+            missingEpisodeRecoveryService.promoteCanonicalHash(ani, item, canonicalHash);
         }
         submittedItem.setInfoHash(infoHash);
         String downloaderType = activeClient.configurationSnapshot().getDownloadToolType();
@@ -438,9 +494,11 @@ public class DownloadService {
         }
 
         log.error("{} 添加失败，下载器未确认接收", name);
-        NotificationUtil.send(ConfigUtil.CONFIG, ani,
+        if (notify) {
+            NotificationUtil.send(ConfigUtil.CONFIG, ani,
                 StrFormatter.format("{} 添加失败，下载器未确认接收", name),
                 NotificationStatusEnum.ERROR);
+        }
         return false;
     }
 

@@ -6,6 +6,8 @@ public enum TransmissionMethodEnum {
     sessionGet("session-get", "session_get"),
     torrentAdd("torrent-add", "torrent_add"),
     torrentGet("torrent-get", "torrent_get"),
+    torrentStart("torrent-start", "torrent_start"),
+    torrentVerify("torrent-verify", "torrent_verify"),
     torrentRemove("torrent-remove", "torrent_remove"),
     torrentRenamePath("torrent-rename-path", "torrent_rename_path"),
     torrentSet("torrent-set", "torrent_set"),

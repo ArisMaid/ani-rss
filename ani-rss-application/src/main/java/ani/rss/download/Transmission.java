@@ -138,6 +138,26 @@ public class Transmission implements BaseDownload {
     }
 
     @Override
+    public DownloaderResult<Void> recoverResult(TorrentsInfo torrentsInfo) {
+        if (torrentsInfo == null || StrUtil.isBlank(torrentsInfo.getId())) {
+            return DownloaderResult.rejected("TRANSMISSION_RECOVERY_ID_MISSING");
+        }
+        Config config = configuration();
+        SessionState state = ensureSession(config);
+        boolean verified = TransmissionRpcCodec.success(
+                rpc(config, TransmissionRpcBody.torrentVerify(torrentsInfo.getId()), state).body(),
+                state.dialect());
+        if (!verified) {
+            return DownloaderResult.rejected("TRANSMISSION_VERIFY_REJECTED");
+        }
+        boolean started = TransmissionRpcCodec.success(
+                rpc(config, TransmissionRpcBody.torrentStart(torrentsInfo.getId()), state).body(),
+                state.dialect());
+        return started ? DownloaderResult.success(null)
+                : DownloaderResult.rejected("TRANSMISSION_START_REJECTED");
+    }
+
+    @Override
     public Boolean rename(TorrentsInfo torrentsInfo) {
         String id = torrentsInfo.getId();
         String name = torrentsInfo.getName();

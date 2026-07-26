@@ -171,6 +171,7 @@ import * as http from "@/js/http.js";
 const SCORE_BATCH_SIZE = 24
 const MAX_CONCURRENT_SCORE_BATCHES = 2
 const SCORE_RETRY_DELAYS_MILLIS = [0, 250, 500, 1_000, 2_000, 4_000]
+const DEFAULT_LIST_PRELOAD_TTL_MILLIS = 30_000
 
 const emptyMikanData = () => ({
   seasons: [],
@@ -261,6 +262,8 @@ let searchRequestId = 0
 let listStateId = 0
 let listAbortController
 let scoreAbortController
+let preloadedDefaultList
+let preloadingDefaultList
 
 let cancelScoreRequest = () => {
   scoreAbortController?.abort()
@@ -283,6 +286,57 @@ let resetListInteractionState = () => {
 
 let isCurrentList = (requestId, currentScoreRequestId) =>
     requestId === listRequestId && currentScoreRequestId === scoreRequestId
+
+let hasFreshPreloadedDefaultList = () => preloadedDefaultList
+    && Date.now() - preloadedDefaultList.loadedAt < DEFAULT_LIST_PRELOAD_TTL_MILLIS
+
+let rememberPreloadedDefaultList = payload => {
+  if (payload && typeof payload === 'object') {
+    preloadedDefaultList = {payload, loadedAt: Date.now()}
+  }
+}
+
+let preload = () => {
+  if (hasFreshPreloadedDefaultList()) {
+    return Promise.resolve(preloadedDefaultList.payload)
+  }
+  if (preloadingDefaultList) {
+    return preloadingDefaultList
+  }
+  const request = http.mikan('', {}, {silent: true})
+      .then(res => {
+        const payload = res?.data || null
+        rememberPreloadedDefaultList(payload)
+        return payload
+      })
+      .catch(() => null)
+      .finally(() => {
+        if (preloadingDefaultList === request) {
+          preloadingDefaultList = undefined
+        }
+      })
+  preloadingDefaultList = request
+  return request
+}
+
+let requestList = async (query, requestBody, controller) => {
+  let response
+  if (!query && Object.keys(requestBody).length === 0) {
+    const preloaded = hasFreshPreloadedDefaultList()
+        ? preloadedDefaultList.payload
+        : await preload()
+    if (preloaded) {
+      response = {data: preloaded}
+    }
+  }
+  if (!response) {
+    response = await http.mikan(query, requestBody, {signal: controller.signal, silent: true})
+    if (!query && Object.keys(requestBody).length === 0) {
+      rememberPreloadedDefaultList(response?.data)
+    }
+  }
+  return response
+}
 
 let show = (name) => {
   cancelMikanRequests()
@@ -344,7 +398,7 @@ let list = async (body = {}, searchText = '') => {
   }
 
   try {
-    const res = await http.mikan(query, requestBody, {signal: controller.signal, silent: true})
+    const res = await requestList(query, requestBody, controller)
     if (!isCurrentList(requestId, currentScoreRequestId)) {
       return
     }
@@ -606,7 +660,7 @@ let open = url => {
   openHttpUrl(url);
 }
 
-defineExpose({show})
+defineExpose({show, preload})
 
 let emit = defineEmits(['callback'])
 

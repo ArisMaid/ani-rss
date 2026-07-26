@@ -9,7 +9,7 @@
              :show-close="!rssButtonLoading"
   >
     <div v-show="showRss">
-      <el-tabs tab-position="left" v-model="activeName">
+      <el-tabs tab-position="left" v-model="activeName" @tab-change="preloadMikan">
         <el-tab-pane label="Mikan" name="mikan">
           <el-form @submit.prevent label-width="auto"
                    style="height: 260px">
@@ -157,7 +157,7 @@
 </template>
 
 <script setup>
-import {ref} from "vue";
+import {nextTick, ref} from "vue";
 import {ElMessage} from "element-plus";
 import Mikan from "./Mikan.vue";
 import Ani from "./Ani.vue";
@@ -213,11 +213,20 @@ const addAni = (fun) => {
 
 const activeName = useLocalStorage('add-active-name', 'mikan')
 
+const preloadMikan = tab => {
+  if (tab === 'mikan') {
+    void mikanRef.value?.preload()
+  }
+}
+
 const show = () => {
   ani.value = JSON.parse(JSON.stringify(aniData))
   showRss.value = true
   dialogVisible.value = true
   rssButtonLoading.value = false
+  if (activeName.value === 'mikan') {
+    void nextTick(() => mikanRef.value?.preload())
+  }
 }
 
 let bgmCallback = it => {

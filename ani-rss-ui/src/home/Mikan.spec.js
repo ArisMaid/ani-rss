@@ -154,6 +154,24 @@ describe('Mikan season changes', () => {
     expect(wrapper.text()).toContain('8.6')
   })
 
+  it('reuses a preloaded default season when the picker opens', async () => {
+    vi.mocked(http.mikan).mockResolvedValue(response('2026 summer', 'preloaded season', 0))
+
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    await wrapper.vm.preload()
+    wrapper.vm.show()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('preloaded season')
+    expect(http.mikan).toHaveBeenCalledTimes(1)
+  })
+
   it('retries only score ids the backend marks as temporarily unresolved', async () => {
     vi.useFakeTimers()
     vi.mocked(http.mikan).mockResolvedValue(response('2026 春', '延迟评分作品', 0))

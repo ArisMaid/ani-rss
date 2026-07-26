@@ -5,10 +5,12 @@ import ani.rss.commons.GsonStatic;
 import ani.rss.entity.BgmInfo;
 import ani.rss.entity.MikanBgm;
 import ani.rss.entity.MikanInfo;
+import ani.rss.persistence.PublicScoreCacheRepository;
 import ani.rss.util.basic.HttpReq;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.SecureUtil;
 import jakarta.annotation.PreDestroy;
+import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -59,6 +61,8 @@ public class PublicScoreService {
     static final int MAX_MIKAN_MAPPING_LOOKUPS_PER_BATCH = 48;
     private static final long SCORE_CACHE_TTL = TimeUnit.HOURS.toMillis(6);
     private static final long NEGATIVE_CACHE_TTL = TimeUnit.MINUTES.toMillis(10);
+    private static final long PERSISTENT_MAPPING_CACHE_TTL = TimeUnit.DAYS.toMillis(14);
+    private static final long PERSISTENT_SCORE_CACHE_TTL = TimeUnit.HOURS.toMillis(12);
     private static final String BGM_SCORE_CACHE_PREFIX = "public-score:bgm:";
     private static final String MIKAN_BGM_CACHE_PREFIX = "public-score:mikan:";
     private static final String BGM_SUBJECT_API = "https://api.bgm.tv/v0/subjects/";
@@ -72,6 +76,10 @@ public class PublicScoreService {
 
     private final BgmInfoLoader bgmInfoLoader;
     private final MikanBgmIdResolver mikanBgmIdResolver;
+    /** Nullable only in isolated unit tests that deliberately avoid SQLite I/O. */
+    private final PublicScoreCacheRepository persistentCache;
+    @Resource
+    private TaskCoordinator taskCoordinator;
     /** Limits all concurrent score-related upstream calls for this service instance. */
     private final Semaphore upstreamRequests = new Semaphore(MAX_CONCURRENT_REQUESTS, true);
     /** Coalesces repeated cold Mikan detail-page lookups across score batches. */
@@ -91,12 +99,22 @@ public class PublicScoreService {
     private final ConcurrentMap<String, Long> warmupRetryAfterNanos = new ConcurrentHashMap<>();
 
     public PublicScoreService() {
-        this(PublicScoreService::loadPublicBgmInfo, PublicScoreService::loadMikanBgmId);
+        this(PublicScoreService::loadPublicBgmInfo, PublicScoreService::loadMikanBgmId,
+                new PublicScoreCacheRepository());
     }
 
     PublicScoreService(BgmInfoLoader bgmInfoLoader, MikanBgmIdResolver mikanBgmIdResolver) {
+        this(bgmInfoLoader, mikanBgmIdResolver, null);
+    }
+
+    PublicScoreService(
+            BgmInfoLoader bgmInfoLoader,
+            MikanBgmIdResolver mikanBgmIdResolver,
+            PublicScoreCacheRepository persistentCache
+    ) {
         this.bgmInfoLoader = bgmInfoLoader;
         this.mikanBgmIdResolver = mikanBgmIdResolver;
+        this.persistentCache = persistentCache;
     }
 
     /**
@@ -115,7 +133,7 @@ public class PublicScoreService {
         Set<String> retryableBgmIds = new LinkedHashSet<>();
 
         for (String subjectId : ids) {
-            Double cached = CacheUtils.get(BGM_SCORE_CACHE_PREFIX + subjectId);
+            Double cached = cachedBgmScore(subjectId);
             if (cached != null) {
                 scores.put(subjectId, cached);
             } else {
@@ -205,8 +223,7 @@ public class PublicScoreService {
             String bgmId = extractBgmSubjectId(mikanInfo.getBgmUrl());
             if (StrUtil.isBlank(bgmId)) {
                 String mikanUrl = mikanInfo.getUrl();
-                String mappingCacheKey = MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanUrl);
-                String cachedMapping = CacheUtils.get(mappingCacheKey);
+                String cachedMapping = cachedMikanMapping(mikanId, mikanUrl);
                 if (cachedMapping == null) {
                     retryableMikanIds.add(mikanId);
                     warmMikanMappingAndScore(mikanUrl);
@@ -220,7 +237,7 @@ public class PublicScoreService {
                 }
             }
 
-            Double cachedScore = CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId);
+            Double cachedScore = cachedBgmScore(bgmId);
             if (cachedScore != null) {
                 scores.put(mikanId, new MikanBgm(mikanId, bgmId, cachedScore));
                 continue;
@@ -316,13 +333,13 @@ public class PublicScoreService {
 
             String bgmId = extractBgmSubjectId(mikanInfo.getBgmUrl());
             if (StrUtil.isBlank(bgmId) && StrUtil.isNotBlank(mikanInfo.getUrl())) {
-                bgmId = CacheUtils.get(MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanInfo.getUrl()));
+                bgmId = cachedMikanMapping(mikanId, mikanInfo.getUrl());
             }
             if (StrUtil.isBlank(bgmId)) {
                 continue;
             }
 
-            Double score = CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId);
+            Double score = cachedBgmScore(bgmId);
             if (score != null) {
                 result.put(mikanId, new MikanBgm(mikanId, bgmId, score));
             }
@@ -357,8 +374,7 @@ public class PublicScoreService {
         for (Map.Entry<String, String> entry : mikanUrls.entrySet()) {
             String mikanId = entry.getKey();
             String url = entry.getValue();
-            String cacheKey = MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(url);
-            String cached = CacheUtils.get(cacheKey);
+            String cached = cachedMikanMapping(mikanId, url);
             if (cached != null) {
                 if (StrUtil.isNotBlank(cached)) {
                     bgmIds.put(mikanId, cached);
@@ -502,6 +518,8 @@ public class PublicScoreService {
                 bgmId,
                 StrUtil.isNotBlank(bgmId) ? SCORE_CACHE_TTL : NEGATIVE_CACHE_TTL
         );
+        persistMikanMapping(extractMikanId(mikanUrl), bgmId,
+                StrUtil.isNotBlank(bgmId) ? PERSISTENT_MAPPING_CACHE_TTL : NEGATIVE_CACHE_TTL);
         return value;
     }
 
@@ -512,7 +530,90 @@ public class PublicScoreService {
                 score,
                 score > 0 ? SCORE_CACHE_TTL : NEGATIVE_CACHE_TTL
         );
+        persistBgmScore(subjectId, score, score > 0 ? PERSISTENT_SCORE_CACHE_TTL : NEGATIVE_CACHE_TTL);
         return score;
+    }
+
+    private String cachedMikanMapping(String mikanId, String mikanUrl) {
+        if (StrUtil.isBlank(mikanUrl)) {
+            return null;
+        }
+        String cacheKey = MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanUrl);
+        String cached = CacheUtils.get(cacheKey);
+        if (cached != null || persistentCache == null || StrUtil.isBlank(mikanId) || !backgroundWorkAllowed()) {
+            return cached;
+        }
+        try {
+            long now = System.currentTimeMillis();
+            Optional<PublicScoreCacheRepository.MikanMapping> persisted =
+                    persistentCache.findMikanMapping(mikanId, now);
+            if (persisted.isEmpty()) {
+                return null;
+            }
+            PublicScoreCacheRepository.MikanMapping mapping = persisted.get();
+            long remaining = mapping.expiresAt() - now;
+            if (remaining <= 0) {
+                return null;
+            }
+            String value = StrUtil.blankToDefault(mapping.bgmId(), "");
+            CacheUtils.put(cacheKey, value, remaining);
+            return value;
+        } catch (RuntimeException e) {
+            // A durable cache failure is never allowed to make an optional
+            // public score lookup fail; the normal upstream path still works.
+            log.debug("Unable to read durable Mikan score mapping cache");
+            return null;
+        }
+    }
+
+    private Double cachedBgmScore(String bgmId) {
+        if (StrUtil.isBlank(bgmId)) {
+            return null;
+        }
+        String cacheKey = BGM_SCORE_CACHE_PREFIX + bgmId;
+        Double cached = CacheUtils.get(cacheKey);
+        if (cached != null || persistentCache == null || !backgroundWorkAllowed()) {
+            return cached;
+        }
+        try {
+            long now = System.currentTimeMillis();
+            Optional<PublicScoreCacheRepository.BgmScore> persisted = persistentCache.findBgmScore(bgmId, now);
+            if (persisted.isEmpty()) {
+                return null;
+            }
+            PublicScoreCacheRepository.BgmScore score = persisted.get();
+            long remaining = score.expiresAt() - now;
+            if (remaining <= 0) {
+                return null;
+            }
+            CacheUtils.put(cacheKey, score.score(), remaining);
+            return score.score();
+        } catch (RuntimeException e) {
+            log.debug("Unable to read durable Bangumi score cache");
+            return null;
+        }
+    }
+
+    private void persistMikanMapping(String mikanId, String bgmId, long ttlMillis) {
+        if (persistentCache == null || StrUtil.isBlank(mikanId) || ttlMillis <= 0 || !backgroundWorkAllowed()) {
+            return;
+        }
+        try {
+            persistentCache.saveMikanMapping(mikanId, bgmId, System.currentTimeMillis() + ttlMillis);
+        } catch (RuntimeException e) {
+            log.debug("Unable to save durable Mikan score mapping cache");
+        }
+    }
+
+    private void persistBgmScore(String bgmId, double score, long ttlMillis) {
+        if (persistentCache == null || StrUtil.isBlank(bgmId) || ttlMillis <= 0 || !backgroundWorkAllowed()) {
+            return;
+        }
+        try {
+            persistentCache.saveBgmScore(bgmId, score, System.currentTimeMillis() + ttlMillis);
+        } catch (RuntimeException e) {
+            log.debug("Unable to save durable Bangumi score cache");
+        }
     }
 
     /**
@@ -525,8 +626,7 @@ public class PublicScoreService {
         if (StrUtil.isBlank(mikanUrl)) {
             return;
         }
-        String cacheKey = MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanUrl);
-        String cached = CacheUtils.get(cacheKey);
+        String cached = cachedMikanMapping(extractMikanId(mikanUrl), mikanUrl);
         if (cached != null) {
             String bgmId = extractBgmSubjectId(cached);
             if (StrUtil.isNotBlank(bgmId)) {
@@ -550,7 +650,7 @@ public class PublicScoreService {
     }
 
     private void warmBgmScore(String bgmId) {
-        if (StrUtil.isBlank(bgmId) || CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId) != null) {
+        if (StrUtil.isBlank(bgmId) || cachedBgmScore(bgmId) != null) {
             return;
         }
         String flightKey = BGM_SCORE_CACHE_PREFIX + "flight:" + bgmId;
@@ -572,6 +672,10 @@ public class PublicScoreService {
             ConcurrentMap<String, CompletableFuture<V>> flights,
             ExecutorService executor
     ) {
+        if (!backgroundWorkAllowed()) {
+            return CompletableFuture.failedFuture(new IllegalStateException(
+                    "public score warmup is disabled during maintenance"));
+        }
         CompletableFuture<V> existing = flights.get(flightKey);
         if (existing != null) {
             return existing;
@@ -588,7 +692,13 @@ public class PublicScoreService {
         try {
             executor.execute(() -> {
                 try {
+                    if (!backgroundWorkAllowed()) {
+                        throw new IllegalStateException("public score warmup is disabled during maintenance");
+                    }
                     V value = callUpstream(loader, deadlineAfter(WARMUP_QUEUE_TIMEOUT_MILLIS));
+                    if (!backgroundWorkAllowed()) {
+                        throw new IllegalStateException("public score warmup is disabled during maintenance");
+                    }
                     warmupRetryAfterNanos.remove(flightKey);
                     created.complete(value);
                 } catch (InterruptedException e) {
@@ -620,6 +730,18 @@ public class PublicScoreService {
             return true;
         }
         return false;
+    }
+
+    private boolean backgroundWorkAllowed() {
+        if (taskCoordinator == null) {
+            return true;
+        }
+        try {
+            taskCoordinator.requireStartAllowed();
+            return true;
+        } catch (IllegalStateException ignored) {
+            return false;
+        }
     }
 
     private static long warmupRetryAfter() {

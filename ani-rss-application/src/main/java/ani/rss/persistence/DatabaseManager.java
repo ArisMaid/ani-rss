@@ -382,6 +382,40 @@ public final class DatabaseManager {
                 current.setAutoCommit(autoCommit);
             }
         }
+        if (version < 7) {
+            boolean autoCommit = current.getAutoCommit();
+            current.setAutoCommit(false);
+            try (Statement statement = current.createStatement()) {
+                statement.executeUpdate("""
+                        CREATE TABLE IF NOT EXISTS mikan_bgm_cache (
+                            mikan_id TEXT PRIMARY KEY,
+                            bgm_id TEXT NOT NULL,
+                            expires_at INTEGER NOT NULL,
+                            updated_at INTEGER NOT NULL
+                        )
+                        """);
+                statement.executeUpdate("""
+                        CREATE TABLE IF NOT EXISTS public_bgm_score_cache (
+                            bgm_id TEXT PRIMARY KEY,
+                            score REAL NOT NULL,
+                            expires_at INTEGER NOT NULL,
+                            updated_at INTEGER NOT NULL
+                        )
+                        """);
+                statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_mikan_bgm_cache_expiry "
+                        + "ON mikan_bgm_cache(expires_at)");
+                statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_public_bgm_score_cache_expiry "
+                        + "ON public_bgm_score_cache(expires_at)");
+                statement.executeUpdate("INSERT INTO schema_migrations(version, applied_at) VALUES (7, "
+                        + System.currentTimeMillis() + ")");
+                current.commit();
+            } catch (SQLException e) {
+                current.rollback();
+                throw e;
+            } finally {
+                current.setAutoCommit(autoCommit);
+            }
+        }
     }
 
     private static boolean hasColumn(Connection connection, String table, String column) throws SQLException {

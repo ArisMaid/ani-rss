@@ -38,7 +38,20 @@ jobs:
         uses: docker/setup-qemu-action@v4
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
+      - name: Detect Docker Hub credentials
+        id: docker_hub
+        shell: bash
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          if [[ -n "$DOCKER_USERNAME" && -n "$DOCKER_PASSWORD" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Login to Docker Hub
+        if: steps.docker_hub.outputs.enabled == 'true'
         uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
@@ -57,10 +70,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            arismaid/ani-rss:latest
             ghcr.io/arismaid/ani-rss:latest
-            arismaid/ani-rss:${{ env.version }}
             ghcr.io/arismaid/ani-rss:${{ env.version }}
+            ${{ steps.docker_hub.outputs.enabled == 'true' && 'arismaid/ani-rss:latest' || '' }}
+            ${{ steps.docker_hub.outputs.enabled == 'true' && format('arismaid/ani-rss:{0}', env.version) || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Build and push Docker image (openj9)
@@ -71,10 +84,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            arismaid/ani-rss:openj9
             ghcr.io/arismaid/ani-rss:openj9
-            arismaid/ani-rss:${{ env.version }}-openj9
             ghcr.io/arismaid/ani-rss:${{ env.version }}-openj9
+            ${{ steps.docker_hub.outputs.enabled == 'true' && 'arismaid/ani-rss:openj9' || '' }}
+            ${{ steps.docker_hub.outputs.enabled == 'true' && format('arismaid/ani-rss:{0}-openj9', env.version) || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Build and push Docker image (arm32v7)
@@ -85,9 +98,9 @@ jobs:
           platforms: linux/arm/v7
           push: true
           tags: |
-            arismaid/ani-rss:arm32v7
             ghcr.io/arismaid/ani-rss:arm32v7
-            arismaid/ani-rss:${{ env.version }}-arm32v7
             ghcr.io/arismaid/ani-rss:${{ env.version }}-arm32v7
+            ${{ steps.docker_hub.outputs.enabled == 'true' && 'arismaid/ani-rss:arm32v7' || '' }}
+            ${{ steps.docker_hub.outputs.enabled == 'true' && format('arismaid/ani-rss:{0}-arm32v7', env.version) || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

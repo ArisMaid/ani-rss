@@ -35,6 +35,7 @@ class SubscriptionDeletionServiceTest {
     private FakeSubscriptionStore store;
     private FakeRemoteTasks remoteTasks;
     private SubscriptionDeletionService service;
+    private Path subscriptionRoot;
     private Path ownedFile;
     private String originalDownloadPathTemplate;
 
@@ -47,19 +48,19 @@ class SubscriptionDeletionServiceTest {
         ownershipService = new OwnershipService(repository);
         store = new FakeSubscriptionStore(List.of(subscription("subscription", "Example")));
         remoteTasks = new FakeRemoteTasks();
-        service = new SubscriptionDeletionService(
-                ownershipService, store, remoteTasks);
 
-        Path root = Files.createDirectories(tempDir.resolve("downloads").resolve("Example"));
+        subscriptionRoot = Files.createDirectories(tempDir.resolve("downloads").resolve("Example"));
         ConfigUtil.CONFIG.setDownloadPathTemplate(
                 tempDir.resolve("downloads") + "/${title}/Season ${season}");
-        ownedFile = root.resolve("season-1").resolve("episode.mkv");
+        service = new SubscriptionDeletionService(
+                ownershipService, store, remoteTasks, ignored -> subscriptionRoot.toString());
+        ownedFile = subscriptionRoot.resolve("season-1").resolve("episode.mkv");
         Files.createDirectories(ownedFile.getParent());
         Files.writeString(ownedFile, "episode");
         long now = System.currentTimeMillis();
         repository.createPending(new DownloadOwnership(
                 "ownership", "qBittorrent", "remote-task", "info-hash", "subscription",
-                1, "1.0", root.toString(), OwnershipState.ACTIVE, now, now));
+                1, "1.0", subscriptionRoot.toString(), OwnershipState.ACTIVE, now, now));
         repository.replaceFiles("ownership", List.of(
                 new OwnedFile("ownership", "season-1/episode.mkv", "FILE", 7L)));
         remoteTasks.tasks.add(task("remote-task", "info-hash"));
@@ -139,6 +140,38 @@ class SubscriptionDeletionServiceTest {
         assertTrue(Files.isDirectory(downloadBase));
         assertEquals(0, result.deletedFiles());
         assertEquals(0, result.skippedFiles());
+    }
+
+    @Test
+    void deletesAnEmptyTemplateDirectoryForALegacySubscriptionWithoutOwnership() throws Exception {
+        Path downloadBase = tempDir.resolve("downloads");
+        Path legacyRoot = downloadBase.resolve("Legacy").resolve("Season 1");
+        Files.createDirectories(legacyRoot);
+        FakeSubscriptionStore legacyStore = new FakeSubscriptionStore(List.of(subscription("legacy", "Legacy")));
+        SubscriptionDeletionService legacyService = new SubscriptionDeletionService(
+                ownershipService, legacyStore, new FakeRemoteTasks(), ignored -> legacyRoot.toString());
+
+        SubscriptionDeletionService.DeletionResult result = legacyService.delete(List.of("legacy"), false);
+
+        assertFalse(Files.exists(legacyRoot));
+        assertFalse(Files.exists(legacyRoot.getParent()));
+        assertTrue(Files.isDirectory(downloadBase));
+        assertTrue(legacyStore.snapshot().isEmpty());
+        assertEquals(1, result.deletedSubscriptions());
+    }
+
+    @Test
+    void retainsAnInferredLegacyDirectoryInsideAnotherLiveOwnershipRoot() throws Exception {
+        Path legacyRoot = subscriptionRoot.resolve("legacy").resolve("Season 1");
+        Files.createDirectories(legacyRoot);
+        FakeSubscriptionStore legacyStore = new FakeSubscriptionStore(List.of(subscription("legacy", "Legacy")));
+        SubscriptionDeletionService legacyService = new SubscriptionDeletionService(
+                ownershipService, legacyStore, new FakeRemoteTasks(), ignored -> legacyRoot.toString());
+
+        legacyService.delete(List.of("legacy"), false);
+
+        assertTrue(Files.isDirectory(legacyRoot));
+        assertTrue(legacyStore.snapshot().isEmpty());
     }
 
     @Test

@@ -2,6 +2,7 @@ package ani.rss.service;
 
 import ani.rss.download.DownloaderResult;
 import ani.rss.entity.Ani;
+import ani.rss.entity.Config;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.ownership.DownloadOwnership;
 import ani.rss.ownership.OwnershipService;
@@ -32,31 +33,44 @@ public final class SubscriptionDeletionService {
     private final SubscriptionStore subscriptionStore;
     private final RemoteTaskGateway remoteTasks;
     private final MissingEpisodeRecoveryService recoveryService;
+    private final SubscriptionDownloadPathResolver downloadPathResolver;
     private final Object deletionLock = new Object();
 
     @Autowired
     public SubscriptionDeletionService(
             OwnershipService ownershipService,
+            DownloadService downloadService,
             MissingEpisodeRecoveryService recoveryService) {
-        this(ownershipService, new AniUtilSubscriptionStore(), new TorrentRemoteTaskGateway(), recoveryService);
+        this(ownershipService, new AniUtilSubscriptionStore(), new TorrentRemoteTaskGateway(), recoveryService,
+                downloadService::getDownloadPath);
     }
 
     SubscriptionDeletionService(
             OwnershipService ownershipService,
             SubscriptionStore subscriptionStore,
             RemoteTaskGateway remoteTasks) {
-        this(ownershipService, subscriptionStore, remoteTasks, null);
+        this(ownershipService, subscriptionStore, remoteTasks, null, ignored -> null);
     }
 
     SubscriptionDeletionService(
             OwnershipService ownershipService,
             SubscriptionStore subscriptionStore,
             RemoteTaskGateway remoteTasks,
-            MissingEpisodeRecoveryService recoveryService) {
+            SubscriptionDownloadPathResolver downloadPathResolver) {
+        this(ownershipService, subscriptionStore, remoteTasks, null, downloadPathResolver);
+    }
+
+    SubscriptionDeletionService(
+            OwnershipService ownershipService,
+            SubscriptionStore subscriptionStore,
+            RemoteTaskGateway remoteTasks,
+            MissingEpisodeRecoveryService recoveryService,
+            SubscriptionDownloadPathResolver downloadPathResolver) {
         this.ownershipService = Objects.requireNonNull(ownershipService, "ownershipService");
         this.subscriptionStore = Objects.requireNonNull(subscriptionStore, "subscriptionStore");
         this.remoteTasks = Objects.requireNonNull(remoteTasks, "remoteTasks");
         this.recoveryService = recoveryService;
+        this.downloadPathResolver = downloadPathResolver == null ? ignored -> null : downloadPathResolver;
     }
 
     /** Removes subscription metadata only; owned media and remote tasks stay intact. */
@@ -115,10 +129,15 @@ public final class SubscriptionDeletionService {
             // empty, template-scoped directory is still stale subscription
             // scaffolding.  Completion finalization passes releaseOwnership
             // as false, so it intentionally keeps its migrated directories.
+            Config configSnapshot = ConfigUtil.snapshot();
             Map<String, Path> directoryCleanupBoundaries = releaseOwnership
                     ? SubscriptionDirectoryCleanupPolicy.resolveBoundaries(
-                            byId, deletableOwnerships, ConfigUtil.snapshot())
+                            byId, deletableOwnerships, configSnapshot)
                     : Map.of();
+            List<OwnershipService.DirectoryCleanupTarget> inferredDirectoryCleanupTargets = releaseOwnership
+                    ? resolveInferredDirectoryCleanupTargets(
+                            ids, byId, subscriptionOwnerships, configSnapshot)
+                    : List.of();
 
             for (TorrentsInfo task : ownedTasks) {
                 remoteTasks.deleteTaskOnly(task);
@@ -132,7 +151,8 @@ public final class SubscriptionDeletionService {
             ownershipService.markDeleted(deletableOwnerships);
             if (releaseOwnership) {
                 ownershipService.pruneEmptyDirectoriesAfterDeletion(
-                        fileDeletionResult.deletedFiles(), deletableOwnerships, directoryCleanupBoundaries);
+                        fileDeletionResult.deletedFiles(), deletableOwnerships, directoryCleanupBoundaries,
+                        inferredDirectoryCleanupTargets);
             }
             if (recoveryService != null) {
                 for (String id : ids) {
@@ -164,6 +184,41 @@ public final class SubscriptionDeletionService {
             throw new IllegalArgumentException("at least one subscription id is required");
         }
         return normalized;
+    }
+
+    private List<OwnershipService.DirectoryCleanupTarget> resolveInferredDirectoryCleanupTargets(
+            Collection<String> subscriptionIds,
+            Map<String, Ani> subscriptions,
+            Collection<DownloadOwnership> subscriptionOwnerships,
+            Config config) {
+        Set<String> trackedSubscriptionIds = new HashSet<>();
+        if (subscriptionOwnerships != null) {
+            for (DownloadOwnership ownership : subscriptionOwnerships) {
+                if (ownership != null && ownership.state() != OwnershipState.DELETED &&
+                        ownership.subscriptionId() != null) {
+                    trackedSubscriptionIds.add(ownership.subscriptionId());
+                }
+            }
+        }
+
+        List<OwnershipService.DirectoryCleanupTarget> targets = new java.util.ArrayList<>();
+        for (String id : subscriptionIds) {
+            if (trackedSubscriptionIds.contains(id)) {
+                continue;
+            }
+            Ani subscription = subscriptions.get(id);
+            if (subscription == null) {
+                continue;
+            }
+            try {
+                SubscriptionDirectoryCleanupPolicy.resolveInferredTarget(
+                        subscription, downloadPathResolver.resolve(subscription), config)
+                        .ifPresent(targets::add);
+            } catch (RuntimeException ignored) {
+                // A failed path resolution must preserve the directory.
+            }
+        }
+        return List.copyOf(targets);
     }
 
     private static Map<String, Ani> subscriptionsById(List<Ani> subscriptions) {
@@ -252,6 +307,11 @@ public final class SubscriptionDeletionService {
         List<TorrentsInfo> list();
 
         void deleteTaskOnly(TorrentsInfo task);
+    }
+
+    @FunctionalInterface
+    interface SubscriptionDownloadPathResolver {
+        String resolve(Ani subscription);
     }
 
     private static final class AniUtilSubscriptionStore implements SubscriptionStore {

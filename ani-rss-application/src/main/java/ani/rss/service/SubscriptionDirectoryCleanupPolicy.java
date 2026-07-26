@@ -4,6 +4,7 @@ import ani.rss.commons.FileUtils;
 import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
 import ani.rss.ownership.DownloadOwnership;
+import ani.rss.ownership.OwnershipService;
 import cn.hutool.core.util.StrUtil;
 
 import java.nio.file.Path;
@@ -46,8 +47,26 @@ final class SubscriptionDirectoryCleanupPolicy {
     }
 
     static Optional<Path> resolveBoundary(Ani subscription, DownloadOwnership ownership, Config config) {
-        if (subscription == null || ownership == null || config == null ||
-                StrUtil.isBlank(ownership.saveRoot())) {
+        if (ownership == null) {
+            return Optional.empty();
+        }
+        return resolveTarget(subscription, ownership.saveRoot(), config)
+                .map(OwnershipService.DirectoryCleanupTarget::boundary);
+    }
+
+    /**
+     * Resolves the one exact directory implied by the current subscription
+     * template when a legacy subscription has no ownership record yet. The
+     * caller still checks that it is empty before removing it.
+     */
+    static Optional<OwnershipService.DirectoryCleanupTarget> resolveInferredTarget(
+            Ani subscription, String expectedSaveRoot, Config config) {
+        return resolveTarget(subscription, expectedSaveRoot, config);
+    }
+
+    private static Optional<OwnershipService.DirectoryCleanupTarget> resolveTarget(
+            Ani subscription, String saveRootValue, Config config) {
+        if (subscription == null || config == null || StrUtil.isBlank(saveRootValue)) {
             return Optional.empty();
         }
         try {
@@ -57,12 +76,13 @@ final class SubscriptionDirectoryCleanupPolicy {
                 return Optional.empty();
             }
 
-            Path saveRoot = Path.of(ownership.saveRoot()).toAbsolutePath().normalize();
+            Path saveRoot = Path.of(saveRootValue).toAbsolutePath().normalize();
             Path normalizedBoundary = boundary.get().toAbsolutePath().normalize();
-            if (saveRoot.equals(normalizedBoundary) || !saveRoot.startsWith(normalizedBoundary)) {
+            if (saveRoot.toString().contains("${") || saveRoot.equals(normalizedBoundary) ||
+                    !saveRoot.startsWith(normalizedBoundary)) {
                 return Optional.empty();
             }
-            return Optional.of(normalizedBoundary);
+            return Optional.of(new OwnershipService.DirectoryCleanupTarget(saveRoot, normalizedBoundary));
         } catch (RuntimeException ignored) {
             // A malformed or stale template must not expand deletion scope.
             return Optional.empty();

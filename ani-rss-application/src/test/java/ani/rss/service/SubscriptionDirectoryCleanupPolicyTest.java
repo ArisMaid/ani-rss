@@ -47,6 +47,25 @@ class SubscriptionDirectoryCleanupPolicyTest {
         assertTrue(staleBoundary.isEmpty());
     }
 
+    @Test
+    void resolvesAnExactLegacyTargetOnlyForADynamicTemplate() {
+        Path downloadBase = tempDir.resolve("downloads");
+        Ani subscription = new Ani().setTitle("Example").setSeason(1);
+
+        Optional<ani.rss.ownership.OwnershipService.DirectoryCleanupTarget> target =
+                SubscriptionDirectoryCleanupPolicy.resolveInferredTarget(
+                        subscription, downloadBase.resolve("Example").resolve("Season 1").toString(),
+                        new Config().setDownloadPathTemplate(downloadBase + "/${title}/Season ${season}"));
+        Optional<ani.rss.ownership.OwnershipService.DirectoryCleanupTarget> staticTarget =
+                SubscriptionDirectoryCleanupPolicy.resolveInferredTarget(
+                        subscription, downloadBase.resolve("shared").toString(),
+                        new Config().setDownloadPathTemplate(downloadBase.resolve("shared").toString()));
+
+        assertTrue(target.isPresent());
+        assertEquals(downloadBase.toAbsolutePath().normalize(), target.orElseThrow().boundary());
+        assertTrue(staticTarget.isEmpty());
+    }
+
     private static DownloadOwnership ownershipAt(Path saveRoot) {
         long now = System.currentTimeMillis();
         return new DownloadOwnership("ownership", "qBittorrent", "task", "hash", "subscription",

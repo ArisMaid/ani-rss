@@ -606,8 +606,24 @@ public class OwnershipService {
             Collection<VerifiedOwnedFile> deletedFiles,
             Collection<DownloadOwnership> releasedOwnerships,
             Map<String, Path> cleanupBoundaries) {
+        return pruneEmptyDirectoriesAfterDeletion(
+                deletedFiles, releasedOwnerships, cleanupBoundaries, List.of());
+    }
+
+    /**
+     * Removes empty directories left by explicit deletion, including an exact
+     * template-derived legacy subscription directory when no ownership record
+     * was ever created. Inferred targets are deliberately skipped whenever
+     * they sit inside a live ownership root.
+     */
+    public int pruneEmptyDirectoriesAfterDeletion(
+            Collection<VerifiedOwnedFile> deletedFiles,
+            Collection<DownloadOwnership> releasedOwnerships,
+            Map<String, Path> cleanupBoundaries,
+            Collection<DirectoryCleanupTarget> inferredTargets) {
         if ((deletedFiles == null || deletedFiles.isEmpty()) &&
-                (releasedOwnerships == null || releasedOwnerships.isEmpty())) {
+                (releasedOwnerships == null || releasedOwnerships.isEmpty()) &&
+                (inferredTargets == null || inferredTargets.isEmpty())) {
             return 0;
         }
 
@@ -647,6 +663,18 @@ public class OwnershipService {
                                     candidates, root, boundary));
                 } catch (Exception ignored) {
                     // Unverified roots must not authorize directory deletion.
+                }
+            }
+        }
+        if (inferredTargets != null) {
+            for (DirectoryCleanupTarget target : inferredTargets) {
+                try {
+                    if (target == null || isInsideLiveOwnershipRoot(target.root(), protectedRoots)) {
+                        continue;
+                    }
+                    addInferredDirectoryCandidates(candidates, target);
+                } catch (Exception ignored) {
+                    // An inferred path must never expand directory cleanup.
                 }
             }
         }
@@ -862,6 +890,19 @@ public class OwnershipService {
         return false;
     }
 
+    private static boolean isInsideLiveOwnershipRoot(Path candidate, Collection<Path> protectedRoots) {
+        if (candidate == null) {
+            return true;
+        }
+        Path normalizedCandidate = candidate.toAbsolutePath().normalize();
+        for (Path protectedRoot : protectedRoots) {
+            if (normalizedCandidate.startsWith(protectedRoot)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static boolean deleteEmptyDirectory(Path directory) {
         try {
             if (PathPolicy.isFileSystemRoot(directory) || Files.isSymbolicLink(directory) ||
@@ -934,6 +975,18 @@ public class OwnershipService {
         for (Path current = root; current != null && !current.equals(boundary); current = current.getParent()) {
             candidates.add(current);
         }
+    }
+
+    private static void addInferredDirectoryCandidates(
+            Set<Path> candidates, DirectoryCleanupTarget target) {
+        Path root = target.root().toAbsolutePath().normalize();
+        Path boundary = target.boundary().toAbsolutePath().normalize();
+        if (PathPolicy.isFileSystemRoot(root) || PathPolicy.isFileSystemRoot(boundary) ||
+                root.equals(boundary) || !root.startsWith(boundary)) {
+            return;
+        }
+        requireNoLinksFromFileSystemRoot(root);
+        addCandidatesWithinCleanupScope(candidates, root, boundary);
     }
 
     private static Path safeOwnedPath(Path root, OwnedFile ownedFile) {
@@ -1133,6 +1186,10 @@ public class OwnershipService {
         public FileDeletionResult {
             deletedFiles = List.copyOf(deletedFiles == null ? List.of() : deletedFiles);
         }
+    }
+
+    /** An exact, non-recursive cleanup scope derived from a subscription template. */
+    public record DirectoryCleanupTarget(Path root, Path boundary) {
     }
 
     public record MediaVerification(boolean manifestAvailable, List<OwnedFile> missingFiles) {

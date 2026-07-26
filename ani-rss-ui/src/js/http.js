@@ -357,13 +357,6 @@ export let login = (user) => {
     })
 }
 
-export let setupStatus = () => api.get('api/v2/auth/setup-status')
-
-export let setup = (data) => api.post('api/v2/auth/setup', data).then(res => {
-    markAuthenticated(res.data.csrfToken)
-    return res
-})
-
 export let bgmOAuthState = () => api.post('api/v2/auth/oauth-state/bgm')
 
 export let logout = () => api.post('api/v2/auth/logout')

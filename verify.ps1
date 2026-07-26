@@ -99,12 +99,12 @@ if ($env:ANI_RSS_SKIP_DOCKER_SMOKE -ne '1') {
         if (-not $match.Success) {
             throw "Unable to determine smoke-test port from: $binding"
         }
-        $uri = "http://127.0.0.1:$($match.Groups[1].Value)/api/v2/auth/setup-status"
+        $uri = "http://127.0.0.1:$($match.Groups[1].Value)/"
         $ready = $false
         for ($attempt = 1; $attempt -le 45; $attempt++) {
             try {
-                $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 2
-                if ($null -ne $response.required) {
+                $response = Invoke-WebRequest -Uri $uri -Method Get -TimeoutSec 2 -UseBasicParsing
+                if ($response.StatusCode -eq 200 -and $response.Content -match '<div id="app"') {
                     $ready = $true
                     break
                 }

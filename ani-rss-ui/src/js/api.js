@@ -120,5 +120,5 @@ let checkTimestampRange = (timestamp, isMilli = true) => {
 
 const isCsrfExempt = value => {
     const path = new URL(value, document.baseURI).pathname
-    return path === '/api/v2/auth/login' || path === '/api/v2/auth/setup'
+    return path === '/api/v2/auth/login'
 }

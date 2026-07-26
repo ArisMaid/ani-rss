@@ -8,6 +8,7 @@ import ani.rss.entity.Login;
 import ani.rss.util.other.AuthUtil;
 import ani.rss.util.other.ConfigUtil;
 import cn.hutool.crypto.SecureUtil;
+import com.google.gson.JsonObject;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -16,10 +17,8 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.LinkOption;
-import java.nio.file.attribute.PosixFileAttributeView;
-import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -32,15 +31,16 @@ import java.util.regex.Pattern;
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
-/** Browser authentication boundary with one-time setup and server sessions. */
+/** Browser authentication boundary with default credentials and server sessions. */
 @Service
 public class AuthService {
     public static final String SESSION_COOKIE = "ANI_SESSION";
     public static final String CSRF_COOKIE = "ANI_CSRF";
     public static final String CSRF_HEADER = "X-CSRF-Token";
     private static final String STATE_FILE = "auth-state.v2.json";
-    private static final String SETUP_CODE_FILE = "initial-setup-code.txt";
-    private static final long SETUP_CODE_TTL = Duration.ofMinutes(15).toMillis();
+    private static final String LEGACY_SETUP_CODE_FILE = "initial-setup-code.txt";
+    public static final String DEFAULT_USERNAME = "Aris";
+    private static final String DEFAULT_PASSWORD_HASH = "$argon2id$v=19$m=16384,t=2,p=1$jRb7PAbkuB/Y/KrATXIRdg$r8N7hVPgPfm9e1duDT6bmA9eB8qtFYXL5rBab0msJI4";
     private static final long LEGACY_MIGRATION_TTL = Duration.ofDays(30).toMillis();
     private static final long OAUTH_STATE_TTL = Duration.ofMinutes(10).toMillis();
     private static final Pattern USERNAME = Pattern.compile("[A-Za-z0-9._-]{1,64}");
@@ -52,6 +52,7 @@ public class AuthService {
     private static AuthState state;
     private static Path loadedStatePath;
     private static boolean preserveSessionsOnNextStateLoad;
+    private static boolean rewriteStateOnNextInitialize;
 
     public static void initialize() {
         synchronized (STATE_LOCK) {
@@ -63,25 +64,19 @@ public class AuthService {
                 }
                 preserveSessionsOnNextStateLoad = false;
             }
+            boolean stateChanged = rewriteStateOnNextInitialize;
+            rewriteStateOnNextInitialize = false;
             Config config = ConfigUtil.snapshot();
             Login login = config.getLogin();
-            boolean setupRequired = login == null || isBlank(login.getUsername()) || isBlank(login.getPassword());
             long now = System.currentTimeMillis();
-            if (setupRequired) {
-                boolean stateChanged = clearLegacyMigrationState();
-                if (isBlank(state.setupCodeHash) || state.setupExpiresAt <= now ||
-                        state.setupUsed || !Files.isRegularFile(setupCodePath(), LinkOption.NOFOLLOW_LINKS)) {
-                    String code = randomToken(24);
-                    state.setupCodeHash = PASSWORDS.encode(code);
-                    state.setupExpiresAt = now + SETUP_CODE_TTL;
-                    state.setupUsed = false;
-                    writeState(path, state);
-                    writeSetupCode(code);
-                } else if (stateChanged) {
-                    writeState(path, state);
-                }
+            if (isUnconfiguredLogin(login)) {
+                Config candidate = ConfigUtil.copy(config);
+                candidate.setLogin(new Login()
+                        .setUsername(DEFAULT_USERNAME)
+                        .setPassword(DEFAULT_PASSWORD_HASH));
+                ConfigUtil.sync(candidate);
+                stateChanged |= clearLegacyMigrationState();
             } else {
-                boolean stateChanged = clearSetupState();
                 if (isLegacyHash(login.getPassword())) {
                     if (state.legacyMigrationUntil == 0 && isBlank(state.legacyTokenHash)) {
                         state.legacyMigrationUntil = now + LEGACY_MIGRATION_TTL;
@@ -94,13 +89,11 @@ public class AuthService {
                 } else if (state.legacyMigrationUntil <= now || isBlank(state.legacyTokenHash)) {
                     stateChanged |= clearLegacyMigrationState();
                 }
-                if (stateChanged) {
-                    writeState(path, state);
-                }
             }
-            if (!setupRequired && Files.exists(setupCodePath(), LinkOption.NOFOLLOW_LINKS)) {
-                deleteSetupCode();
+            if (stateChanged) {
+                writeState(path, state);
             }
+            removeLegacySetupCode();
             loadedStatePath = path;
         }
     }
@@ -114,6 +107,7 @@ public class AuthService {
             state = null;
             loadedStatePath = null;
             preserveSessionsOnNextStateLoad = preserveSessions;
+            rewriteStateOnNextInitialize = false;
             if (!preserveSessions) {
                 SESSIONS.clear();
             }
@@ -142,42 +136,6 @@ public class AuthService {
         return SecureUtil.sha256(username + "\u0000" + password);
     }
 
-    public static SetupStatus setupStatus() {
-        initialize();
-        synchronized (STATE_LOCK) {
-            Config config = ConfigUtil.snapshot();
-            Login login = config.getLogin();
-            boolean required = login == null || isBlank(login.getUsername()) || isBlank(login.getPassword());
-            return new SetupStatus(required, required ? state.setupExpiresAt : 0);
-        }
-    }
-
-    public static LoginResult setup(String code, String username, String password,
-                                    HttpServletRequest request, HttpServletResponse response) {
-        initialize();
-        synchronized (STATE_LOCK) {
-            SetupStatus status = setupStatus();
-            if (!status.required() || state.setupUsed || status.expiresAt() <= System.currentTimeMillis() ||
-                    isBlank(code) || !PASSWORDS.matches(code, state.setupCodeHash)) {
-                throw new AuthenticationFailureException("setup code is invalid or expired");
-            }
-            validateCredentials(username, password);
-            Config candidate = ConfigUtil.snapshot();
-            candidate.setLogin(new Login()
-                    .setUsername(username)
-                    .setPassword(PASSWORDS.encode(password)));
-            ConfigUtil.sync(candidate);
-            state.setupUsed = true;
-            state.setupCodeHash = null;
-            state.setupExpiresAt = 0;
-            clearLegacyMigrationState();
-            writeState(statePath(), state);
-            deleteSetupCode();
-            SESSIONS.clear();
-            return issueSession(username, request, response);
-        }
-    }
-
     public static LoginResult login(String username, String password,
                                     HttpServletRequest request, HttpServletResponse response) {
         initialize();
@@ -187,7 +145,7 @@ public class AuthService {
         Config config = ConfigUtil.snapshot();
         Login stored = config.getLogin();
         if (stored == null || isBlank(stored.getUsername()) || isBlank(stored.getPassword())) {
-            throw new IllegalStateException("initial account setup is required");
+            throw new IllegalStateException("login configuration is incomplete");
         }
         if (!MessageDigest.isEqual(username.getBytes(java.nio.charset.StandardCharsets.UTF_8),
                 stored.getUsername().getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
@@ -353,10 +311,6 @@ public class AuthService {
         }
     }
 
-    public static boolean setupRequired() {
-        return setupStatus().required();
-    }
-
     private static LoginResult issueSession(String username, HttpServletRequest request,
                                             HttpServletResponse response) {
         initialize();
@@ -459,7 +413,7 @@ public class AuthService {
     }
 
     private static boolean isAuthEndpoint(String uri) {
-        return "/api/v2/auth/login".equals(uri) || "/api/v2/auth/setup".equals(uri);
+        return "/api/v2/auth/login".equals(uri);
     }
 
     private static void validateCredentials(String username, String password) {
@@ -492,16 +446,6 @@ public class AuthService {
         return SecureUtil.sha256(AuthUtil.getAuth(AuthUtil.getLogin()));
     }
 
-    private static boolean clearSetupState() {
-        if (isBlank(state.setupCodeHash) && state.setupExpiresAt == 0 && state.setupUsed) {
-            return false;
-        }
-        state.setupCodeHash = null;
-        state.setupExpiresAt = 0;
-        state.setupUsed = true;
-        return true;
-    }
-
     private static boolean clearLegacyMigrationState() {
         if (state.legacyMigrationUntil == 0 && isBlank(state.legacyTokenHash)) {
             return false;
@@ -529,6 +473,10 @@ public class AuthService {
         return value == null || value.isBlank();
     }
 
+    private static boolean isUnconfiguredLogin(Login login) {
+        return login == null || (isBlank(login.getUsername()) && isBlank(login.getPassword()));
+    }
+
     private static Path statePath() {
         return ConfigUtil.getConfigDir().toPath().toAbsolutePath().normalize().resolve(STATE_FILE);
     }
@@ -542,7 +490,7 @@ public class AuthService {
                 throw new IllegalStateException("auth state is not a regular file");
             }
             AuthState candidate = parseState(path);
-            if (candidate.setupExpiresAt < 0 || candidate.legacyMigrationUntil < 0 ||
+            if (candidate.legacyMigrationUntil < 0 ||
                     (!isBlank(candidate.legacyTokenHash) &&
                             !candidate.legacyTokenHash.matches("(?i)[0-9a-f]{64}"))) {
                 throw new IllegalStateException("auth state contains invalid values");
@@ -554,21 +502,34 @@ public class AuthService {
 
     private static AuthState readState(Path path) {
         try {
+            rewriteStateOnNextInitialize = false;
             if (!Files.exists(path)) {
                 return new AuthState();
             }
-            return parseState(path);
+            String content = Files.readString(path);
+            AuthState loaded = parseState(content);
+            rewriteStateOnNextInitialize = containsLegacySetupState(content);
+            return loaded;
         } catch (IOException | RuntimeException e) {
             throw new IllegalStateException("load auth state failed", e);
         }
     }
 
     private static AuthState parseState(Path path) throws IOException {
-        AuthState loaded = GsonStatic.GSON.fromJson(Files.readString(path), AuthState.class);
+        return parseState(Files.readString(path));
+    }
+
+    private static AuthState parseState(String content) {
+        AuthState loaded = GsonStatic.GSON.fromJson(content, AuthState.class);
         if (loaded == null) {
             throw new IllegalStateException("auth state is empty");
         }
         return loaded;
+    }
+
+    private static boolean containsLegacySetupState(String content) {
+        JsonObject json = GsonStatic.GSON.fromJson(content, JsonObject.class);
+        return json != null && (json.has("setupCodeHash") || json.has("setupExpiresAt") || json.has("setupUsed"));
     }
 
     private static void writeState(Path path, AuthState value) {
@@ -579,38 +540,16 @@ public class AuthService {
         }
     }
 
-    private static void writeSetupCode(String code) {
-        Path path = setupCodePath();
+    private static void removeLegacySetupCode() {
+        Path path = ConfigUtil.getConfigDir().toPath().toAbsolutePath().normalize()
+                .resolve(LEGACY_SETUP_CODE_FILE);
         try {
-            if (Files.exists(path, LinkOption.NOFOLLOW_LINKS) && Files.isSymbolicLink(path)) {
-                throw new IOException("setup-code path is a symbolic link");
+            if (!Files.isSymbolicLink(path) && Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                Files.deleteIfExists(path);
             }
-            AtomicFileWriter.writeUtf8(path, code + System.lineSeparator());
-            if (Files.getFileAttributeView(path, PosixFileAttributeView.class) != null) {
-                Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-------"));
-            }
-        } catch (IOException e) {
-            throw new IllegalStateException("save initial setup code failed", e);
+        } catch (IOException ignored) {
+            // The obsolete setup-code file is never read; a failed cleanup must not disable login.
         }
-    }
-
-    private static void deleteSetupCode() {
-        Path path = setupCodePath();
-        try {
-            if (Files.exists(path, LinkOption.NOFOLLOW_LINKS) && Files.isSymbolicLink(path)) {
-                throw new IOException("setup-code path is a symbolic link");
-            }
-            Files.deleteIfExists(path);
-        } catch (IOException e) {
-            throw new IllegalStateException("remove initial setup code failed", e);
-        }
-    }
-
-    private static Path setupCodePath() {
-        return ConfigUtil.getConfigDir().toPath().toAbsolutePath().normalize().resolve(SETUP_CODE_FILE);
-    }
-
-    public record SetupStatus(boolean required, long expiresAt) {
     }
 
     public record LoginResult(String username, String csrfToken, long expiresAt) {
@@ -637,9 +576,6 @@ public class AuthService {
     }
 
     private static final class AuthState {
-        private String setupCodeHash;
-        private long setupExpiresAt;
-        private boolean setupUsed;
         private long legacyMigrationUntil;
         private String legacyTokenHash;
     }

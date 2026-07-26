@@ -28,22 +28,6 @@ public class AuthController {
                 credentials.username(), credentials.password(), request, response));
     }
 
-    @GetMapping("/setup-status")
-    public AuthService.SetupStatus setupStatus() {
-        return AuthService.setupStatus();
-    }
-
-    @PostMapping("/setup")
-    public AuthService.LoginResult setup(@RequestBody SetupRequest setup,
-                                         HttpServletRequest request,
-                                         HttpServletResponse response) {
-        if (setup == null) {
-            throw new IllegalArgumentException("setup request is required");
-        }
-        return guarded(() -> AuthService.setup(
-                setup.code(), setup.username(), setup.password(), request, response));
-    }
-
     @PostMapping("/logout")
     @Auth
     public void logout(HttpServletRequest request, HttpServletResponse response) {
@@ -86,9 +70,6 @@ public class AuthController {
     }
 
     public record Credentials(String username, String password) {
-    }
-
-    public record SetupRequest(String code, String username, String password) {
     }
 
     public record CsrfResponse(String csrfToken) {

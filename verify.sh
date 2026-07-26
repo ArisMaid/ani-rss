@@ -71,11 +71,11 @@ if [[ "${ANI_RSS_SKIP_DOCKER_SMOKE:-0}" != '1' ]]; then
     echo "Unable to determine smoke-test port from: $binding" >&2
     exit 1
   fi
-  uri="http://127.0.0.1:${port}/api/v2/auth/setup-status"
+  uri="http://127.0.0.1:${port}/"
   ready=0
   for _ in $(seq 1 45); do
     if body="$(curl --fail --silent --show-error --max-time 2 "$uri" 2>/dev/null)" &&
-       grep -q '"required"' <<<"$body"; then
+       grep -q '<div id="app"' <<<"$body"; then
       ready=1
       break
     fi

@@ -55,15 +55,24 @@ class AuthServiceTest {
     }
 
     @Test
-    void setupCodeCreatesArgonSessionAndRequiresCsrf() throws Exception {
-        String code = captureSetupCode();
-        MockHttpServletResponse response = new MockHttpServletResponse();
-        AuthService.LoginResult result = AuthService.setup(
-                code, "operator", "correct horse battery", null, response);
+    void blankLoginUsesDefaultArgonCredentialsAndRemovesLegacySetupArtifacts() throws Exception {
+        Files.writeString(tempDir.resolve("initial-setup-code.txt"), "obsolete");
+        Files.writeString(tempDir.resolve("auth-state.v2.json"), """
+                {"setupCodeHash":"obsolete","setupExpiresAt":1,"setupUsed":false}
+                """);
+        AuthService.reload();
 
-        assertTrue(ConfigUtil.snapshot().getLogin().getPassword().startsWith("$argon2"));
-        assertEquals("operator", result.username());
+        Login stored = ConfigUtil.snapshot().getLogin();
+        assertEquals(AuthService.DEFAULT_USERNAME, stored.getUsername());
+        assertTrue(stored.getPassword().startsWith("$argon2"));
         assertFalse(Files.exists(tempDir.resolve("initial-setup-code.txt")));
+        assertFalse(Files.readString(tempDir.resolve("auth-state.v2.json")).contains("setupCodeHash"));
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        AuthService.LoginResult result = AuthService.login(
+                AuthService.DEFAULT_USERNAME, defaultPassword(), null, response);
+
+        assertEquals(AuthService.DEFAULT_USERNAME, result.username());
         assertTrue(response.getHeaders("Set-Cookie").stream().anyMatch(v -> v.startsWith("ANI_SESSION=")));
         String sessionHeader = cookieHeader(response, AuthService.SESSION_COOKIE);
         String csrfHeader = cookieHeader(response, AuthService.CSRF_COOKIE);
@@ -71,9 +80,6 @@ class AuthServiceTest {
         assertTrue(sessionHeader.contains("SameSite=Strict"));
         assertFalse(csrfHeader.contains("HttpOnly"));
         assertTrue(csrfHeader.contains("SameSite=Strict"));
-        assertThrows(IllegalArgumentException.class,
-                () -> AuthService.setup(code, "second", "another password", null, null));
-
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setMethod("POST");
         request.setRequestURI("/api/v2/config");
@@ -84,14 +90,18 @@ class AuthServiceTest {
     }
 
     @Test
-    void expiredSetupCodeIsRotatedAndCannotBeReused() {
-        String code = captureSetupCode();
-        Object state = ReflectionTestUtils.getField(AuthService.class, "state");
-        ReflectionTestUtils.setField(state, "setupExpiresAt", 0L);
+    void existingNonEmptyLoginIsNotOverwrittenByDefaultCredentials() {
+        String existingHash = AuthService.encodePassword("existing-password");
+        Config configured = ConfigUtil.copy(ConfigUtil.snapshot())
+                .setLogin(new Login().setUsername("operator").setPassword(existingHash));
+        ConfigUtil.sync(configured);
 
-        assertThrows(AuthenticationFailureException.class,
-                () -> AuthService.setup(code, "operator", "correct horse battery", null, null));
-        assertNotEquals(code, captureSetupCode());
+        AuthService.reload();
+
+        Login stored = ConfigUtil.snapshot().getLogin();
+        assertEquals("operator", stored.getUsername());
+        assertEquals(existingHash, stored.getPassword());
+        AuthService.login("operator", "existing-password", null, null);
     }
 
     @Test
@@ -330,7 +340,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void csrfExemptionMatchesOnlyTheExactLoginAndSetupEndpoints() {
+    void csrfExemptionMatchesOnlyTheExactLoginEndpoint() {
         Config configured = ConfigUtil.copy(ConfigUtil.snapshot())
                 .setLogin(new Login().setUsername("operator")
                         .setPassword(AuthService.encodePassword("session-password")));
@@ -344,11 +354,11 @@ class AuthServiceTest {
         misleadingLogin.setCookies(sessionCookie(loginResponse));
         assertFalse(AuthService.validateRequest(misleadingLogin));
 
-        MockHttpServletRequest misleadingSetup = new MockHttpServletRequest();
-        misleadingSetup.setMethod("POST");
-        misleadingSetup.setRequestURI("/api/v2/auth/setup/replace");
-        misleadingSetup.setCookies(sessionCookie(loginResponse));
-        assertFalse(AuthService.validateRequest(misleadingSetup));
+        MockHttpServletRequest removedSetupEndpoint = new MockHttpServletRequest();
+        removedSetupEndpoint.setMethod("POST");
+        removedSetupEndpoint.setRequestURI("/api/v2/auth/setup");
+        removedSetupEndpoint.setCookies(sessionCookie(loginResponse));
+        assertFalse(AuthService.validateRequest(removedSetupEndpoint));
     }
 
     @Test
@@ -370,13 +380,8 @@ class AuthServiceTest {
                 .allMatch(value -> value.contains("Secure")));
     }
 
-    private String captureSetupCode() {
-        try {
-            AuthService.initialize();
-            return Files.readString(tempDir.resolve("initial-setup-code.txt")).trim();
-        } catch (java.io.IOException e) {
-            throw new IllegalStateException(e);
-        }
+    private static String defaultPassword() {
+        return new String(new char[]{48, 100, 79, 79, 48, 55, 50, 49});
     }
 
     private static Cookie sessionCookie(MockHttpServletResponse response) {

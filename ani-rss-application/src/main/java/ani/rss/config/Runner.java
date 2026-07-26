@@ -43,9 +43,6 @@ public class Runner implements ApplicationRunner {
         try {
             ConfigUtil.load();
             AuthService.initialize();
-            if (AuthService.setupRequired()) {
-                log.warn("首次设置码已写入配置目录中的 initial-setup-code.txt（15 分钟内有效）");
-            }
             backupService.backup();
 
             AniUtil.load();

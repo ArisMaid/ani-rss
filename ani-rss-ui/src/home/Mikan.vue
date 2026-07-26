@@ -172,7 +172,11 @@ const SCORE_BATCH_SIZE = 48
 const MAX_CONCURRENT_SCORE_BATCHES = 2
 // Slow Mikan detail lookups are queued behind a bounded server-side worker pool.
 // Keep the picker responsive while allowing that cold queue enough time to drain.
-const SCORE_RETRY_DELAYS_MILLIS = [0, 250, 500, 1_000, 2_000, 4_000, 6_000, 6_000, 6_000]
+// The initial score request only queues remote Mikan/Bangumi work. Keep the
+// middle polls close together so a valid result that completes just after a
+// four-second upstream timeout is reflected promptly instead of waiting for a
+// second long client-side backoff interval.
+const SCORE_RETRY_DELAYS_MILLIS = [0, 250, 500, 750, 1_000, 1_000, 1_500, 2_000, 3_000, 4_000]
 const DEFAULT_LIST_PRELOAD_TTL_MILLIS = 30_000
 
 const emptyMikanData = () => ({

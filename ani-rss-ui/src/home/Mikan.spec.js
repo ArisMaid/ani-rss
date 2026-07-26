@@ -233,6 +233,43 @@ describe('Mikan season changes', () => {
     expect(wrapper.text()).toContain('9.1')
   })
 
+  it('rechecks a cold visible score before the former long polling gap', async () => {
+    vi.useFakeTimers()
+    vi.mocked(http.mikan).mockResolvedValue(response('2026 spring', 'prompt score refresh', 0))
+    vi.mocked(http.mikanScores)
+        .mockResolvedValueOnce({data: {scores: {}, subscribedBgmIds: [], retryableMikanIds: ['0']}})
+        .mockResolvedValueOnce({data: {scores: {}, subscribedBgmIds: [], retryableMikanIds: ['0']}})
+        .mockResolvedValueOnce({data: {scores: {}, subscribedBgmIds: [], retryableMikanIds: ['0']}})
+        .mockResolvedValueOnce({data: {scores: {}, subscribedBgmIds: [], retryableMikanIds: ['0']}})
+        .mockResolvedValueOnce({data: {scores: {}, subscribedBgmIds: [], retryableMikanIds: ['0']}})
+        .mockResolvedValueOnce({data: {scores: {}, subscribedBgmIds: [], retryableMikanIds: ['0']}})
+        .mockResolvedValueOnce({
+          data: {
+            scores: {'0': {bgmId: '44', score: 8.8}},
+            subscribedBgmIds: [],
+            retryableMikanIds: []
+          }
+        })
+
+    const wrapper = mount(Mikan, {
+      global: {
+        stubs,
+        directives: {loading: {}}
+      }
+    })
+
+    wrapper.vm.show()
+    await flushPromises()
+
+    // The seventh probe occurs at five seconds. Previously the fifth probe
+    // ran at 3.75 seconds and the next one waited until 7.75 seconds.
+    await vi.advanceTimersByTimeAsync(5_000)
+    await flushPromises()
+
+    expect(http.mikanScores).toHaveBeenCalledTimes(7)
+    expect(wrapper.text()).toContain('8.8')
+  })
+
   it('uses the server score cap for two concurrent seasonal batches', async () => {
     const items = Array.from({length: 49}, (_, index) => ({
       url: `https://mikanani.me/Home/Bangumi/${index + 1}`,
@@ -320,7 +357,7 @@ describe('Mikan season changes', () => {
   it('keeps polling a cold score queue after the initial retry window', async () => {
     vi.useFakeTimers()
     vi.mocked(http.mikan).mockResolvedValue(response('2026 summer', 'late public score', 0))
-    for (let attempt = 0; attempt < 6; attempt += 1) {
+    for (let attempt = 0; attempt < 9; attempt += 1) {
       vi.mocked(http.mikanScores).mockResolvedValueOnce({
         data: {scores: {}, subscribedBgmIds: [], retryableMikanIds: ['0']}
       })
@@ -342,15 +379,15 @@ describe('Mikan season changes', () => {
 
     wrapper.vm.show()
     await flushPromises()
-    await vi.advanceTimersByTimeAsync(7_750)
+    await vi.advanceTimersByTimeAsync(10_000)
     await flushPromises()
 
-    expect(http.mikanScores).toHaveBeenCalledTimes(6)
+    expect(http.mikanScores).toHaveBeenCalledTimes(9)
 
-    await vi.advanceTimersByTimeAsync(6_000)
+    await vi.advanceTimersByTimeAsync(4_000)
     await flushPromises()
 
-    expect(http.mikanScores).toHaveBeenCalledTimes(7)
+    expect(http.mikanScores).toHaveBeenCalledTimes(10)
     expect(wrapper.text()).toContain('8.8')
   })
 

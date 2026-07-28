@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -40,6 +41,32 @@ class ConfigStoreTest {
         assertEquals("http://new-host", runtime.getDownloadToolHost());
         assertEquals("http://new-host", Files.readString(tempDir.resolve("config.json"))
                 .contains("http://new-host") ? "http://new-host" : "");
+    }
+
+    @Test
+    void securityProjectionChangesOnlyAfterAConfigurationIsInstalled() {
+        Config runtime = ConfigUtil.copy(ConfigUtil.CONFIG);
+        ConfigStore store = new ConfigStore(runtime, () -> tempDir.resolve("config.json"), value -> { });
+        String originalApiKey = runtime.getApiKey();
+        Config candidate = ConfigUtil.copy(runtime)
+                .setApiKey("new-api-key")
+                .setInnerIP(true)
+                .setAllowCors(true)
+                .setReverseProxyTrustIpListEnabled(true)
+                .setReverseProxyTrustIpList(new ArrayList<>(List.of("192.0.2.10")));
+
+        runtime.setApiKey("uncommitted-api-key");
+        assertEquals(originalApiKey, store.securityConfiguration().apiKey());
+
+        store.commit(candidate);
+        ConfigStore.SecurityConfiguration installed = store.securityConfiguration();
+        candidate.getReverseProxyTrustIpList().add("192.0.2.11");
+        assertEquals("new-api-key", installed.apiKey());
+        assertTrue(installed.innerIp());
+        assertTrue(installed.allowCors());
+        assertEquals(List.of("192.0.2.10"), installed.reverseProxyTrustIpList());
+        assertThrows(UnsupportedOperationException.class,
+                () -> installed.reverseProxyTrustIpList().add("192.0.2.12"));
     }
 
     @Test

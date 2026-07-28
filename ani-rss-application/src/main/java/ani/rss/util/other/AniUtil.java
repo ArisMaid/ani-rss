@@ -377,7 +377,7 @@ public class AniUtil {
             if (Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS) && !isOverride) {
                 return directory + "/" + filename;
             }
-            writeCoverAtomically(dir, target, fetched.bytes(), isOverride);
+            writeCoverAtomically(dir, target, fetched, isOverride);
             return directory + "/" + filename;
         } catch (Exception e) {
             log.error("保存封面失败 type:{}", e.getClass().getSimpleName());
@@ -385,11 +385,22 @@ public class AniUtil {
         }
     }
 
+    private static void writeCoverAtomically(Path directory, Path target,
+                                             SafeImageFetcher.FetchedImage image,
+                                             boolean replace) throws java.io.IOException {
+        writeCoverAtomically(directory, target, image::writeTo, replace);
+    }
+
     private static void writeCoverAtomically(Path directory, Path target, byte[] bytes,
+                                             boolean replace) throws java.io.IOException {
+        writeCoverAtomically(directory, target, path -> Files.write(path, bytes), replace);
+    }
+
+    private static void writeCoverAtomically(Path directory, Path target, CoverWriter writer,
                                              boolean replace) throws java.io.IOException {
         Path temporary = Files.createTempFile(directory, ".cover-", ".part");
         try {
-            Files.write(temporary, bytes);
+            writer.write(temporary);
             try {
                 if (replace) {
                     Files.move(temporary, target,
@@ -411,6 +422,11 @@ public class AniUtil {
         } finally {
             Files.deleteIfExists(temporary);
         }
+    }
+
+    @FunctionalInterface
+    private interface CoverWriter {
+        void write(Path path) throws java.io.IOException;
     }
 
     /**

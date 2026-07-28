@@ -13,6 +13,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
@@ -136,6 +137,56 @@ class RecoveryRepositoryTest {
                 repository.find(ani.getId(), item.getInfoHash()).orElseThrow().state());
         assertEquals(MissingEpisodeRecoveryService.SubmissionDisposition.TRACKED,
                 service.prepareEligible(ani, item, true));
+    }
+
+    @Test
+    void observingAnUnchangedTrackedItemDoesNotRewriteIt() {
+        Ani ani = new Ani().setId("subscription").setSeason(1);
+        Item item = new Item().setInfoHash("stable")
+                .setTorrent("magnet:?xt=urn:btih:stable")
+                .setEpisode(1.0);
+
+        RecoveryRepository.Observation created = repository.observeWithStatus(ani, item);
+        RecoveryRepository.Observation existing = repository.observeWithStatus(ani, item);
+
+        assertTrue(created.created());
+        assertFalse(existing.created());
+        assertEquals(created.record().updatedAt(), existing.record().updatedAt());
+    }
+
+    @Test
+    void satisfiedHistoryIsReconciledOnlyWhenItsAuditIsDue() {
+        Ani ani = new Ani().setId("subscription").setSeason(1);
+        Item item = new Item().setInfoHash("satisfied")
+                .setTorrent("magnet:?xt=urn:btih:satisfied");
+        RecoveryRecord record = repository.observe(ani, item);
+        repository.markSatisfied(ani.getId(), item.getInfoHash());
+
+        assertTrue(repository.listForReconciliation(ani.getId(), 0L).isEmpty());
+        DatabaseManager.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                    "UPDATE missing_episode_recovery SET updated_at = 1 WHERE recovery_id = ?")) {
+                statement.setString(1, record.recoveryId());
+                statement.executeUpdate();
+                return null;
+            }
+        });
+        assertEquals(1, repository.listForReconciliation(ani.getId(), 1L).size());
+
+        repository.touchSatisfiedAudit(record.recoveryId());
+        assertTrue(repository.listForReconciliation(ani.getId(), 1L).isEmpty());
+    }
+
+    @Test
+    void outstandingCheckDoesNotLoadSatisfiedHistory() {
+        Ani ani = new Ani().setId("subscription").setSeason(1);
+        Item item = new Item().setInfoHash("outstanding")
+                .setTorrent("magnet:?xt=urn:btih:outstanding");
+        repository.observe(ani, item);
+
+        assertTrue(repository.hasOutstanding(ani.getId()));
+        repository.markSatisfied(ani.getId(), item.getInfoHash());
+        assertFalse(repository.hasOutstanding(ani.getId()));
     }
 
     @SuppressWarnings("unchecked")

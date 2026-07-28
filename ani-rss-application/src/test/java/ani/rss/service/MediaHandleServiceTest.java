@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.io.RandomAccessFile;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -247,6 +248,44 @@ class MediaHandleServiceTest {
         otherClient.setRemoteAddr("192.0.2.41");
         assertThrows(ani.rss.auth.AuthenticationFailureException.class,
                 () -> handles.resolve(external, otherClient));
+    }
+
+    @Test
+    void evictsTheOldestHandleWhenTheBoundIsReached() throws Exception {
+        MockHttpServletResponse loginResponse = new MockHttpServletResponse();
+        AuthService.LoginResult login = AuthService.login(
+                "media-user", "media-pass", new MockHttpServletRequest(), loginResponse);
+        MockHttpServletRequest request = authenticatedRequest(loginResponse, login.csrfToken(), "GET");
+        Path file = tempDir.resolve("video.mp4");
+        Files.writeString(file, "0123456789", StandardCharsets.UTF_8);
+        AtomicLong now = new AtomicLong(1_000L);
+        MediaHandleService handles = new MediaHandleService(1_000L, 2, now::get);
+
+        String first = handles.issue(file, tempDir, request);
+        String second = handles.issue(file, tempDir, request);
+        String third = handles.issue(file, tempDir, request);
+
+        assertThrows(IllegalArgumentException.class, () -> handles.resolve(first, request));
+        assertEquals(file.toRealPath(), handles.resolve(second, request).path());
+        assertEquals(file.toRealPath(), handles.resolve(third, request).path());
+    }
+
+    @Test
+    void expiresHandlesWithoutAFullMapSweep() throws Exception {
+        MockHttpServletResponse loginResponse = new MockHttpServletResponse();
+        AuthService.LoginResult login = AuthService.login(
+                "media-user", "media-pass", new MockHttpServletRequest(), loginResponse);
+        MockHttpServletRequest request = authenticatedRequest(loginResponse, login.csrfToken(), "GET");
+        Path file = tempDir.resolve("video.mp4");
+        Files.writeString(file, "0123456789", StandardCharsets.UTF_8);
+        AtomicLong now = new AtomicLong(1_000L);
+        MediaHandleService handles = new MediaHandleService(100L, 10, now::get);
+        String handle = handles.issue(file, tempDir, request);
+
+        now.set(1_100L);
+        assertEquals(file.toRealPath(), handles.resolve(handle, request).path());
+        now.incrementAndGet();
+        assertThrows(IllegalArgumentException.class, () -> handles.resolve(handle, request));
     }
 
     private static void assertRange(MediaController controller, String handle,

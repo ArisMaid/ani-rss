@@ -440,6 +440,24 @@ public final class DatabaseManager {
                 current.setAutoCommit(autoCommit);
             }
         }
+        if (version < 9) {
+            boolean autoCommit = current.getAutoCommit();
+            current.setAutoCommit(false);
+            try (Statement statement = current.createStatement()) {
+                statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_download_ownership_remote "
+                        + "ON download_ownership(downloader_type, remote_task_id)");
+                statement.executeUpdate("CREATE INDEX IF NOT EXISTS idx_missing_episode_recovery_audit "
+                        + "ON missing_episode_recovery(subscription_id, state, updated_at)");
+                statement.executeUpdate("INSERT INTO schema_migrations(version, applied_at) VALUES (9, "
+                        + System.currentTimeMillis() + ")");
+                current.commit();
+            } catch (SQLException e) {
+                current.rollback();
+                throw e;
+            } finally {
+                current.setAutoCommit(autoCommit);
+            }
+        }
     }
 
     private static boolean hasColumn(Connection connection, String table, String column) throws SQLException {

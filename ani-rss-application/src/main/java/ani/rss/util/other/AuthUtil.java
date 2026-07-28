@@ -6,15 +6,14 @@ import ani.rss.auth.enums.AuthType;
 import ani.rss.commons.CacheUtils;
 import ani.rss.commons.ExceptionUtils;
 import ani.rss.commons.GsonStatic;
-import ani.rss.entity.Config;
 import ani.rss.entity.Global;
 import ani.rss.entity.Login;
 import ani.rss.entity.web.Result;
 import ani.rss.entity.web.ResultCode;
 import ani.rss.exception.ResultException;
+import ani.rss.persistence.ConfigStore;
 import cn.hutool.core.net.NetUtil;
 import cn.hutool.core.text.StrFormatter;
-import cn.hutool.core.util.ObjectUtil;
 import cn.hutool.core.util.ReflectUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.SecureUtil;
@@ -45,8 +44,7 @@ public class AuthUtil {
         if (StrUtil.isBlank(key)) {
             return;
         }
-        Config config = ConfigUtil.CONFIG;
-        Integer loginEffectiveHours = config.getLoginEffectiveHours();
+        int loginEffectiveHours = ConfigUtil.securityConfiguration().loginEffectiveHours();
         CacheUtils.put("auth_key", key, TimeUnit.HOURS.toMillis(loginEffectiveHours));
     }
 
@@ -54,15 +52,14 @@ public class AuthUtil {
      * 刷新密钥
      */
     public static String resetKey() {
-        Config config = ConfigUtil.CONFIG;
+        ConfigStore.SecurityConfiguration config = ConfigUtil.securityConfiguration();
 
         // 登录有效时间/小时
-        Integer loginEffectiveHours = config.getLoginEffectiveHours();
-        Boolean multiLoginForbidden = config.getMultiLoginForbidden();
+        int loginEffectiveHours = config.loginEffectiveHours();
 
-        String key = config.getUuid();
+        String key = config.uuid();
 
-        if (multiLoginForbidden) {
+        if (config.multiLoginForbidden()) {
             // 禁止多端登录
             key = UUID.randomUUID().toString();
         }
@@ -80,9 +77,11 @@ public class AuthUtil {
     }
 
     public static Login getLogin() {
-        Config config = ConfigUtil.CONFIG;
-        Login login = ObjectUtil.clone(config.getLogin());
-        if (config.getVerifyLoginIp()) {
+        ConfigStore.SecurityConfiguration config = ConfigUtil.securityConfiguration();
+        Login login = new Login()
+                .setUsername(config.loginUsername())
+                .setPassword(config.loginPassword());
+        if (config.verifyLoginIp()) {
             login.setIp(getIp());
         } else {
             login.setIp("");
@@ -104,12 +103,11 @@ public class AuthUtil {
             if (request == null) {
                 return "未知";
             }
-            Config config = ConfigUtil.CONFIG;
-            List<String> reverseProxyTrustIpList = config.getReverseProxyTrustIpList();
-            Boolean reverseProxyTrustIpListEnabled = config.getReverseProxyTrustIpListEnabled();
+            ConfigStore.SecurityConfiguration config = ConfigUtil.securityConfiguration();
+            List<String> reverseProxyTrustIpList = config.reverseProxyTrustIpList();
 
             String ip = request.getRemoteAddr();
-            if (!reverseProxyTrustIpListEnabled) {
+            if (!config.reverseProxyTrustIpListEnabled()) {
                 // 未启用 受信任的反向代理IP
                 return ip;
             }
@@ -192,9 +190,7 @@ public class AuthUtil {
      * @param isAdd 累加计数
      */
     public static void limitLoginAttempts(Boolean isAdd) {
-        Config config = ConfigUtil.CONFIG;
-        boolean limitLoginAttempts = config.getLimitLoginAttempts();
-        if (!limitLoginAttempts) {
+        if (!ConfigUtil.securityConfiguration().limitLoginAttempts()) {
             return;
         }
         String ip = AuthUtil.getIp();

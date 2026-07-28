@@ -22,7 +22,10 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -32,7 +35,7 @@ import java.util.regex.Pattern;
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
-/** Browser authentication boundary with default credentials and server sessions. */
+/** Browser authentication boundary with sanitized default credentials and server sessions. */
 @Service
 public class AuthService {
     public static final String SESSION_COOKIE = "ANI_SESSION";
@@ -40,7 +43,7 @@ public class AuthService {
     public static final String CSRF_HEADER = "X-CSRF-Token";
     private static final String STATE_FILE = "auth-state.v2.json";
     private static final String LEGACY_SETUP_CODE_FILE = "initial-setup-code.txt";
-    public static final String DEFAULT_USERNAME = "Aris";
+    public static final String DEFAULT_USERNAME = "admin";
     private static final long LEGACY_MIGRATION_TTL = Duration.ofDays(30).toMillis();
     private static final long OAUTH_STATE_TTL = Duration.ofMinutes(10).toMillis();
     private static final Pattern USERNAME = Pattern.compile("[A-Za-z0-9._-]{1,64}");
@@ -49,14 +52,26 @@ public class AuthService {
     private static final Map<String, Session> SESSIONS = new ConcurrentHashMap<>();
     private static final Map<String, OAuthState> OAUTH_STATES = new ConcurrentHashMap<>();
     private static final Object STATE_LOCK = new Object();
-    private static AuthState state;
-    private static Path loadedStatePath;
+    private static final String REQUEST_AUTH_ATTRIBUTE = AuthService.class.getName() + ".request-auth";
+    private static volatile AuthState state;
+    private static volatile Path loadedStatePath;
+    private static volatile AuthConfiguration authConfiguration;
+    private static volatile long loadedConfigRevision = -1;
     private static boolean preserveSessionsOnNextStateLoad;
     private static boolean rewriteStateOnNextInitialize;
 
     public static void initialize() {
+        long revision = ConfigUtil.revision();
+        Path path = statePath();
+        if (authConfiguration != null && revision == loadedConfigRevision && path.equals(loadedStatePath)) {
+            return;
+        }
         synchronized (STATE_LOCK) {
-            Path path = statePath();
+            revision = ConfigUtil.revision();
+            path = statePath();
+            if (authConfiguration != null && revision == loadedConfigRevision && path.equals(loadedStatePath)) {
+                return;
+            }
             if (state == null || !path.equals(loadedStatePath)) {
                 state = readState(path);
                 if (!preserveSessionsOnNextStateLoad) {
@@ -68,22 +83,31 @@ public class AuthService {
             rewriteStateOnNextInitialize = false;
             Config config = ConfigUtil.snapshot();
             Login login = config.getLogin();
-            if (isUnconfiguredLogin(login)) {
+            boolean unconfigured = isUnconfiguredLogin(login);
+            String initialPassword = null;
+            if (unconfigured) {
+                initialPassword = initialPassword();
                 Config candidate = ConfigUtil.copy(config);
                 candidate.setLogin(new Login()
                         .setUsername(DEFAULT_USERNAME)
-                        .setPassword(md5(defaultPassword())));
+                        .setPassword(md5(initialPassword)));
                 ConfigUtil.sync(candidate);
-                stateChanged |= ensureStrongPasswordState(defaultPassword());
-                stateChanged |= reconcileLegacyMigrationState();
-            } else {
-                stateChanged |= reconcileLegacyMigrationState();
+                config = ConfigUtil.snapshot();
+                revision = ConfigUtil.revision();
             }
+            AuthConfiguration nextConfiguration = AuthConfiguration.from(config);
+            if (unconfigured) {
+                stateChanged |= ensureStrongPasswordState(
+                        initialPassword, nextConfiguration.credentialFingerprint());
+            }
+            stateChanged |= reconcileLegacyMigrationState(nextConfiguration);
             if (stateChanged) {
                 writeState(path, state);
             }
             removeLegacySetupCode();
             loadedStatePath = path;
+            authConfiguration = nextConfiguration;
+            loadedConfigRevision = revision;
         }
     }
 
@@ -95,6 +119,8 @@ public class AuthService {
         synchronized (STATE_LOCK) {
             state = null;
             loadedStatePath = null;
+            authConfiguration = null;
+            loadedConfigRevision = -1;
             preserveSessionsOnNextStateLoad = preserveSessions;
             rewriteStateOnNextInitialize = false;
             if (!preserveSessions) {
@@ -110,9 +136,9 @@ public class AuthService {
     }
 
     public static void invalidateLegacyMigration() {
-        initialize();
+        AuthConfiguration config = configuration();
         synchronized (STATE_LOCK) {
-            if (disableLegacyMigrationForCurrentCredentials()) {
+            if (disableLegacyMigrationForCurrentCredentials(config.credentialFingerprint())) {
                 writeState(statePath(), state);
             }
         }
@@ -121,9 +147,13 @@ public class AuthService {
     /** Stores an Argon2 verifier alongside an upstream-compatible MD5 config hash. */
     public static void recordPasswordVerifier(String password) {
         validatePassword(password);
-        initialize();
+        AuthConfiguration config = configuration();
+        storePasswordVerifier(password, config);
+    }
+
+    private static void storePasswordVerifier(String password, AuthConfiguration config) {
         synchronized (STATE_LOCK) {
-            if (ensureStrongPasswordState(password)) {
+            if (ensureStrongPasswordState(password, config.credentialFingerprint())) {
                 writeState(statePath(), state);
             }
         }
@@ -140,30 +170,26 @@ public class AuthService {
     }
 
     public static String credentialFingerprint() {
-        Login login = ConfigUtil.snapshot().getLogin();
-        String username = login == null || login.getUsername() == null ? "" : login.getUsername();
-        String password = login == null || login.getPassword() == null ? "" : login.getPassword();
-        return SecureUtil.sha256(username + "\u0000" + password);
+        var config = ConfigUtil.securityConfiguration();
+        return credentialFingerprint(config.loginUsername(), config.loginPassword());
     }
 
     public static LoginResult login(String username, String password,
                                     HttpServletRequest request, HttpServletResponse response) {
-        initialize();
+        AuthConfiguration config = configuration();
         if (isBlank(username) || isBlank(password)) {
             throw new IllegalArgumentException("username and password are required");
         }
-        Config config = ConfigUtil.snapshot();
-        Login stored = config.getLogin();
-        if (stored == null || isBlank(stored.getUsername()) || isBlank(stored.getPassword())) {
+        if (isBlank(config.username()) || isBlank(config.password())) {
             throw new IllegalStateException("login configuration is incomplete");
         }
         if (!MessageDigest.isEqual(username.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                stored.getUsername().getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+                config.username().getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
             throw new AuthenticationFailureException("invalid username or password");
         }
 
-        String encoded = stored.getPassword();
-        String fingerprint = credentialFingerprint();
+        String encoded = config.password();
+        String fingerprint = config.credentialFingerprint();
         String verifier;
         synchronized (STATE_LOCK) {
             verifier = fingerprint.equals(state.passwordFingerprint) ? state.argon2PasswordHash : null;
@@ -189,7 +215,7 @@ public class AuthService {
             ConfigUtil.sync(candidate);
             SESSIONS.clear();
         }
-        recordPasswordVerifier(password);
+        storePasswordVerifier(password, config);
         return issueSession(username, request, response);
     }
 
@@ -197,18 +223,24 @@ public class AuthService {
         if (request == null) {
             return false;
         }
-        initialize();
+        long now = System.currentTimeMillis();
+        Object cached = request.getAttribute(REQUEST_AUTH_ATTRIBUTE);
+        if (cached instanceof RequestAuthentication authentication &&
+                authentication.session() == SESSIONS.get(authentication.token()) &&
+                authentication.session().expiresAt >= now) {
+            return true;
+        }
+        AuthConfiguration config = configuration();
         String token = sessionToken(request);
         if (isBlank(token)) {
             return false;
         }
         Session session = SESSIONS.get(token);
-        if (session == null || session.expiresAt < System.currentTimeMillis()) {
+        if (session == null || session.expiresAt < now) {
             SESSIONS.remove(token);
             return false;
         }
-        Config config = ConfigUtil.snapshot();
-        if (Boolean.TRUE.equals(config.getVerifyLoginIp()) &&
+        if (config.verifyLoginIp() &&
                 !constantEquals(session.ip, AuthUtil.getIp(request))) {
             SESSIONS.remove(token);
             return false;
@@ -219,6 +251,8 @@ public class AuthService {
                 return false;
             }
         }
+        request.setAttribute(REQUEST_AUTH_ATTRIBUTE,
+                new RequestAuthentication(token, session, SecureUtil.sha256(token)));
         return true;
     }
 
@@ -258,23 +292,25 @@ public class AuthService {
         if (!validateLegacyRequest(request)) {
             throw new AuthenticationFailureException("legacy token migration is not available");
         }
-        return issueSession(ConfigUtil.snapshot().getLogin().getUsername(), request, response);
+        return issueSession(configuration().username(), request, response);
     }
 
     public static LoginResult loginFromIpWhitelist(HttpServletRequest request, HttpServletResponse response) {
-        Config config = ConfigUtil.snapshot();
-        Login login = config.getLogin();
-        if (login == null || isBlank(login.getUsername()) || isBlank(login.getPassword()) ||
+        AuthConfiguration config = configuration();
+        if (isBlank(config.username()) || isBlank(config.password()) ||
                 !new IpWhitelist().apply(request)) {
             throw new AuthenticationFailureException("IP whitelist login is not available");
         }
-        return issueSession(login.getUsername(), request, response);
+        return issueSession(config.username(), request, response);
     }
 
     public static void logout(HttpServletRequest request, HttpServletResponse response) {
         String token = sessionToken(request);
         if (!isBlank(token)) {
             SESSIONS.remove(token);
+        }
+        if (request != null) {
+            request.removeAttribute(REQUEST_AUTH_ATTRIBUTE);
         }
         if (response != null) {
             addCookie(response, SESSION_COOKIE, "", request, 0, true);
@@ -292,6 +328,11 @@ public class AuthService {
     }
 
     public static String sessionBinding(HttpServletRequest request) {
+        if (request != null && request.getAttribute(REQUEST_AUTH_ATTRIBUTE) instanceof RequestAuthentication cached &&
+                cached.session() == SESSIONS.get(cached.token()) &&
+                cached.session().expiresAt >= System.currentTimeMillis()) {
+            return cached.binding();
+        }
         String token = sessionToken(request);
         Session session = SESSIONS.get(token);
         if (session == null || session.expiresAt < System.currentTimeMillis()) {
@@ -332,14 +373,13 @@ public class AuthService {
 
     private static LoginResult issueSession(String username, HttpServletRequest request,
                                             HttpServletResponse response) {
-        initialize();
-        Config config = ConfigUtil.snapshot();
+        AuthConfiguration config = configuration();
         long ttl = sessionTtl(config);
         String token = randomToken(32);
         String csrf = randomToken(24);
         long expiresAt = System.currentTimeMillis() + ttl;
-        String ip = Boolean.TRUE.equals(config.getVerifyLoginIp()) ? AuthUtil.getIp(request) : "";
-        if (Boolean.TRUE.equals(config.getMultiLoginForbidden())) {
+        String ip = config.verifyLoginIp() ? AuthUtil.getIp(request) : "";
+        if (config.multiLoginForbidden()) {
             SESSIONS.clear();
         }
         SESSIONS.put(token, new Session(username, csrf, ip, expiresAt));
@@ -375,10 +415,8 @@ public class AuthService {
         }
     }
 
-    private static long sessionTtl(Config config) {
-        Integer configured = config == null ? null : config.getLoginEffectiveHours();
-        int hours = configured == null ? 24 : Math.max(1, Math.min(configured, 8760));
-        return Duration.ofHours(hours).toMillis();
+    private static long sessionTtl(AuthConfiguration config) {
+        return Duration.ofHours(config.loginEffectiveHours()).toMillis();
     }
 
     private static void addCookie(HttpServletResponse response, String name, String value,
@@ -401,10 +439,9 @@ public class AuthService {
         if (request.isSecure()) {
             return true;
         }
-        Config config = ConfigUtil.snapshot();
-        if (!Boolean.TRUE.equals(config.getReverseProxyTrustIpListEnabled()) ||
-                config.getReverseProxyTrustIpList() == null ||
-                !config.getReverseProxyTrustIpList().contains(request.getRemoteAddr())) {
+        AuthConfiguration config = configuration();
+        if (!config.reverseProxyTrustIpListEnabled() ||
+                !config.reverseProxyTrustIpList().contains(request.getRemoteAddr())) {
             return false;
         }
         String forwardedProto = request.getHeader("X-Forwarded-Proto");
@@ -481,21 +518,19 @@ public class AuthService {
         return SecureUtil.md5(value).toLowerCase(Locale.ROOT);
     }
 
-    private static String defaultPassword() {
-        return new String(new char[]{48, 100, 79, 79, 48, 55, 50, 49});
+    private static String initialPassword() {
+        return "admin";
     }
 
     private static String legacyTokenFingerprint() {
         return SecureUtil.sha256(AuthUtil.getAuth(AuthUtil.getLogin()));
     }
 
-    private static boolean reconcileLegacyMigrationState() {
-        Config config = ConfigUtil.snapshot();
-        Login login = config.getLogin();
-        if (login == null || !isLegacyHash(login.getPassword())) {
+    private static boolean reconcileLegacyMigrationState(AuthConfiguration config) {
+        if (!isLegacyHash(config.password())) {
             return clearLegacyMigrationState();
         }
-        String fingerprint = credentialFingerprint();
+        String fingerprint = config.credentialFingerprint();
         long now = System.currentTimeMillis();
         boolean changed = false;
         if (isBlank(state.legacyMigrationCredentialFingerprint)) {
@@ -531,8 +566,7 @@ public class AuthService {
         return true;
     }
 
-    private static boolean disableLegacyMigrationForCurrentCredentials() {
-        String fingerprint = credentialFingerprint();
+    private static boolean disableLegacyMigrationForCurrentCredentials(String fingerprint) {
         if (state.legacyMigrationUntil == 0 && isBlank(state.legacyTokenHash) &&
                 constantEquals(fingerprint, state.legacyMigrationCredentialFingerprint)) {
             return false;
@@ -543,8 +577,7 @@ public class AuthService {
         return true;
     }
 
-    private static boolean ensureStrongPasswordState(String password) {
-        String fingerprint = credentialFingerprint();
+    private static boolean ensureStrongPasswordState(String password, String fingerprint) {
         if (constantEquals(fingerprint, state.passwordFingerprint) &&
                 matchesArgon2(password, state.argon2PasswordHash)) {
             return false;
@@ -583,6 +616,15 @@ public class AuthService {
 
     private static boolean isUnconfiguredLogin(Login login) {
         return login == null || (isBlank(login.getUsername()) && isBlank(login.getPassword()));
+    }
+
+    private static AuthConfiguration configuration() {
+        initialize();
+        AuthConfiguration current = authConfiguration;
+        if (current == null) {
+            throw new IllegalStateException("authentication configuration is unavailable");
+        }
+        return current;
     }
 
     private static Path statePath() {
@@ -686,6 +728,44 @@ public class AuthService {
     }
 
     private record OAuthState(String provider, String binding, long expiresAt) {
+    }
+
+    private record RequestAuthentication(String token, Session session, String binding) {
+    }
+
+    private record AuthConfiguration(
+            String username,
+            String password,
+            String credentialFingerprint,
+            boolean verifyLoginIp,
+            boolean multiLoginForbidden,
+            int loginEffectiveHours,
+            boolean reverseProxyTrustIpListEnabled,
+            List<String> reverseProxyTrustIpList) {
+        private static AuthConfiguration from(Config config) {
+            Login login = config == null ? null : config.getLogin();
+            String username = login == null ? null : login.getUsername();
+            String password = login == null ? null : login.getPassword();
+            Integer configuredHours = config == null ? null : config.getLoginEffectiveHours();
+            int hours = configuredHours == null ? 24 : Math.max(1, Math.min(configuredHours, 8760));
+            List<String> trustedProxies = config == null || config.getReverseProxyTrustIpList() == null
+                    ? List.of()
+                    : Collections.unmodifiableList(new ArrayList<>(config.getReverseProxyTrustIpList()));
+            return new AuthConfiguration(
+                    username,
+                    password,
+                    AuthService.credentialFingerprint(username, password),
+                    config != null && Boolean.TRUE.equals(config.getVerifyLoginIp()),
+                    config != null && Boolean.TRUE.equals(config.getMultiLoginForbidden()),
+                    hours,
+                    config != null && Boolean.TRUE.equals(config.getReverseProxyTrustIpListEnabled()),
+                    trustedProxies);
+        }
+    }
+
+    private static String credentialFingerprint(String username, String password) {
+        return SecureUtil.sha256(Objects.toString(username, "") + "\u0000" +
+                Objects.toString(password, ""));
     }
 
     private static final class AuthState {

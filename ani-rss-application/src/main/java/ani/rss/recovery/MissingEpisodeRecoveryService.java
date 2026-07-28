@@ -43,6 +43,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class MissingEpisodeRecoveryService {
     static final Duration INITIAL_BACKOFF = Duration.ofMinutes(15);
     static final Duration MAX_BACKOFF = Duration.ofHours(6);
+    private static final Duration SATISFIED_AUDIT_INTERVAL = Duration.ofHours(6);
 
     private static final Set<TorrentsStateEnum> TERMINAL_STATES = Set.of(
             TorrentsStateEnum.queuedUP,
@@ -91,9 +92,8 @@ public class MissingEpisodeRecoveryService {
         if (!valid(ani, item)) {
             return SubmissionDisposition.NEW;
         }
-        boolean tracked = repository.find(ani.getId(), item.getInfoHash()).isPresent();
-        repository.observe(ani, item);
-        if (tracked) {
+        RecoveryRepository.Observation observation = repository.observeWithStatus(ani, item);
+        if (!observation.created()) {
             return SubmissionDisposition.TRACKED;
         }
         if (cachedInput) {
@@ -164,7 +164,9 @@ public class MissingEpisodeRecoveryService {
         String downloaderType = client.configurationSnapshot().getDownloadToolType();
         Map<String, TorrentsInfo> tasks = tasksByHash(observedTasks);
         long now = System.currentTimeMillis();
-        for (RecoveryRecord record : repository.listRecoverable(ani.getId())) {
+        long satisfiedAuditBefore = now - SATISFIED_AUDIT_INTERVAL.toMillis();
+        for (RecoveryRecord record : repository.listForReconciliation(
+                ani.getId(), satisfiedAuditBefore)) {
             Item item = item(record);
             if (item == null || StrUtil.isBlank(item.getInfoHash())) {
                 scheduleRetry(record, "RECOVERY_ITEM_UNAVAILABLE");
@@ -180,6 +182,7 @@ public class MissingEpisodeRecoveryService {
             DownloadOwnership ownership = ownershipOpt.orElse(null);
             if (ownership != null && ownership.state() == OwnershipState.QUARANTINED) {
                 // Quarantine is an intentional local removal with a restore path.
+                touchSatisfiedAudit(record);
                 continue;
             }
 
@@ -200,7 +203,11 @@ public class MissingEpisodeRecoveryService {
             if (ownership != null) {
                 OwnershipService.MediaVerification verification = ownershipService.verifyMediaFiles(ownership);
                 if (verification.manifestAvailable() && verification.healthy()) {
-                    repository.markSatisfied(record.subscriptionId(), record.infoHash());
+                    if (record.state() == RecoveryState.SATISFIED) {
+                        repository.touchSatisfiedAudit(record.recoveryId());
+                    } else {
+                        repository.markSatisfied(record.subscriptionId(), record.infoHash());
+                    }
                     continue;
                 }
                 if (verification.manifestAvailable() && record.state() == RecoveryState.SATISFIED) {
@@ -230,7 +237,9 @@ public class MissingEpisodeRecoveryService {
 
             // A legacy local-file match has no ownership manifest. Do not turn
             // a previously satisfied, unowned item into an automatic download.
-            if (record.state() != RecoveryState.SATISFIED && due(record, now)) {
+            if (record.state() == RecoveryState.SATISFIED) {
+                touchSatisfiedAudit(record);
+            } else if (due(record, now)) {
                 requeue(record, ani, item, observedTasks);
             }
         }
@@ -245,8 +254,7 @@ public class MissingEpisodeRecoveryService {
     }
 
     public boolean hasOutstanding(String subscriptionId) {
-        return repository.listRecoverable(subscriptionId).stream()
-                .anyMatch(record -> record.state() != RecoveryState.SATISFIED);
+        return repository.hasOutstanding(subscriptionId);
     }
 
     private void reconcileOpenList(
@@ -263,7 +271,11 @@ public class MissingEpisodeRecoveryService {
             return;
         }
         if (present.get()) {
-            repository.markSatisfied(record.subscriptionId(), record.infoHash());
+            if (record.state() == RecoveryState.SATISFIED) {
+                repository.touchSatisfiedAudit(record.recoveryId());
+            } else {
+                repository.markSatisfied(record.subscriptionId(), record.infoHash());
+            }
             return;
         }
         if (due(record, System.currentTimeMillis())) {
@@ -354,6 +366,12 @@ public class MissingEpisodeRecoveryService {
 
     private static boolean due(RecoveryRecord record, long now) {
         return record.nextAttemptAt() <= now;
+    }
+
+    private void touchSatisfiedAudit(RecoveryRecord record) {
+        if (record.state() == RecoveryState.SATISFIED) {
+            repository.touchSatisfiedAudit(record.recoveryId());
+        }
     }
 
     private static boolean isTerminal(TorrentsInfo task) {

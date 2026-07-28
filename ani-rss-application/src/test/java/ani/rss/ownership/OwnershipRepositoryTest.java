@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -73,6 +74,62 @@ class OwnershipRepositoryTest {
                     ownership("new-" + state.name(), "new-subscription", hash, OwnershipState.PENDING,
                             System.currentTimeMillis())));
         }
+    }
+
+    @Test
+    void taskLookupPreservesStatePriorityAcrossIndexedIdentityQueries() {
+        DownloadOwnership activeRemote = repository.createPending(ownership(
+                "remote-active", "remote-subscription", "remote-hash",
+                OwnershipState.ACTIVE, System.currentTimeMillis()));
+        repository.createPending(ownership(
+                "hash-pending", "hash-subscription", "target-hash",
+                OwnershipState.PENDING, System.currentTimeMillis()));
+
+        assertEquals(activeRemote.ownershipId(), repository.findForTask(
+                        "qBittorrent", "old-remote-task", "target-hash")
+                .orElseThrow()
+                .ownershipId());
+        assertEquals("hash-pending", repository.findForTask(
+                        "qBittorrent", null, "target-hash")
+                .orElseThrow()
+                .ownershipId());
+    }
+
+    @Test
+    void fileManifestRoundTripsAnUnknownSizeWithoutTurningItIntoZero() {
+        DownloadOwnership current = repository.createPending(ownership(
+                "unknown-size", "subscription", "unknown-size-hash",
+                OwnershipState.ACTIVE, System.currentTimeMillis()));
+        repository.replaceFiles(current.ownershipId(), List.of(
+                new OwnedFile(current.ownershipId(), "not-visible-yet.mkv", "FILE", null)));
+
+        assertEquals(null, repository.listFiles(current.ownershipId()).get(0).size());
+    }
+
+    @Test
+    void liveFileReferencesAreLoadedWithoutDeletedOrPendingOwnerships() {
+        long now = System.currentTimeMillis();
+        DownloadOwnership active = repository.createPending(ownership(
+                "active", "subscription", "active-hash", OwnershipState.ACTIVE, now));
+        DownloadOwnership legacy = repository.createPending(ownership(
+                "legacy", "subscription", "legacy-hash", OwnershipState.LEGACY_ADOPTED, now));
+        DownloadOwnership deleted = repository.createPending(ownership(
+                "deleted", "subscription", "deleted-hash", OwnershipState.ACTIVE, now));
+        DownloadOwnership pending = repository.createPending(ownership(
+                "pending", "subscription", "pending-hash", OwnershipState.PENDING, now));
+        for (DownloadOwnership ownership : List.of(active, legacy, deleted, pending)) {
+            repository.replaceFiles(ownership.ownershipId(), List.of(
+                    new OwnedFile(ownership.ownershipId(), ownership.ownershipId() + ".mkv", "FILE", 42L)));
+        }
+        repository.updateState(deleted.ownershipId(), OwnershipState.DELETED);
+
+        List<OwnershipRepository.OwnedPathReference> references = repository.listLiveFileReferences();
+
+        assertEquals(Set.of("active", "legacy"), references.stream()
+                .map(OwnershipRepository.OwnedPathReference::ownershipId)
+                .collect(java.util.stream.Collectors.toSet()));
+        assertTrue(references.stream().allMatch(reference ->
+                reference.saveRoot().equals(tempDir.resolve("downloads").toString())));
     }
 
     private DownloadOwnership ownership(

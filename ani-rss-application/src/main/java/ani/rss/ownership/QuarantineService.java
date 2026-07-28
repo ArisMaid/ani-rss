@@ -1,6 +1,7 @@
 package ani.rss.ownership;
 
 import ani.rss.commons.PathPolicy;
+import ani.rss.ownership.FileTransactionSupport.Move;
 import ani.rss.recovery.MissingEpisodeRecoveryService;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -8,7 +9,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -129,7 +129,7 @@ public class QuarantineService {
             }
             revalidate(plan);
 
-            List<MovedFile> moved = new ArrayList<>();
+            List<Move> moved = new ArrayList<>();
             try {
                 for (PlanFileState file : plan.files()) {
                     Path targetParent = requireParent(file.target());
@@ -137,7 +137,7 @@ public class QuarantineService {
                     PathPolicy.requireNoSymbolicLinks(file.root(), targetParent);
                     PathPolicy.realPathWithin(file.root(), targetParent);
                     Files.move(file.source(), file.target(), StandardCopyOption.ATOMIC_MOVE);
-                    moved.add(new MovedFile(file.source(), file.target(), file.root()));
+                    moved.add(new Move(file.source(), file.target()));
                 }
                 long now = System.currentTimeMillis();
                 long purgeAfter = now + DEFAULT_RETENTION.toMillis();
@@ -229,7 +229,7 @@ public class QuarantineService {
             }
         }
 
-        List<MovedFile> restored = new ArrayList<>();
+        List<Move> restored = new ArrayList<>();
         try {
             for (RestoreFile file : files) {
                 Path targetParent = requireParent(file.target());
@@ -237,7 +237,7 @@ public class QuarantineService {
                 PathPolicy.requireNoSymbolicLinks(file.root(), targetParent);
                 PathPolicy.realPathWithin(file.root(), targetParent);
                 Files.move(file.source(), file.target(), StandardCopyOption.ATOMIC_MOVE);
-                restored.add(new MovedFile(file.source(), file.target(), file.root()));
+                restored.add(new Move(file.source(), file.target()));
             }
             repository.markQuarantineOperationRestored(operationId);
             for (RestoreFile file : files) {
@@ -395,30 +395,25 @@ public class QuarantineService {
     private void ensureNoOwnershipConflicts(List<PlanFileState> selectedFiles) {
         Map<Path, Set<String>> ownersByPath = new HashMap<>();
         Map<String, Set<String>> ownersByFileKey = new HashMap<>();
-        for (DownloadOwnership ownership : repository.listAll()) {
-            if (ownership.state() != OwnershipState.ACTIVE && ownership.state() != OwnershipState.LEGACY_ADOPTED) {
-                continue;
-            }
-            Path root = Path.of(ownership.saveRoot()).toAbsolutePath().normalize();
-            for (OwnedFile ownedFile : repository.listFiles(ownership.ownershipId())) {
-                try {
-                    Path candidate = PathPolicy.resolveWithin(root, ownedFile.relativePath());
-                    ownersByPath.computeIfAbsent(candidate, ignored -> new HashSet<>())
-                            .add(ownership.ownershipId());
-                    if (Files.exists(candidate, LinkOption.NOFOLLOW_LINKS) &&
-                            Files.isRegularFile(candidate, LinkOption.NOFOLLOW_LINKS) &&
-                            !Files.isSymbolicLink(candidate)) {
-                        BasicFileAttributes attributes = Files.readAttributes(
-                                candidate, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-                        String key = fileKey(attributes);
-                        if (key != null) {
-                            ownersByFileKey.computeIfAbsent(key, ignored -> new HashSet<>())
-                                    .add(ownership.ownershipId());
-                        }
+        for (OwnershipRepository.OwnedPathReference reference : repository.listLiveFileReferences()) {
+            try {
+                Path root = Path.of(reference.saveRoot()).toAbsolutePath().normalize();
+                Path candidate = PathPolicy.resolveWithin(root, reference.relativePath());
+                ownersByPath.computeIfAbsent(candidate, ignored -> new HashSet<>())
+                        .add(reference.ownershipId());
+                if (Files.exists(candidate, LinkOption.NOFOLLOW_LINKS) &&
+                        Files.isRegularFile(candidate, LinkOption.NOFOLLOW_LINKS) &&
+                        !Files.isSymbolicLink(candidate)) {
+                    BasicFileAttributes attributes = Files.readAttributes(
+                            candidate, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+                    String key = fileKey(attributes);
+                    if (key != null) {
+                        ownersByFileKey.computeIfAbsent(key, ignored -> new HashSet<>())
+                                .add(reference.ownershipId());
                     }
-                } catch (RuntimeException | IOException ignored) {
-                    // Invalid unrelated manifests are not trusted as evidence for deletion.
                 }
+            } catch (RuntimeException | IOException ignored) {
+                // Invalid unrelated manifests are not trusted as evidence for deletion.
             }
         }
 
@@ -468,68 +463,24 @@ public class QuarantineService {
     }
 
     private static void pruneEmptyParents(Path current, Path stopAt) throws IOException {
-        while (current != null && current.startsWith(stopAt)) {
-            if (!Files.isDirectory(current, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(current)) {
-                return;
-            }
-            try (DirectoryStream<Path> stream = Files.newDirectoryStream(current)) {
-                if (stream.iterator().hasNext()) {
-                    return;
-                }
-            }
-            Files.delete(current);
-            if (current.equals(stopAt)) {
-                return;
-            }
-            current = current.getParent();
-        }
+        FileTransactionSupport.pruneEmptyParents(current, stopAt, true);
     }
 
-    private static IllegalStateException rollbackMoves(List<MovedFile> moved) {
-        IllegalStateException failure = null;
-        for (int i = moved.size() - 1; i >= 0; i--) {
-            MovedFile file = moved.get(i);
-            try {
-                if (!Files.exists(file.target(), LinkOption.NOFOLLOW_LINKS)) {
-                    continue;
-                }
-                if (Files.exists(file.source(), LinkOption.NOFOLLOW_LINKS)) {
-                    throw new IllegalStateException("rollback source already exists");
-                }
-                Files.createDirectories(requireParent(file.source()));
-                Files.move(file.target(), file.source(), StandardCopyOption.ATOMIC_MOVE);
-                pruneEmptyParents(file.target().getParent(), operationRoot(file.target()));
-            } catch (Exception rollbackError) {
-                if (failure == null) {
-                    failure = new IllegalStateException("quarantine rollback failed");
-                }
-                failure.addSuppressed(rollbackError);
-            }
-        }
-        return failure;
+    private static IllegalStateException rollbackMoves(List<Move> moved) {
+        return FileTransactionSupport.rollbackMoves(
+                moved,
+                "rollback source already exists",
+                "quarantine rollback failed",
+                "quarantine file path must have a parent directory",
+                file -> pruneEmptyParents(file.target().getParent(), operationRoot(file.target())));
     }
 
-    private static IllegalStateException rollbackRestores(List<MovedFile> restored) {
-        IllegalStateException failure = null;
-        for (int i = restored.size() - 1; i >= 0; i--) {
-            MovedFile file = restored.get(i);
-            try {
-                if (!Files.exists(file.target(), LinkOption.NOFOLLOW_LINKS)) {
-                    continue;
-                }
-                if (Files.exists(file.source(), LinkOption.NOFOLLOW_LINKS)) {
-                    throw new IllegalStateException("restore rollback target already exists");
-                }
-                Files.createDirectories(requireParent(file.source()));
-                Files.move(file.target(), file.source(), StandardCopyOption.ATOMIC_MOVE);
-            } catch (Exception rollbackError) {
-                if (failure == null) {
-                    failure = new IllegalStateException("restore rollback failed");
-                }
-                failure.addSuppressed(rollbackError);
-            }
-        }
-        return failure;
+    private static IllegalStateException rollbackRestores(List<Move> restored) {
+        return FileTransactionSupport.rollbackMoves(
+                restored,
+                "restore rollback target already exists",
+                "restore rollback failed",
+                "quarantine file path must have a parent directory");
     }
 
     private static Path operationRoot(Path quarantinedPath) {
@@ -549,11 +500,8 @@ public class QuarantineService {
     }
 
     private static Path requireParent(Path path) {
-        Path parent = path.getParent();
-        if (parent == null) {
-            throw new IllegalStateException("quarantine file path must have a parent directory");
-        }
-        return parent;
+        return FileTransactionSupport.requireParent(
+                path, "quarantine file path must have a parent directory");
     }
 
     public record DestructiveOperationPlan(
@@ -600,6 +548,4 @@ public class QuarantineService {
     private record PurgeFile(QuarantineEntry entry, Path path, Path operationRoot) {
     }
 
-    private record MovedFile(Path source, Path target, Path root) {
-    }
 }

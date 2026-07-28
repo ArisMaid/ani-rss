@@ -31,6 +31,8 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -39,6 +41,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /** HTTP image fetcher with bounded redirects, bytes and DNS address checks. */
@@ -54,6 +57,9 @@ public final class SafeImageFetcher {
     private static final Object CLIENT_POOL_LOCK = new Object();
     private static final LinkedHashMap<ClientKey, ClientHolder> CLIENTS =
             new LinkedHashMap<>(4, 0.75f, true);
+    private static final ThreadLocal<ResolvedTarget> VALIDATED_TARGET = new ThreadLocal<>();
+    private static volatile ParsedProxyList parsedProxyList = new ParsedProxyList("", List.of());
+    private static volatile ParsedAllowlist parsedAllowlist = new ParsedAllowlist("", Set.of());
 
     private SafeImageFetcher() {
     }
@@ -63,10 +69,11 @@ public final class SafeImageFetcher {
         try (ClientLease lease = leaseClient(config)) {
             CloseableHttpClient client = lease.client();
             for (int redirect = 0; redirect <= MAX_REDIRECTS; redirect++) {
-                validateAddress(current, config);
+                ResolvedTarget target = validateAddress(current, config);
                 HttpGet request = new HttpGet(current);
                 request.setHeader("Accept", "image/*");
                 request.setHeader("User-Agent", "ani-rss-image-fetcher");
+                VALIDATED_TARGET.set(target);
                 try (CloseableHttpResponse response = client.execute(request)) {
                     int status = response.getCode();
                     if (status >= 300 && status < 400) {
@@ -95,7 +102,7 @@ public final class SafeImageFetcher {
                     if (declared > MAX_BYTES) {
                         throw new IllegalStateException("image exceeds 10 MiB");
                     }
-                    byte[] bytes = readLimited(entity.getContent());
+                    byte[] bytes = readLimited(entity.getContent(), declared);
                     String detectedType;
                     try {
                         detectedType = validateRaster(bytes);
@@ -106,6 +113,8 @@ public final class SafeImageFetcher {
                         throw new IllegalStateException("image content type does not match response body");
                     }
                     return new FetchedImage(bytes, detectedType);
+                } finally {
+                    VALIDATED_TARGET.remove();
                 }
             }
         } catch (LinkageError e) {
@@ -310,6 +319,10 @@ public final class SafeImageFetcher {
         if (isConfiguredProxyHost(host, config)) {
             return InetAddress.getAllByName(normalizeHost(host));
         }
+        ResolvedTarget target = VALIDATED_TARGET.get();
+        if (target != null && target.host().equals(normalizeHost(host))) {
+            return target.addresses();
+        }
         return resolveAndValidate(host, config);
     }
 
@@ -391,7 +404,7 @@ public final class SafeImageFetcher {
         return false;
     }
 
-    private static void validateAddress(URI uri, Config config) {
+    private static ResolvedTarget validateAddress(URI uri, Config config) {
         String scheme = uri.getScheme();
         if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
             throw new IllegalArgumentException("only HTTP and HTTPS image URLs are allowed");
@@ -404,7 +417,7 @@ public final class SafeImageFetcher {
         }
         String host = normalizeHost(uri.getHost());
         try {
-            resolveAndValidate(host, config);
+            return new ResolvedTarget(host, resolveAndValidate(host, config));
         } catch (UnknownHostException e) {
             throw new IllegalArgumentException("image host cannot be resolved", e);
         }
@@ -419,7 +432,7 @@ public final class SafeImageFetcher {
 
     static void validateResolvedAddresses(String host, InetAddress[] addresses, Config config) {
         String normalizedHost = normalizeHost(host);
-        Set<String> allowlist = allowlist(config);
+        Set<String> allowlist = allowlist();
         boolean explicitlyAllowed = allowlist.contains(normalizedHost);
         boolean domainName = !isIpLiteral(normalizedHost);
         // In transparent/fake-IP proxy environments DNS returns 198.18/15 for
@@ -470,14 +483,21 @@ public final class SafeImageFetcher {
     }
 
     private static boolean isProxyListed(String host, Config config) {
-        if (config == null || StrUtil.isBlank(config.getProxyList())) {
+        String source = config == null ? "" : StrUtil.blankToDefault(config.getProxyList(), "");
+        if (source.isBlank()) {
             return false;
         }
-        for (String entry : config.getProxyList().split("[,\\r\\n]")) {
-            String candidate = normalizeHost(entry);
-            if (candidate.isEmpty()) {
-                continue;
-            }
+        ParsedProxyList parsed = parsedProxyList;
+        if (!source.equals(parsed.source())) {
+            List<String> domains = Arrays.stream(source.split("[,\\r\\n]"))
+                    .map(SafeImageFetcher::normalizeHost)
+                    .filter(candidate -> !candidate.isEmpty())
+                    .distinct()
+                    .toList();
+            parsed = new ParsedProxyList(source, domains);
+            parsedProxyList = parsed;
+        }
+        for (String candidate : parsed.domains()) {
             if (host.equals(candidate) || host.endsWith("." + candidate)) {
                 return true;
             }
@@ -485,21 +505,25 @@ public final class SafeImageFetcher {
         return false;
     }
 
-    private static Set<String> allowlist(Config config) {
+    private static Set<String> allowlist() {
         String configured = System.getProperty(IMAGE_PRIVATE_ALLOWLIST);
         if (StrUtil.isBlank(configured)) {
             configured = System.getenv(IMAGE_PRIVATE_ALLOWLIST);
         }
-        if (StrUtil.isBlank(configured)) {
-            return Set.of();
+        String source = StrUtil.blankToDefault(configured, "");
+        ParsedAllowlist parsed = parsedAllowlist;
+        if (source.equals(parsed.source())) {
+            return parsed.entries();
         }
         Set<String> result = new HashSet<>();
-        for (String value : configured.split("[,\\n]")) {
+        for (String value : source.split("[,\\n]")) {
             if (StrUtil.isNotBlank(value)) {
                 result.add(normalizeHost(value.trim()));
             }
         }
-        return result;
+        parsed = new ParsedAllowlist(source, Set.copyOf(result));
+        parsedAllowlist = parsed;
+        return parsed.entries();
     }
 
     private static boolean allowedByCidr(InetAddress address, Set<String> allowlist) {
@@ -578,8 +602,12 @@ public final class SafeImageFetcher {
         }
     }
 
-    private static byte[] readLimited(InputStream input) throws IOException {
-        try (InputStream stream = input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+    private static byte[] readLimited(InputStream input, long declaredLength) throws IOException {
+        int initialCapacity = declaredLength > 0 && declaredLength <= MAX_BYTES
+                ? (int) declaredLength
+                : 8192;
+        try (InputStream stream = input;
+             ByteArrayOutputStream output = new ByteArrayOutputStream(initialCapacity)) {
             byte[] buffer = new byte[8192];
             long total = 0;
             int read;
@@ -798,14 +826,36 @@ public final class SafeImageFetcher {
         return true;
     }
 
+    private record ResolvedTarget(String host, InetAddress[] addresses) {
+        private ResolvedTarget {
+            addresses = addresses.clone();
+        }
+
+        @Override
+        public InetAddress[] addresses() {
+            return addresses.clone();
+        }
+    }
+
+    private record ParsedProxyList(String source, List<String> domains) {
+    }
+
+    private record ParsedAllowlist(String source, Set<String> entries) {
+    }
+
     public record FetchedImage(byte[] bytes, String contentType) {
         public FetchedImage {
             bytes = bytes == null ? new byte[0] : bytes.clone();
+            contentType = Objects.requireNonNull(contentType, "contentType");
         }
 
         @Override
         public byte[] bytes() {
             return bytes.clone();
+        }
+
+        public void writeTo(Path path) throws IOException {
+            Files.write(path, bytes);
         }
     }
 }

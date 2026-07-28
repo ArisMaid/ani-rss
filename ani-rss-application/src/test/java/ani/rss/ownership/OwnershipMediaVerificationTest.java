@@ -10,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -93,5 +94,44 @@ class OwnershipMediaVerificationTest {
                 .setFilesSupplier(() -> List.of("missing S01E01.mkv"));
 
         assertFalse(service.captureAndVerifyFiles("owned", task));
+    }
+
+    @Test
+    void downloaderPollingReusesAnExistingManifestWithoutFetchingEveryFileList() {
+        AtomicInteger fileListRequests = new AtomicInteger();
+        TorrentsInfo ownedTask = new TorrentsInfo()
+                .setId("task")
+                .setHash("HASH")
+                .setFilesSupplier(() -> {
+                    fileListRequests.incrementAndGet();
+                    return List.of("episode.mkv");
+                });
+        TorrentsInfo unrelated = new TorrentsInfo().setId("other").setHash("other-hash");
+
+        assertEquals(List.of(ownedTask),
+                service.observeOwnedTasks("qBittorrent", List.of(ownedTask, unrelated)));
+        assertEquals(List.of(ownedTask),
+                service.observeOwnedTasks("qBittorrent", List.of(ownedTask, unrelated)));
+        assertEquals(0, fileListRequests.get());
+    }
+
+    @Test
+    void downloaderPollingCapturesAMissingManifestOnlyOnce() {
+        repository.replaceFiles("owned", List.of());
+        AtomicInteger fileListRequests = new AtomicInteger();
+        TorrentsInfo task = new TorrentsInfo()
+                .setId("task")
+                .setHash("hash")
+                .setFilesSupplier(() -> {
+                    fileListRequests.incrementAndGet();
+                    return List.of("episode.mkv");
+                });
+
+        assertEquals(List.of(task), service.observeOwnedTasks("qBittorrent", List.of(task)));
+        assertEquals(List.of(task), service.observeOwnedTasks("qBittorrent", List.of(task)));
+        assertEquals(1, fileListRequests.get());
+        assertEquals(List.of("episode.mkv"), repository.listFiles("owned").stream()
+                .map(OwnedFile::relativePath)
+                .toList());
     }
 }

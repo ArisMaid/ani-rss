@@ -55,3 +55,7 @@ logs
 ani-rss-update.exe
 *.versionsBackup
 .pnpm-store
+
+# Local backups and generated first-run credentials may contain secrets.
+ani-rss.backup.*.zip
+initial-setup-code.txt

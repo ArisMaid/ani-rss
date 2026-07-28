@@ -1,7 +1,6 @@
 package ani.rss.entity;
 
 import ani.rss.util.other.ConfigUtil;
-import cn.hutool.core.util.StrUtil;
 import io.swagger.v3.oas.annotations.media.Schema;
 import wushuo.tmdb.api.entity.TmdbConfig;
 
@@ -21,9 +20,7 @@ public class CustomTmdbConfig extends TmdbConfig {
 
     @Override
     public String getTmdbApiKey() {
-        String tmdbApiKey = CONFIG.getTmdbApiKey();
-        tmdbApiKey = StrUtil.blankToDefault(tmdbApiKey, "450e4f651e1c93e31383e20f8e731e5f");
-        return tmdbApiKey;
+        return CONFIG.getTmdbApiKey();
     }
 
     @Override

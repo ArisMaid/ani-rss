@@ -12,6 +12,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -19,6 +20,10 @@ import java.util.UUID;
 @Repository
 public class RecoveryRepository {
     public RecoveryRecord observe(Ani ani, Item item) {
+        return observeWithStatus(ani, item).record();
+    }
+
+    public Observation observeWithStatus(Ani ani, Item item) {
         if (ani == null || StrUtil.isBlank(ani.getId()) || item == null || StrUtil.isBlank(item.getInfoHash())) {
             throw new IllegalArgumentException("recovery item requires subscription id and info-hash");
         }
@@ -32,17 +37,23 @@ public class RecoveryRepository {
                 // Explicit local removal remains explicit even while the RSS
                 // item stays visible. New RSS hashes still create new records.
                 if (current.state() == RecoveryState.CANCELLED) {
-                    return current;
+                    return new Observation(current, false);
                 }
                 RecoveryState state = current.state();
                 long nextAttemptAt = current.nextAttemptAt();
+                String observedEpisode = episode(item);
+                if (Objects.equals(current.season(), ani.getSeason()) &&
+                        Objects.equals(current.episode(), observedEpisode) &&
+                        Objects.equals(current.itemJson(), itemJson)) {
+                    return new Observation(current, false);
+                }
                 try (PreparedStatement statement = connection.prepareStatement("""
                         UPDATE missing_episode_recovery
                         SET season = ?, episode = ?, item_json = ?, state = ?, next_attempt_at = ?, updated_at = ?
                         WHERE recovery_id = ?
                         """)) {
                     statement.setObject(1, ani.getSeason());
-                    statement.setString(2, episode(item));
+                    statement.setString(2, observedEpisode);
                     statement.setString(3, itemJson);
                     statement.setString(4, state.name());
                     statement.setLong(5, nextAttemptAt);
@@ -50,10 +61,11 @@ public class RecoveryRepository {
                     statement.setString(7, current.recoveryId());
                     statement.executeUpdate();
                 }
-                return new RecoveryRecord(current.recoveryId(), current.subscriptionId(), current.sourceHash(),
+                return new Observation(new RecoveryRecord(
+                        current.recoveryId(), current.subscriptionId(), current.sourceHash(),
                         current.infoHash(),
-                        ani.getSeason(), episode(item), itemJson, state, current.attempts(), nextAttemptAt,
-                        current.lastErrorCode(), current.createdAt(), now);
+                        ani.getSeason(), observedEpisode, itemJson, state, current.attempts(), nextAttemptAt,
+                        current.lastErrorCode(), current.createdAt(), now), false);
             }
             RecoveryRecord created = new RecoveryRecord(
                     UUID.randomUUID().toString(), ani.getId(), sourceHash, sourceHash,
@@ -68,7 +80,7 @@ public class RecoveryRepository {
                 bind(statement, created);
                 statement.executeUpdate();
             }
-            return created;
+            return new Observation(created, true);
         });
     }
 
@@ -86,6 +98,54 @@ public class RecoveryRepository {
                         records.add(map(resultSet));
                     }
                     return List.copyOf(records);
+                }
+            }
+        });
+    }
+
+    public List<RecoveryRecord> listForReconciliation(String subscriptionId, long satisfiedAuditBefore) {
+        return DatabaseManager.withConnection(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT * FROM (
+                        SELECT * FROM missing_episode_recovery
+                        WHERE subscription_id = ?
+                          AND state IN ('PENDING', 'SUBMITTED', 'RETRY_WAIT')
+                        UNION ALL
+                        SELECT * FROM missing_episode_recovery
+                        WHERE subscription_id = ?
+                          AND state = 'SATISFIED'
+                          AND updated_at <= ?
+                    )
+                    ORDER BY created_at
+                    """)) {
+                statement.setString(1, subscriptionId);
+                statement.setString(2, subscriptionId);
+                statement.setLong(3, satisfiedAuditBefore);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    List<RecoveryRecord> records = new ArrayList<>();
+                    while (resultSet.next()) {
+                        records.add(map(resultSet));
+                    }
+                    return List.copyOf(records);
+                }
+            }
+        });
+    }
+
+    public boolean hasOutstanding(String subscriptionId) {
+        if (StrUtil.isBlank(subscriptionId)) {
+            return false;
+        }
+        return DatabaseManager.withConnection(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT 1 FROM missing_episode_recovery
+                    WHERE subscription_id = ?
+                      AND state IN ('PENDING', 'SUBMITTED', 'RETRY_WAIT')
+                    LIMIT 1
+                    """)) {
+                statement.setString(1, subscriptionId);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    return resultSet.next();
                 }
             }
         });
@@ -161,6 +221,23 @@ public class RecoveryRepository {
         return update(subscriptionId, infoHash, RecoveryState.PENDING, null, System.currentTimeMillis(), false);
     }
 
+    public void touchSatisfiedAudit(String recoveryId) {
+        if (StrUtil.isBlank(recoveryId)) {
+            return;
+        }
+        DatabaseManager.withConnection(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE missing_episode_recovery SET updated_at = ?
+                    WHERE recovery_id = ? AND state = 'SATISFIED'
+                    """)) {
+                statement.setLong(1, System.currentTimeMillis());
+                statement.setString(2, recoveryId);
+                statement.executeUpdate();
+                return null;
+            }
+        });
+    }
+
     public void cancelSubscription(String subscriptionId) {
         if (StrUtil.isBlank(subscriptionId)) {
             return;
@@ -209,6 +286,12 @@ public class RecoveryRepository {
             if (record.isEmpty()) {
                 return false;
             }
+            RecoveryRecord current = record.get();
+            if (!incrementAttempts && current.state() == state &&
+                    Objects.equals(current.lastErrorCode(), errorCode) &&
+                    current.nextAttemptAt() == nextAttemptAt) {
+                return true;
+            }
             String sql = incrementAttempts ? """
                     UPDATE missing_episode_recovery
                     SET state = ?, last_error_code = ?, attempts = attempts + 1,
@@ -224,7 +307,7 @@ public class RecoveryRepository {
                 statement.setString(2, errorCode);
                 statement.setLong(3, nextAttemptAt);
                 statement.setLong(4, System.currentTimeMillis());
-                statement.setString(5, record.get().recoveryId());
+                statement.setString(5, current.recoveryId());
                 return statement.executeUpdate() == 1;
             }
         });
@@ -302,5 +385,8 @@ public class RecoveryRepository {
 
     private static String episode(Item item) {
         return item.getEpisode() == null ? null : item.getEpisode().toString();
+    }
+
+    public record Observation(RecoveryRecord record, boolean created) {
     }
 }

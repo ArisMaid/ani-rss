@@ -1,6 +1,5 @@
 package ani.rss.auth.fun;
 
-import ani.rss.entity.Config;
 import ani.rss.util.other.ConfigUtil;
 import cn.hutool.core.util.StrUtil;
 import jakarta.servlet.http.HttpServletRequest;
@@ -16,8 +15,7 @@ import java.util.function.Function;
 public class ApiKey implements Function<HttpServletRequest, Boolean> {
     @Override
     public Boolean apply(HttpServletRequest request) {
-        Config config = ConfigUtil.CONFIG;
-        String apiKey = config.getApiKey();
+        String apiKey = ConfigUtil.securityConfiguration().apiKey();
         if (StrUtil.isBlank(apiKey)) {
             return false;
         }

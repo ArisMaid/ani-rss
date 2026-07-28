@@ -5,6 +5,7 @@ import ani.rss.commons.PathPolicy;
 import ani.rss.entity.Ani;
 import ani.rss.entity.Item;
 import ani.rss.entity.torrent.TorrentsInfo;
+import ani.rss.ownership.FileTransactionSupport.Move;
 import ani.rss.util.other.ConfigUtil;
 import cn.hutool.core.util.StrUtil;
 import org.springframework.stereotype.Service;
@@ -35,16 +36,18 @@ import java.util.concurrent.ConcurrentMap;
 @Service
 public class OwnershipService {
     private static final long MOVE_VALIDATION_TTL = Duration.ofMinutes(2).toMillis();
+    private static final long MANIFEST_REFRESH_TTL = Duration.ofMinutes(5).toMillis();
 
     private final OwnershipRepository repository;
     private final ConcurrentMap<String, Long> validatedMoves = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Long> manifestRefreshAfter = new ConcurrentHashMap<>();
 
     public OwnershipService(OwnershipRepository repository) {
         this.repository = repository;
     }
 
     public DownloadOwnership registerPending(Ani ani, Item item, String saveRoot) {
-        return registerPending(ConfigUtil.snapshot().getDownloadToolType(), ani, item, saveRoot);
+        return registerPending(ConfigUtil.downloadToolType(), ani, item, saveRoot);
     }
 
     public DownloadOwnership registerPending(
@@ -97,7 +100,7 @@ public class OwnershipService {
     }
 
     public Optional<DownloadOwnership> findOwned(TorrentsInfo task) {
-        return findOwned(ConfigUtil.snapshot().getDownloadToolType(), task);
+        return findOwned(ConfigUtil.downloadToolType(), task);
     }
 
     public Optional<DownloadOwnership> findOwned(String downloaderType, TorrentsInfo task) {
@@ -106,7 +109,7 @@ public class OwnershipService {
     }
 
     public Optional<DownloadOwnership> findManaged(TorrentsInfo task) {
-        return findManaged(ConfigUtil.snapshot().getDownloadToolType(), task);
+        return findManaged(ConfigUtil.downloadToolType(), task);
     }
 
     public Optional<DownloadOwnership> findManaged(String downloaderType, TorrentsInfo task) {
@@ -150,31 +153,53 @@ public class OwnershipService {
     }
 
     public void observeTasks(List<TorrentsInfo> tasks) {
-        observeTasks(ConfigUtil.snapshot().getDownloadToolType(), tasks);
+        observeTasks(ConfigUtil.downloadToolType(), tasks);
     }
 
     public void observeTasks(String downloaderType, List<TorrentsInfo> tasks) {
-        if (tasks == null) {
-            return;
+        observeOwnedTasks(downloaderType, tasks);
+    }
+
+    /**
+     * Resolves a downloader snapshot with one ownership query. Manifests are
+     * captured on activation, when absent, and periodically as a fallback for
+     * file renames made outside ANI-RSS.
+     */
+    public List<TorrentsInfo> observeOwnedTasks(String downloaderType, List<TorrentsInfo> tasks) {
+        if (tasks == null || tasks.isEmpty()) {
+            return List.of();
         }
+        TaskOwnershipIndex index = new TaskOwnershipIndex(repository.listByDownloaderType(downloaderType));
+        Set<String> ownershipsWithFiles = repository.ownershipIdsWithFiles();
+        List<TorrentsInfo> ownedTasks = new ArrayList<>();
+        long now = System.currentTimeMillis();
         for (TorrentsInfo task : tasks) {
-            repository.findForTask(
-                            downloaderType, task.getId(), task.getHash())
-                    .ifPresent(ownership -> {
-                        if (ownership.state() == OwnershipState.PENDING) {
-                            repository.activate(ownership.ownershipId(), task.getId());
-                        }
-                        if (ownership.state() == OwnershipState.ACTIVE ||
-                                ownership.state() == OwnershipState.LEGACY_ADOPTED ||
-                                ownership.state() == OwnershipState.PENDING) {
-                            captureFiles(ownership.ownershipId(), task);
-                        }
-                    });
+            DownloadOwnership ownership = index.resolve(task);
+            if (ownership == null) {
+                continue;
+            }
+            boolean activated = ownership.state() == OwnershipState.PENDING;
+            if (activated) {
+                repository.activate(ownership.ownershipId(), task.getId());
+                ownership = activated(ownership, task.getId(), now);
+            }
+            if (ownership.state() != OwnershipState.ACTIVE &&
+                    ownership.state() != OwnershipState.LEGACY_ADOPTED) {
+                continue;
+            }
+            boolean hasManifest = ownershipsWithFiles.contains(ownership.ownershipId());
+            if (activated || reserveManifestRefresh(ownership.ownershipId(), hasManifest, now)) {
+                if (!captureFilesIfAvailable(ownership, task)) {
+                    manifestRefreshAfter.remove(ownership.ownershipId());
+                }
+            }
+            ownedTasks.add(task);
         }
+        return List.copyOf(ownedTasks);
     }
 
     public boolean belongsTo(TorrentsInfo task, String subscriptionId) {
-        return belongsTo(ConfigUtil.snapshot().getDownloadToolType(), task, subscriptionId);
+        return belongsTo(ConfigUtil.downloadToolType(), task, subscriptionId);
     }
 
     public boolean belongsTo(String downloaderType, TorrentsInfo task, String subscriptionId) {
@@ -194,7 +219,7 @@ public class OwnershipService {
     }
 
     public DownloadOwnership requireOwned(TorrentsInfo task) {
-        return requireOwned(ConfigUtil.snapshot().getDownloadToolType(), task);
+        return requireOwned(ConfigUtil.downloadToolType(), task);
     }
 
     public DownloadOwnership requireOwned(String downloaderType, TorrentsInfo task) {
@@ -203,7 +228,7 @@ public class OwnershipService {
     }
 
     public DownloadOwnership requireManagedTask(TorrentsInfo task) {
-        return requireManagedTask(ConfigUtil.snapshot().getDownloadToolType(), task);
+        return requireManagedTask(ConfigUtil.downloadToolType(), task);
     }
 
     public DownloadOwnership requireManagedTask(String downloaderType, TorrentsInfo task) {
@@ -291,12 +316,19 @@ public class OwnershipService {
     public void captureFiles(String ownershipId, TorrentsInfo task) {
         DownloadOwnership ownership = repository.find(ownershipId)
                 .orElseThrow(() -> new IllegalArgumentException("ownership record does not exist"));
+        captureFilesIfAvailable(ownership, task);
+    }
+
+    private boolean captureFilesIfAvailable(DownloadOwnership ownership, TorrentsInfo task) {
+        if (task == null) {
+            return false;
+        }
         if (task.getFilesSupplier() == null) {
-            return;
+            return false;
         }
         List<String> names = task.getFilesSupplier().get();
         if (names == null) {
-            return;
+            return false;
         }
         Path root = Path.of(ownership.saveRoot()).toAbsolutePath().normalize();
         Map<String, OwnedFile> files = new LinkedHashMap<>();
@@ -312,9 +344,12 @@ public class OwnershipService {
             String relativePath = relative.toString().replace('\\', '/');
             Long size = Files.isRegularFile(resolved, LinkOption.NOFOLLOW_LINKS) &&
                     !Files.isSymbolicLink(resolved) ? safeSize(resolved) : null;
-            files.put(relativePath, new OwnedFile(ownershipId, relativePath, "FILE", size));
+            files.put(relativePath, new OwnedFile(ownership.ownershipId(), relativePath, "FILE", size));
         }
-        repository.replaceFiles(ownershipId, List.copyOf(files.values()));
+        repository.replaceFiles(ownership.ownershipId(), List.copyOf(files.values()));
+        manifestRefreshAfter.put(ownership.ownershipId(),
+                System.currentTimeMillis() + MANIFEST_REFRESH_TTL);
+        return true;
     }
 
     /** Captures the downloader's latest paths and proves they exist locally. */
@@ -353,7 +388,7 @@ public class OwnershipService {
             return;
         }
 
-        List<MovedFile> completed = new ArrayList<>();
+        List<Move> completed = new ArrayList<>();
         try {
             for (RelocationFile file : files) {
                 if (!file.alreadyMoved()) {
@@ -366,7 +401,7 @@ public class OwnershipService {
                         throw new IllegalStateException("relocated file size changed");
                     }
                 }
-                completed.add(new MovedFile(file.source(), file.target()));
+                completed.add(new Move(file.source(), file.target()));
             }
             repository.updateSaveRoots(rootsFor(files, newRoot));
         } catch (Exception failure) {
@@ -822,33 +857,41 @@ public class OwnershipService {
     }
 
     private Set<Path> conflictingOwnershipPaths(Collection<VerifiedOwnedFile> candidates) {
-        Map<Path, Set<String>> owners = new HashMap<>();
-        for (DownloadOwnership ownership : repository.listAll()) {
-            if (ownership.state() != OwnershipState.ACTIVE && ownership.state() != OwnershipState.LEGACY_ADOPTED) {
-                continue;
-            }
-            try {
-                Path root = Path.of(ownership.saveRoot()).toAbsolutePath().normalize();
-                for (OwnedFile file : repository.listFiles(ownership.ownershipId())) {
-                    Path path = PathPolicy.resolveWithin(root, file.relativePath());
-                    owners.computeIfAbsent(path, ignored -> new LinkedHashSet<>())
-                            .add(ownership.ownershipId());
-                }
-            } catch (Exception ignored) {
-                // Invalid unrelated ownership cannot authorize deletion.
-            }
-        }
+        Map<Path, Set<String>> owners = liveOwnersByPath(true);
         for (VerifiedOwnedFile candidate : candidates) {
             owners.computeIfAbsent(candidate.path(), ignored -> new LinkedHashSet<>())
                     .add(candidate.ownership().ownershipId());
         }
         Set<Path> result = new HashSet<>();
-        for (Map.Entry<Path, Set<String>> entry : owners.entrySet()) {
-            if (entry.getValue().size() > 1) {
-                result.add(entry.getKey());
+        for (VerifiedOwnedFile candidate : candidates) {
+            if (owners.getOrDefault(candidate.path(), Set.of()).size() > 1) {
+                result.add(candidate.path());
             }
         }
         return result;
+    }
+
+    private Map<Path, Set<String>> liveOwnersByPath(boolean ignoreInvalidRoot) {
+        Map<Path, Set<String>> owners = new HashMap<>();
+        for (OwnershipRepository.OwnedPathReference reference : repository.listLiveFileReferences()) {
+            Path root;
+            try {
+                root = Path.of(reference.saveRoot()).toAbsolutePath().normalize();
+            } catch (RuntimeException e) {
+                if (ignoreInvalidRoot) {
+                    continue;
+                }
+                throw e;
+            }
+            try {
+                Path path = PathPolicy.resolveWithin(root, reference.relativePath());
+                owners.computeIfAbsent(path, ignored -> new LinkedHashSet<>())
+                        .add(reference.ownershipId());
+            } catch (RuntimeException ignored) {
+                // Invalid unrelated manifest entries cannot authorize a destructive operation.
+            }
+        }
+        return owners;
     }
 
     private List<OwnedFile> requireManifest(DownloadOwnership ownership) {
@@ -1004,22 +1047,7 @@ public class OwnershipService {
     }
 
     private void ensureNoPathOwnershipConflicts(Collection<RelocationFile> selected) {
-        Map<Path, Set<String>> owners = new HashMap<>();
-        for (DownloadOwnership ownership : repository.listAll()) {
-            if (ownership.state() != OwnershipState.ACTIVE && ownership.state() != OwnershipState.LEGACY_ADOPTED) {
-                continue;
-            }
-            Path root = Path.of(ownership.saveRoot()).toAbsolutePath().normalize();
-            for (OwnedFile file : repository.listFiles(ownership.ownershipId())) {
-                try {
-                    Path path = PathPolicy.resolveWithin(root, file.relativePath());
-                    owners.computeIfAbsent(path, ignored -> new LinkedHashSet<>())
-                            .add(ownership.ownershipId());
-                } catch (RuntimeException ignored) {
-                    // Invalid unrelated ownership cannot authorize a destructive move.
-                }
-            }
-        }
+        Map<Path, Set<String>> owners = liveOwnersByPath(false);
         for (RelocationFile file : selected) {
             if (owners.getOrDefault(file.source(), Set.of()).size() > 1) {
                 throw new IllegalStateException("owned source has conflicting ownership records");
@@ -1028,22 +1056,7 @@ public class OwnershipService {
     }
 
     private void ensureNoDeletionOwnershipConflicts(Collection<VerifiedOwnedFile> selected) {
-        Map<Path, Set<String>> owners = new HashMap<>();
-        for (DownloadOwnership ownership : repository.listAll()) {
-            if (ownership.state() != OwnershipState.ACTIVE && ownership.state() != OwnershipState.LEGACY_ADOPTED) {
-                continue;
-            }
-            Path root = Path.of(ownership.saveRoot()).toAbsolutePath().normalize();
-            for (OwnedFile file : repository.listFiles(ownership.ownershipId())) {
-                try {
-                    Path path = PathPolicy.resolveWithin(root, file.relativePath());
-                    owners.computeIfAbsent(path, ignored -> new LinkedHashSet<>())
-                            .add(ownership.ownershipId());
-                } catch (RuntimeException ignored) {
-                    // Invalid unrelated ownership cannot authorize deletion.
-                }
-            }
-        }
+        Map<Path, Set<String>> owners = liveOwnersByPath(false);
         for (VerifiedOwnedFile file : selected) {
             if (owners.getOrDefault(file.path(), Set.of()).size() > 1) {
                 throw new IllegalStateException("owned file has conflicting ownership records");
@@ -1104,50 +1117,21 @@ public class OwnershipService {
         return attributes;
     }
 
-    private static IllegalStateException rollbackMoves(List<MovedFile> moved) {
-        IllegalStateException failure = null;
-        for (int i = moved.size() - 1; i >= 0; i--) {
-            MovedFile file = moved.get(i);
-            try {
-                if (!Files.exists(file.target(), LinkOption.NOFOLLOW_LINKS)) {
-                    continue;
-                }
-                if (Files.exists(file.source(), LinkOption.NOFOLLOW_LINKS)) {
-                    throw new IllegalStateException("relocation rollback source already exists");
-                }
-                Files.createDirectories(requireParent(file.source()));
-                Files.move(file.target(), file.source(), StandardCopyOption.ATOMIC_MOVE);
-            } catch (Exception rollbackError) {
-                if (failure == null) {
-                    failure = new IllegalStateException("relocation rollback failed");
-                }
-                failure.addSuppressed(rollbackError);
-            }
-        }
-        return failure;
+    private static IllegalStateException rollbackMoves(List<Move> moved) {
+        return FileTransactionSupport.rollbackMoves(
+                moved,
+                "relocation rollback source already exists",
+                "relocation rollback failed",
+                "owned file path must have a parent directory");
     }
 
     private static void pruneEmptyParents(Path current, Path stopAt) throws java.io.IOException {
-        while (current != null && current.startsWith(stopAt) && !current.equals(stopAt)) {
-            if (!Files.isDirectory(current, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(current)) {
-                return;
-            }
-            try (DirectoryStream<Path> stream = Files.newDirectoryStream(current)) {
-                if (stream.iterator().hasNext()) {
-                    return;
-                }
-            }
-            Files.delete(current);
-            current = current.getParent();
-        }
+        FileTransactionSupport.pruneEmptyParents(current, stopAt, false);
     }
 
     private static Path requireParent(Path path) {
-        Path parent = path.getParent();
-        if (parent == null) {
-            throw new IllegalStateException("owned file path must have a parent directory");
-        }
-        return parent;
+        return FileTransactionSupport.requireParent(
+                path, "owned file path must have a parent directory");
     }
 
     private static String moveKey(String subscriptionId, Path newRoot) {
@@ -1162,7 +1146,87 @@ public class OwnershipService {
         }
     }
 
-    private record MovedFile(Path source, Path target) {
+    private boolean reserveManifestRefresh(String ownershipId, boolean hasManifest, long now) {
+        long nextRefresh = now + MANIFEST_REFRESH_TTL;
+        Long existing = manifestRefreshAfter.putIfAbsent(ownershipId, nextRefresh);
+        if (existing == null) {
+            return !hasManifest;
+        }
+        return existing <= now && manifestRefreshAfter.replace(ownershipId, existing, nextRefresh);
+    }
+
+    private static DownloadOwnership activated(
+            DownloadOwnership ownership, String remoteTaskId, long now) {
+        return new DownloadOwnership(
+                ownership.ownershipId(),
+                ownership.downloaderType(),
+                StrUtil.blankToDefault(remoteTaskId, ownership.remoteTaskId()),
+                ownership.infoHash(),
+                ownership.subscriptionId(),
+                ownership.season(),
+                ownership.episode(),
+                ownership.saveRoot(),
+                OwnershipState.ACTIVE,
+                ownership.createdAt(),
+                now);
+    }
+
+    private static int statePriority(OwnershipState state) {
+        if (state == OwnershipState.ACTIVE) {
+            return 0;
+        }
+        if (state == OwnershipState.LEGACY_ADOPTED) {
+            return 1;
+        }
+        return 2;
+    }
+
+    private static DownloadOwnership preferred(
+            DownloadOwnership remoteMatch, DownloadOwnership hashMatch) {
+        if (remoteMatch == null) {
+            return hashMatch;
+        }
+        if (hashMatch == null || remoteMatch.ownershipId().equals(hashMatch.ownershipId())) {
+            return remoteMatch;
+        }
+        return statePriority(remoteMatch.state()) <= statePriority(hashMatch.state())
+                ? remoteMatch
+                : hashMatch;
+    }
+
+    private static final class TaskOwnershipIndex {
+        private final Map<String, DownloadOwnership> byRemoteTaskId = new HashMap<>();
+        private final Map<String, DownloadOwnership> byInfoHash = new HashMap<>();
+
+        private TaskOwnershipIndex(List<DownloadOwnership> ownerships) {
+            for (DownloadOwnership ownership : ownerships) {
+                if (StrUtil.isNotBlank(ownership.remoteTaskId())) {
+                    byRemoteTaskId.merge(ownership.remoteTaskId(), ownership,
+                            (first, second) -> preferred(first, second));
+                }
+                if (StrUtil.isNotBlank(ownership.infoHash())) {
+                    byInfoHash.merge(normalizeHash(ownership.infoHash()), ownership,
+                            (first, second) -> preferred(first, second));
+                }
+            }
+        }
+
+        private DownloadOwnership resolve(TorrentsInfo task) {
+            if (task == null) {
+                return null;
+            }
+            DownloadOwnership remoteMatch = StrUtil.isBlank(task.getId())
+                    ? null
+                    : byRemoteTaskId.get(task.getId());
+            DownloadOwnership hashMatch = StrUtil.isBlank(task.getHash())
+                    ? null
+                    : byInfoHash.get(normalizeHash(task.getHash()));
+            return preferred(remoteMatch, hashMatch);
+        }
+
+        private static String normalizeHash(String value) {
+            return value.toLowerCase(java.util.Locale.ROOT);
+        }
     }
 
     private record RelocationFile(

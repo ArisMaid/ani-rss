@@ -64,13 +64,10 @@ public class TorrentUtil {
         }
         List<TorrentsInfo> tasks = result.value() == null ? List.of() : result.value();
         String downloaderType = client.configurationSnapshot().getDownloadToolType();
-        ownershipService().observeTasks(downloaderType, tasks);
-        // Downstream callers can rename, tag, move, or delete a task. Keep
-        // unverified candidates in the ownership workflow only, never in the
-        // operational task stream.
-        tasks = tasks.stream()
-                .filter(task -> ownershipService().findOwned(downloaderType, task).isPresent())
-                .toList();
+        // Downstream callers can rename, tag, move, or delete a task. Resolve
+        // and observe the downloader snapshot in one batch so unverified
+        // candidates never enter the operational stream.
+        tasks = ownershipService().observeOwnedTasks(downloaderType, tasks);
         return DownloaderResult.success(new ArrayList<>(tasks));
     }
 

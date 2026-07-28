@@ -24,7 +24,7 @@
       <el-input v-model:model-value="props.config['tmdbApi']" placeholder="https://api.themoviedb.org"/>
     </el-form-item>
     <el-form-item label="TmdbApiKey">
-      <el-input v-model:model-value="props.config['tmdbApiKey']" placeholder="请自备 API 密钥, 留空使用系统默认"/>
+      <el-input v-model:model-value="props.config['tmdbApiKey']" placeholder="请配置自己的 TMDB API 密钥"/>
     </el-form-item>
     <el-form-item label="TmdbImage">
       <el-input v-model:model-value="props.config['tmdbImage']" placeholder="https://image.tmdb.org"/>

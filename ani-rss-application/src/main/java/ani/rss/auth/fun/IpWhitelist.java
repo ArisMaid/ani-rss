@@ -1,6 +1,6 @@
 package ani.rss.auth.fun;
 
-import ani.rss.entity.Config;
+import ani.rss.persistence.ConfigStore;
 import ani.rss.util.basic.CidrRangeChecker;
 import ani.rss.util.other.AuthUtil;
 import ani.rss.util.other.ConfigUtil;
@@ -18,10 +18,9 @@ public class IpWhitelist implements Function<HttpServletRequest, Boolean> {
     @Override
     public Boolean apply(HttpServletRequest request) {
         String ip = AuthUtil.getIp(request);
-        Config config = ConfigUtil.CONFIG;
-        String ipWhitelistStr = config.getIpWhitelistStr();
-        Boolean ipWhitelist = config.getIpWhitelist();
-        if (!ipWhitelist) {
+        ConfigStore.SecurityConfiguration config = ConfigUtil.securityConfiguration();
+        String ipWhitelistStr = config.ipWhitelistStr();
+        if (!config.ipWhitelist()) {
             return false;
         }
         if (StrUtil.isBlank(ipWhitelistStr)) {

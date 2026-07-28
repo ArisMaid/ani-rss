@@ -55,7 +55,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void blankLoginUsesUpstreamCompatibleCredentialsAndStoresPrivateVerifier() throws Exception {
+    void blankLoginUsesSanitizedAdminCredentialsAndStoresPrivateVerifier() throws Exception {
         Files.writeString(tempDir.resolve("initial-setup-code.txt"), "obsolete");
         Files.writeString(tempDir.resolve("auth-state.v2.json"), """
                 {"setupCodeHash":"obsolete","setupExpiresAt":1,"setupUsed":false}
@@ -63,7 +63,7 @@ class AuthServiceTest {
         AuthService.reload();
 
         Login stored = ConfigUtil.snapshot().getLogin();
-        assertEquals(AuthService.DEFAULT_USERNAME, stored.getUsername());
+        assertEquals("admin", stored.getUsername());
         assertTrue(stored.getPassword().matches("(?i)[0-9a-f]{32}"));
         assertFalse(Files.exists(tempDir.resolve("initial-setup-code.txt")));
         assertFalse(Files.readString(tempDir.resolve("auth-state.v2.json")).contains("setupCodeHash"));
@@ -71,9 +71,9 @@ class AuthServiceTest {
 
         MockHttpServletResponse response = new MockHttpServletResponse();
         AuthService.LoginResult result = AuthService.login(
-                AuthService.DEFAULT_USERNAME, defaultPassword(), null, response);
+                "admin", "admin", null, response);
 
-        assertEquals(AuthService.DEFAULT_USERNAME, result.username());
+        assertEquals("admin", result.username());
         assertTrue(response.getHeaders("Set-Cookie").stream().anyMatch(v -> v.startsWith("ANI_SESSION=")));
         String sessionHeader = cookieHeader(response, AuthService.SESSION_COOKIE);
         String csrfHeader = cookieHeader(response, AuthService.CSRF_COOKIE);
@@ -415,10 +415,6 @@ class AuthServiceTest {
 
         assertTrue(response.getHeaders("Set-Cookie").stream()
                 .allMatch(value -> value.contains("Secure")));
-    }
-
-    private static String defaultPassword() {
-        return new String(new char[]{48, 100, 79, 79, 48, 55, 50, 49});
     }
 
     private static Cookie sessionCookie(MockHttpServletResponse response) {

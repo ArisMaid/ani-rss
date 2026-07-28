@@ -80,7 +80,7 @@ public class ImageCacheService {
                 PathPolicy.realPathWithin(rootParent, root);
                 Path temporary = Files.createTempFile(root, ".image-", ".part");
                 try {
-                    Files.write(temporary, fetched.bytes());
+                    fetched.writeTo(temporary);
                     Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE);
                 } finally {
                     Files.deleteIfExists(temporary);

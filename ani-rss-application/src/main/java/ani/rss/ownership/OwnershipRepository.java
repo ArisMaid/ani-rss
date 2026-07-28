@@ -153,25 +153,31 @@ public class OwnershipRepository {
     }
 
     public Optional<DownloadOwnership> findForTask(String downloaderType, String remoteTaskId, String infoHash) {
+        String normalizedRemoteTaskId = blankToNull(remoteTaskId);
+        String normalizedInfoHash = normalizeHash(infoHash);
+        if (blankToNull(downloaderType) == null ||
+                (normalizedRemoteTaskId == null && normalizedInfoHash == null)) {
+            return Optional.empty();
+        }
         return DatabaseManager.withConnection(connection -> {
-            String sql = """
-                    SELECT * FROM download_ownership
-                    WHERE downloader_type = ?
-                      AND ((? IS NOT NULL AND remote_task_id = ?)
-                        OR (? IS NOT NULL AND info_hash = ?))
-                    ORDER BY CASE state WHEN 'ACTIVE' THEN 0 WHEN 'LEGACY_ADOPTED' THEN 1 ELSE 2 END
-                    LIMIT 1
-                    """;
-            try (PreparedStatement statement = connection.prepareStatement(sql)) {
-                statement.setString(1, downloaderType);
-                statement.setString(2, blankToNull(remoteTaskId));
-                statement.setString(3, blankToNull(remoteTaskId));
-                statement.setString(4, blankToNull(infoHash));
-                statement.setString(5, normalizeHash(infoHash));
-                try (ResultSet resultSet = statement.executeQuery()) {
-                    return resultSet.next() ? Optional.of(mapOwnership(resultSet)) : Optional.empty();
-                }
-            }
+            DownloadOwnership remoteMatch = normalizedRemoteTaskId == null ? null : findOne(
+                    connection,
+                    """
+                            SELECT * FROM download_ownership
+                            WHERE downloader_type = ? AND remote_task_id = ?
+                            ORDER BY CASE state WHEN 'ACTIVE' THEN 0 WHEN 'LEGACY_ADOPTED' THEN 1 ELSE 2 END
+                            LIMIT 1
+                            """,
+                    downloaderType, normalizedRemoteTaskId);
+            DownloadOwnership hashMatch = normalizedInfoHash == null ? null : findOne(
+                    connection,
+                    """
+                            SELECT * FROM download_ownership
+                            WHERE downloader_type = ? AND info_hash = ?
+                            LIMIT 1
+                            """,
+                    downloaderType, normalizedInfoHash);
+            return Optional.ofNullable(preferred(remoteMatch, hashMatch));
         });
     }
 
@@ -243,6 +249,10 @@ public class OwnershipRepository {
         return list("SELECT * FROM download_ownership WHERE subscription_id = ? ORDER BY created_at", subscriptionId);
     }
 
+    public List<DownloadOwnership> listByDownloaderType(String downloaderType) {
+        return list("SELECT * FROM download_ownership WHERE downloader_type = ? ORDER BY created_at", downloaderType);
+    }
+
     public List<DownloadOwnership> listAll() {
         return list("SELECT * FROM download_ownership ORDER BY created_at", null);
     }
@@ -297,6 +307,14 @@ public class OwnershipRepository {
 
     public void replaceFiles(String ownershipId, List<OwnedFile> files) {
         DatabaseManager.transaction(connection -> {
+            Map<String, OwnedFile> replacement = new LinkedHashMap<>();
+            for (OwnedFile file : files == null ? List.<OwnedFile>of() : files) {
+                replacement.put(file.relativePath(), new OwnedFile(
+                        ownershipId, file.relativePath(), file.kind(), file.size()));
+            }
+            if (replacement.equals(filesByPath(connection, ownershipId))) {
+                return null;
+            }
             try (PreparedStatement delete = connection.prepareStatement(
                     "DELETE FROM owned_files WHERE ownership_id = ?")) {
                 delete.setString(1, ownershipId);
@@ -305,7 +323,7 @@ public class OwnershipRepository {
             try (PreparedStatement insert = connection.prepareStatement("""
                     INSERT INTO owned_files(ownership_id, relative_path, kind, size) VALUES (?, ?, ?, ?)
                     """)) {
-                for (OwnedFile file : files) {
+                for (OwnedFile file : replacement.values()) {
                     insert.setString(1, ownershipId);
                     insert.setString(2, file.relativePath());
                     insert.setString(3, file.kind());
@@ -322,6 +340,20 @@ public class OwnershipRepository {
         });
     }
 
+    public Set<String> ownershipIdsWithFiles() {
+        return DatabaseManager.withConnection(connection -> {
+            Set<String> result = new LinkedHashSet<>();
+            try (PreparedStatement statement = connection.prepareStatement(
+                    "SELECT DISTINCT ownership_id FROM owned_files");
+                 ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    result.add(resultSet.getString(1));
+                }
+            }
+            return result;
+        });
+    }
+
     public List<OwnedFile> listFiles(String ownershipId) {
         return DatabaseManager.withConnection(connection -> {
             List<OwnedFile> result = new ArrayList<>();
@@ -330,17 +362,44 @@ public class OwnershipRepository {
                 statement.setString(1, ownershipId);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     while (resultSet.next()) {
-                        long size = resultSet.getLong("size");
+                        long storedSize = resultSet.getLong("size");
+                        Long size = resultSet.wasNull() ? null : storedSize;
                         result.add(new OwnedFile(
                                 resultSet.getString("ownership_id"),
                                 resultSet.getString("relative_path"),
                                 resultSet.getString("kind"),
-                                resultSet.wasNull() ? null : size
+                                size
                         ));
                     }
                 }
             }
             return result;
+        });
+    }
+
+    /**
+     * Loads the live ownership path index in one query. Destructive-operation
+     * guards need only these columns and must not issue one manifest query per
+     * ownership row.
+     */
+    public List<OwnedPathReference> listLiveFileReferences() {
+        return DatabaseManager.withConnection(connection -> {
+            List<OwnedPathReference> result = new ArrayList<>();
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT ownership.ownership_id, ownership.save_root, files.relative_path
+                    FROM download_ownership ownership
+                    JOIN owned_files files ON files.ownership_id = ownership.ownership_id
+                    WHERE ownership.state IN ('ACTIVE', 'LEGACY_ADOPTED')
+                    """);
+                 ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    result.add(new OwnedPathReference(
+                            resultSet.getString("ownership_id"),
+                            resultSet.getString("save_root"),
+                            resultSet.getString("relative_path")));
+                }
+            }
+            return List.copyOf(result);
         });
     }
 
@@ -520,6 +579,59 @@ public class OwnershipRepository {
         statement.setLong(11, ownership.updatedAt());
     }
 
+    private static DownloadOwnership findOne(
+            java.sql.Connection connection, String sql, String first, String second) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(sql)) {
+            statement.setString(1, first);
+            statement.setString(2, second);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? mapOwnership(resultSet) : null;
+            }
+        }
+    }
+
+    private static DownloadOwnership preferred(DownloadOwnership first, DownloadOwnership second) {
+        if (first == null) {
+            return second;
+        }
+        if (second == null || first.ownershipId().equals(second.ownershipId())) {
+            return first;
+        }
+        return statePriority(first.state()) <= statePriority(second.state()) ? first : second;
+    }
+
+    private static int statePriority(OwnershipState state) {
+        if (state == OwnershipState.ACTIVE) {
+            return 0;
+        }
+        if (state == OwnershipState.LEGACY_ADOPTED) {
+            return 1;
+        }
+        return 2;
+    }
+
+    private static Map<String, OwnedFile> filesByPath(
+            java.sql.Connection connection, String ownershipId) throws SQLException {
+        Map<String, OwnedFile> result = new LinkedHashMap<>();
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT ownership_id, relative_path, kind, size FROM owned_files WHERE ownership_id = ?")) {
+            statement.setString(1, ownershipId);
+            try (ResultSet resultSet = statement.executeQuery()) {
+                while (resultSet.next()) {
+                    long storedSize = resultSet.getLong("size");
+                    Long size = resultSet.wasNull() ? null : storedSize;
+                    String relativePath = resultSet.getString("relative_path");
+                    result.put(relativePath, new OwnedFile(
+                            resultSet.getString("ownership_id"),
+                            relativePath,
+                            resultSet.getString("kind"),
+                            size));
+                }
+            }
+        }
+        return result;
+    }
+
     private static DownloadOwnership mapOwnership(ResultSet resultSet) throws SQLException {
         int season = resultSet.getInt("season");
         boolean seasonWasNull = resultSet.wasNull();
@@ -559,5 +671,8 @@ public class OwnershipRepository {
 
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    public record OwnedPathReference(String ownershipId, String saveRoot, String relativePath) {
     }
 }

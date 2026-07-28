@@ -64,7 +64,7 @@ import {initAuth, rememberThePassword} from "@/js/global.js";
 let loading = ref(false)
 
 let user = ref({
-  username: 'Aris',
+  username: 'admin',
   password: ''
 })
 

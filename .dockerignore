@@ -1,0 +1,7 @@
+**
+!docker/
+!docker/run.sh
+!docker/exec.sh
+!ani-rss-application/
+!ani-rss-application/target/
+!ani-rss-application/target/ani-rss.jar

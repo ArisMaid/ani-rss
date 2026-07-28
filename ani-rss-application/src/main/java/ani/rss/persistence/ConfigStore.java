@@ -14,11 +14,13 @@ import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Pattern;
 
 /**
@@ -35,6 +37,8 @@ public final class ConfigStore {
     private final Consumer<Config> normalizer;
     private final FileWriter writer;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+    private final AtomicLong revision = new AtomicLong();
+    private volatile SecurityConfiguration securityConfiguration;
     private Config lastCommitted;
     private JsonObject preservedDocument = new JsonObject();
     private Path preservedPath;
@@ -53,6 +57,7 @@ public final class ConfigStore {
         this.normalizer = Objects.requireNonNull(normalizer, "normalizer");
         this.writer = Objects.requireNonNull(writer, "writer");
         this.lastCommitted = copy(runtime);
+        this.securityConfiguration = SecurityConfiguration.from(runtime);
     }
 
     public Config snapshot() {
@@ -71,6 +76,32 @@ public final class ConfigStore {
         } finally {
             lock.readLock().unlock();
         }
+    }
+
+    /**
+     * Returns a cheap change token for consumers that cache a small, immutable
+     * projection of the configuration. The token advances only after a new
+     * runtime configuration has been installed successfully.
+     */
+    public long revision() {
+        return revision.get();
+    }
+
+    public String downloadToolType() {
+        lock.readLock().lock();
+        try {
+            return runtime.getDownloadToolType();
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /**
+     * Returns the immutable request-path security projection without copying
+     * the complete configuration document.
+     */
+    public SecurityConfiguration securityConfiguration() {
+        return securityConfiguration;
     }
 
     /** Validates and normalizes a candidate without changing disk or runtime state. */
@@ -119,6 +150,7 @@ public final class ConfigStore {
                 lastCommitted = copy(candidate);
                 preservedDocument = document == null ? new JsonObject() : document.deepCopy();
                 preservedPath = path;
+                revision.incrementAndGet();
             } catch (Exception e) {
                 throw failure("load configuration", e);
             }
@@ -141,6 +173,7 @@ public final class ConfigStore {
                 replaceRuntime(next);
                 lastCommitted = copy(next);
                 preservedDocument = document;
+                revision.incrementAndGet();
             } catch (Exception e) {
                 replaceRuntime(previous);
                 throw e;
@@ -166,6 +199,7 @@ public final class ConfigStore {
                 replaceRuntime(candidate);
                 lastCommitted = copy(candidate);
                 preservedDocument = document;
+                revision.incrementAndGet();
             } catch (Exception e) {
                 replaceRuntime(previous);
                 throw e;
@@ -184,6 +218,7 @@ public final class ConfigStore {
             lastCommitted = copy(value);
             replaceRuntime(value);
             preservedDocument = documentFor(path(), value);
+            revision.incrementAndGet();
         } finally {
             lock.writeLock().unlock();
         }
@@ -247,6 +282,7 @@ public final class ConfigStore {
     private void replaceRuntime(Config value) {
         BeanUtil.copyProperties(copy(value), runtime,
                 CopyOptions.create().setIgnoreNullValue(false));
+        securityConfiguration = SecurityConfiguration.from(runtime);
     }
 
     private JsonObject documentFor(Path path, Config value) {
@@ -320,5 +356,50 @@ public final class ConfigStore {
     @FunctionalInterface
     public interface FileWriter {
         void write(Path path, String content) throws IOException;
+    }
+
+    public record SecurityConfiguration(
+            String apiKey,
+            boolean ipWhitelist,
+            String ipWhitelistStr,
+            boolean innerIp,
+            boolean allowCors,
+            int loginEffectiveHours,
+            boolean multiLoginForbidden,
+            String uuid,
+            String loginUsername,
+            String loginPassword,
+            boolean verifyLoginIp,
+            boolean limitLoginAttempts,
+            boolean reverseProxyTrustIpListEnabled,
+            List<String> reverseProxyTrustIpList) {
+        public SecurityConfiguration {
+            reverseProxyTrustIpList = reverseProxyTrustIpList == null
+                    ? List.of()
+                    : List.copyOf(reverseProxyTrustIpList);
+        }
+
+        private static SecurityConfiguration from(Config config) {
+            ani.rss.entity.Login login = config == null ? null : config.getLogin();
+            Integer configuredHours = config == null ? null : config.getLoginEffectiveHours();
+            List<String> trustedProxies = config == null || config.getReverseProxyTrustIpList() == null
+                    ? List.of()
+                    : config.getReverseProxyTrustIpList();
+            return new SecurityConfiguration(
+                    config == null ? "" : Objects.toString(config.getApiKey(), ""),
+                    config != null && Boolean.TRUE.equals(config.getIpWhitelist()),
+                    config == null ? "" : Objects.toString(config.getIpWhitelistStr(), ""),
+                    config != null && Boolean.TRUE.equals(config.getInnerIP()),
+                    config != null && Boolean.TRUE.equals(config.getAllowCors()),
+                    configuredHours == null ? 1 : configuredHours,
+                    config != null && Boolean.TRUE.equals(config.getMultiLoginForbidden()),
+                    config == null ? "" : Objects.toString(config.getUuid(), ""),
+                    login == null ? null : login.getUsername(),
+                    login == null ? null : login.getPassword(),
+                    config != null && Boolean.TRUE.equals(config.getVerifyLoginIp()),
+                    config != null && Boolean.TRUE.equals(config.getLimitLoginAttempts()),
+                    config != null && Boolean.TRUE.equals(config.getReverseProxyTrustIpListEnabled()),
+                    trustedProxies);
+        }
     }
 }

@@ -315,6 +315,18 @@ public class ConfigUtil {
         return STORE.snapshot();
     }
 
+    public static long revision() {
+        return STORE.revision();
+    }
+
+    public static String downloadToolType() {
+        return STORE.downloadToolType();
+    }
+
+    public static ConfigStore.SecurityConfiguration securityConfiguration() {
+        return STORE.securityConfiguration();
+    }
+
     public static Config validateCandidate(Config candidate) {
         return STORE.validateCandidate(candidate);
     }

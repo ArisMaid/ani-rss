@@ -14,14 +14,39 @@ import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Comparator;
 import java.util.Map;
+import java.util.Objects;
+import java.util.PriorityQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.LongSupplier;
 
 @Service
-public class MediaHandleService {
-    private static final long TTL = Duration.ofHours(2).toMillis();
+public final class MediaHandleService {
+    private static final long DEFAULT_TTL = Duration.ofHours(2).toMillis();
+    private static final int DEFAULT_MAX_HANDLES = 10_000;
     private static final SecureRandom RANDOM = new SecureRandom();
     private final Map<String, Handle> handles = new ConcurrentHashMap<>();
+    private final PriorityQueue<QueuedHandle> expiryQueue = new PriorityQueue<>(
+            Comparator.comparingLong((QueuedHandle queued) -> queued.value().expiresAt())
+                    .thenComparingLong(QueuedHandle::sequence));
+    private final long ttl;
+    private final int maxHandles;
+    private final LongSupplier clock;
+    private long nextSequence;
+
+    public MediaHandleService() {
+        this(DEFAULT_TTL, DEFAULT_MAX_HANDLES, System::currentTimeMillis);
+    }
+
+    MediaHandleService(long ttl, int maxHandles, LongSupplier clock) {
+        if (ttl <= 0 || maxHandles <= 0) {
+            throw new IllegalArgumentException("media handle limits must be positive");
+        }
+        this.ttl = ttl;
+        this.maxHandles = maxHandles;
+        this.clock = Objects.requireNonNull(clock, "clock");
+    }
 
     public String issue(Path file, Path allowedRoot, HttpServletRequest request) {
         if (!AuthService.validateRequest(request)) {
@@ -38,11 +63,8 @@ public class MediaHandleService {
                     Files.isSymbolicLink(realFile)) {
                 throw new IllegalArgumentException("media file is not a regular file");
             }
-            String handle = randomHandle();
-            handles.put(handle, new Handle(realFile, AuthService.sessionBinding(request),
-                    "", true, System.currentTimeMillis() + TTL));
-            trimExpired();
-            return handle;
+            return register(new Handle(realFile, AuthService.sessionBinding(request),
+                    "", true, clock.getAsLong() + ttl));
         } catch (IOException e) {
             throw new IllegalStateException("media path is unavailable", e);
         }
@@ -50,8 +72,11 @@ public class MediaHandleService {
 
     public MediaResource resolve(String handle, HttpServletRequest request) {
         Handle value = handles.get(handle);
-        if (value == null || value.expiresAt < System.currentTimeMillis()) {
-            handles.remove(handle);
+        if (value == null) {
+            throw new IllegalArgumentException("media handle expired");
+        }
+        if (value.expiresAt < clock.getAsLong()) {
+            handles.remove(handle, value);
             throw new IllegalArgumentException("media handle expired");
         }
         if (value.requiresSession) {
@@ -78,22 +103,35 @@ public class MediaHandleService {
 
     public String issueExternal(String handle, HttpServletRequest request) {
         MediaResource resource = resolve(handle, request);
-        String external = randomHandle();
-        handles.put(external, new Handle(resource.path(), "", AuthUtil.getIp(request), false,
-                System.currentTimeMillis() + TTL));
-        trimExpired();
-        return external;
+        return register(new Handle(resource.path(), "", AuthUtil.getIp(request), false,
+                clock.getAsLong() + ttl));
     }
 
-    private void trimExpired() {
-        long now = System.currentTimeMillis();
-        handles.entrySet().removeIf(entry -> entry.getValue().expiresAt < now);
-        if (handles.size() > 10_000) {
-            handles.entrySet().stream()
-                    .sorted(Map.Entry.comparingByValue((a, b) -> Long.compare(a.expiresAt, b.expiresAt)))
-                    .limit(handles.size() - 10_000)
-                    .map(Map.Entry::getKey)
-                    .forEach(handles::remove);
+    private String register(Handle value) {
+        String handle;
+        do {
+            handle = randomHandle();
+        } while (handles.putIfAbsent(handle, value) != null);
+
+        synchronized (expiryQueue) {
+            expiryQueue.add(new QueuedHandle(handle, value, nextSequence++));
+            trimExpired(clock.getAsLong());
+        }
+        return handle;
+    }
+
+    /**
+     * Removes each queued handle at most once. This keeps issuance O(log H)
+     * instead of scanning and sorting the entire handle map for every file.
+     */
+    private void trimExpired(long now) {
+        while (!expiryQueue.isEmpty() && expiryQueue.peek().value().expiresAt() < now) {
+            QueuedHandle expired = expiryQueue.poll();
+            handles.remove(expired.key(), expired.value());
+        }
+        while (handles.size() > maxHandles && !expiryQueue.isEmpty()) {
+            QueuedHandle oldest = expiryQueue.poll();
+            handles.remove(oldest.key(), oldest.value());
         }
     }
 
@@ -108,5 +146,8 @@ public class MediaHandleService {
 
     private record Handle(Path path, String binding, String clientIp,
                           boolean requiresSession, long expiresAt) {
+    }
+
+    private record QueuedHandle(String key, Handle value, long sequence) {
     }
 }

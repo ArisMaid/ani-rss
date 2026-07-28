@@ -2,10 +2,10 @@ package ani.rss.config;
 
 import ani.rss.auth.ClientAddressPolicy;
 import ani.rss.commons.GsonStatic;
-import ani.rss.entity.Config;
 import ani.rss.entity.Global;
 import ani.rss.entity.web.Result;
 import ani.rss.entity.web.ResultCode;
+import ani.rss.persistence.ConfigStore;
 import ani.rss.util.other.AuthUtil;
 import ani.rss.util.other.ConfigUtil;
 import cn.hutool.core.io.FileUtil;
@@ -44,8 +44,8 @@ public class WebFilter implements Filter {
             response.setHeader("Cache-Control", "no-store");
         }
 
-        Config config = ConfigUtil.CONFIG;
-        if (uri.startsWith("/api") && Boolean.TRUE.equals(config.getInnerIP()) &&
+        ConfigStore.SecurityConfiguration config = ConfigUtil.securityConfiguration();
+        if (uri.startsWith("/api") && config.innerIp() &&
                 !ClientAddressPolicy.isPrivate(AuthUtil.getIp(request))) {
             writePrivateNetworkRequired(request, response);
             return;
@@ -71,7 +71,7 @@ public class WebFilter implements Filter {
         Global.REQUEST.set(request);
         Global.RESPONSE.set(response);
         try {
-            cors(response);
+            cors(response, config);
             filterChain.doFilter(req, res);
         } finally {
             Global.REQUEST.remove();
@@ -79,10 +79,8 @@ public class WebFilter implements Filter {
         }
     }
 
-    private void cors(HttpServletResponse response) {
-        Config config = ConfigUtil.CONFIG;
-        Boolean allowCors = config.getAllowCors();
-        if (!allowCors) {
+    private void cors(HttpServletResponse response, ConfigStore.SecurityConfiguration config) {
+        if (!config.allowCors()) {
             return;
         }
 

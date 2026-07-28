@@ -11,9 +11,37 @@
         <Field name="~(repository|downloadService)"/>
         <Bug pattern="EI_EXPOSE_REP2"/>
     </Match>
+    <!-- Spring-managed services retain collaborators by identity, rather than
+         copying mutable state into value objects. These fields are never
+         exposed through the public API. -->
+    <Match>
+        <Class name="ani.rss.completion.CompletionMigrationService"/>
+        <Field name="ownershipService"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.controller.v2.OwnershipController"/>
+        <Field name="ownershipService"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.ownership.OwnershipMigrationService"/>
+        <Field name="ownershipService"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
     <Match>
         <Class name="ani.rss.ownership.QuarantineService"/>
         <Field name="repository"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.ownership.QuarantineService"/>
+        <Field name="ownershipService"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.recovery.MissingEpisodeRecoveryService"/>
+        <Field name="ownershipService"/>
         <Bug pattern="EI_EXPOSE_REP2"/>
     </Match>
     <Match>

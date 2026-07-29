@@ -62,18 +62,23 @@ public class BaseController {
     }
 
     public static void writeHtml(Integer status, String text) {
+        Map<String, String> map = Map.of("text", text);
+        String html = TemplateUtil.render("text.html", map);
+        write(status, ContentType.TEXT_HTML, html);
+    }
+
+    public static void write(Integer status, String contentType, String text) {
         HttpServletResponse response = Global.RESPONSE.get();
         try {
-            Map<String, String> map = Map.of("text", text);
-            String html = TemplateUtil.render("text.html", map);
+            byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
 
             response.setStatus(status);
-            response.setContentType(ContentType.TEXT_HTML);
-            response.setContentLength(html.getBytes(StandardCharsets.UTF_8).length);
+            response.setContentType(contentType);
+            response.setContentLength(bytes.length);
 
             @Cleanup
             OutputStream outputStream = response.getOutputStream();
-            IoUtil.writeUtf8(outputStream, true, html);
+            IoUtil.write(outputStream, true, bytes);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

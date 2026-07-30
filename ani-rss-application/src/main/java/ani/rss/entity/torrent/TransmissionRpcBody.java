@@ -31,6 +31,7 @@ public class TransmissionRpcBody implements Serializable {
         arguments.put("download-dir", downloadDir);
         arguments.put("metainfo", Base64.encode(torrent));
         arguments.put("filename", "");
+        arguments.put("paused", false);
         return transmissionRpcBody;
     }
 
@@ -41,6 +42,7 @@ public class TransmissionRpcBody implements Serializable {
         arguments.put("download-dir", downloadDir);
         arguments.put("metainfo", "");
         arguments.put("filename", magnet);
+        arguments.put("paused", false);
         return transmissionRpcBody;
     }
 

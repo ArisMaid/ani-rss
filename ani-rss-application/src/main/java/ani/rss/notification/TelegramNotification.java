@@ -45,9 +45,12 @@ public class TelegramNotification implements BaseNotification {
     }
 
     public static List<Message.Chat> getUpdates(NotificationConfig notificationConfig) {
+        if (notificationConfig == null) {
+            return List.of();
+        }
         String telegramBotToken = notificationConfig.getTelegramBotToken();
         if (StrUtil.isBlank(telegramBotToken)) {
-            return new ArrayList<>();
+            return List.of();
         }
         String telegramApiHost = notificationConfig.getTelegramApiHost();
         telegramApiHost = StrUtil.blankToDefault(telegramApiHost, "https://api.telegram.org");
@@ -55,6 +58,10 @@ public class TelegramNotification implements BaseNotification {
         return HttpReq.get(url)
                 .thenFunction(res -> {
                     JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
+                    if (jsonObject == null || !jsonObject.has("result") ||
+                            !jsonObject.get("result").isJsonArray()) {
+                        return List.of();
+                    }
                     JsonArray result = jsonObject.getAsJsonArray("result");
                     List<Message.Chat> chatList = GsonStatic.fromJsonList(result, Update.class)
                             .stream()
@@ -69,8 +76,9 @@ public class TelegramNotification implements BaseNotification {
                                 }
                                 String firstName = chat.getFirstName();
                                 String lastName = chat.getLastName();
-                                username = StrUtil.join(" ", firstName, lastName);
-                                chat.setUsername(username);
+                                String displayName = (firstName == null ? "" : firstName) + " " +
+                                        (lastName == null ? "" : lastName);
+                                chat.setUsername(StrUtil.blankToDefault(displayName.trim(), chat.getId()));
                             })
                             .toList();
                     return CollUtil.distinct(chatList, Message.Chat::getId, false);
@@ -104,13 +112,13 @@ public class TelegramNotification implements BaseNotification {
 
         String notificationTemplate = replaceNotificationTemplate(ani, notificationConfig, text, notificationStatusEnum);
 
-        if (!telegramImage) {
+        if (!Boolean.TRUE.equals(telegramImage)) {
             String url = StrFormatter.format("{}/bot{}/sendMessage", telegramApiHost, telegramBotToken);
 
             // 未启用图片
             Map<String, Object> body = new HashMap<>();
             body.put("chat_id", telegramChatId);
-            if (telegramTopicId > -1) {
+            if (telegramTopicId != null && telegramTopicId > -1) {
                 body.put("message_thread_id", telegramTopicId);
             }
             body.put("text", notificationTemplate);
@@ -144,7 +152,7 @@ public class TelegramNotification implements BaseNotification {
                 .form("photo", photo)
                 .form("parse_mode", telegramFormat);
 
-        if (telegramTopicId > -1) {
+        if (telegramTopicId != null && telegramTopicId > -1) {
             request.form("message_thread_id", telegramTopicId);
         }
 
@@ -155,6 +163,7 @@ public class TelegramNotification implements BaseNotification {
     @Data
     @Accessors(chain = true)
     private static class Update implements Serializable {
+        @SerializedName(value = "updateId", alternate = "update_id")
         private String updateId;
         @SerializedName(value = "message", alternate = "my_chat_member")
         private Message message;
@@ -173,7 +182,7 @@ public class TelegramNotification implements BaseNotification {
         @Data
         @Accessors(chain = true)
         public static class From implements Serializable {
-            private Integer id;
+            private String id;
             @SerializedName(value = "isBot", alternate = "is_bot")
             private Boolean isBot;
             @SerializedName(value = "firstName", alternate = "first_name")
@@ -188,7 +197,8 @@ public class TelegramNotification implements BaseNotification {
         @Data
         @Accessors(chain = true)
         public static class Chat implements Serializable {
-            private Integer id;
+            /** Telegram chat ids may exceed the signed 32-bit integer range. */
+            private String id;
             @SerializedName(value = "firstName", alternate = "first_name")
             private String firstName;
             @SerializedName(value = "lastName", alternate = "last_name")

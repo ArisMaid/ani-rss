@@ -114,17 +114,17 @@ public class Transmission implements BaseDownload {
         JsonObject added = payload.has("torrent-added")
                 ? payload.getAsJsonObject("torrent-added")
                 : payload.getAsJsonObject("torrent_added");
-        if (added == null || !added.has("id")) {
+        String remoteReference = responseReference(added);
+        if (StrUtil.isBlank(remoteReference)) {
             throw DownloaderOperationException.failed("TRANSMISSION_INVALID_RESPONSE", false);
         }
-        String id = added.get("id").getAsString();
-        log.info("Transmission 添加下载 name:{} id:{}", item.getReName(), id);
+        log.info("Transmission 添加下载 name:{} reference:{}", item.getReName(), remoteReference);
 
         if (!ani.getOva()) {
-            RenameCacheUtil.put(id, item.getReName());
+            RenameCacheUtil.put(remoteReference, item.getReName());
         }
 
-        return DownloaderResult.success(null, id);
+        return DownloaderResult.success(null, remoteReference);
     }
 
     @Override
@@ -133,25 +133,26 @@ public class Transmission implements BaseDownload {
         SessionState state = ensureSession(config);
         return TransmissionRpcCodec.success(
                 rpc(config,
-                        TransmissionRpcBody.torrentRemove(torrentsInfo.getId(), false), state).body(),
+                        TransmissionRpcBody.torrentRemove(taskReference(torrentsInfo), false), state).body(),
                 state.dialect());
     }
 
     @Override
     public DownloaderResult<Void> recoverResult(TorrentsInfo torrentsInfo) {
-        if (torrentsInfo == null || StrUtil.isBlank(torrentsInfo.getId())) {
+        String reference = taskReference(torrentsInfo);
+        if (StrUtil.isBlank(reference)) {
             return DownloaderResult.rejected("TRANSMISSION_RECOVERY_ID_MISSING");
         }
         Config config = configuration();
         SessionState state = ensureSession(config);
         boolean verified = TransmissionRpcCodec.success(
-                rpc(config, TransmissionRpcBody.torrentVerify(torrentsInfo.getId()), state).body(),
+                rpc(config, TransmissionRpcBody.torrentVerify(reference), state).body(),
                 state.dialect());
         if (!verified) {
             return DownloaderResult.rejected("TRANSMISSION_VERIFY_REJECTED");
         }
         boolean started = TransmissionRpcCodec.success(
-                rpc(config, TransmissionRpcBody.torrentStart(torrentsInfo.getId()), state).body(),
+                rpc(config, TransmissionRpcBody.torrentStart(reference), state).body(),
                 state.dialect());
         return started ? DownloaderResult.success(null)
                 : DownloaderResult.rejected("TRANSMISSION_START_REJECTED");
@@ -159,12 +160,12 @@ public class Transmission implements BaseDownload {
 
     @Override
     public Boolean rename(TorrentsInfo torrentsInfo) {
-        String id = torrentsInfo.getId();
+        String reference = taskReference(torrentsInfo);
         String name = torrentsInfo.getName();
         if (ReUtil.contains("^\\w{40}$", name)) {
             return false;
         }
-        String reName = RenameCacheUtil.get(id);
+        String reName = renameTarget(torrentsInfo, reference);
         if (StrUtil.isBlank(reName)) {
             return false;
         }
@@ -176,10 +177,10 @@ public class Transmission implements BaseDownload {
         Config config = configuration();
         SessionState state = ensureSession(config);
         boolean ok = TransmissionRpcCodec.success(
-                rpc(config, TransmissionRpcBody.torrentRenamePath(id, name, reName), state).body(),
+                rpc(config, TransmissionRpcBody.torrentRenamePath(reference, name, reName), state).body(),
                 state.dialect());
         Assert.isTrue(ok, "重命名失败 {} ==> {}", name, reName);
-        RenameCacheUtil.remove(id);
+        removeRenameTargets(torrentsInfo, reference);
         return true;
     }
 
@@ -192,7 +193,7 @@ public class Transmission implements BaseDownload {
         Config config = configuration();
         SessionState state = ensureSession(config);
         return TransmissionRpcCodec.success(
-                rpc(config, TransmissionRpcBody.torrentSet(torrentsInfo.getId(), tags), state).body(),
+                rpc(config, TransmissionRpcBody.torrentSet(taskReference(torrentsInfo), tags), state).body(),
                 state.dialect());
     }
 
@@ -206,9 +207,53 @@ public class Transmission implements BaseDownload {
         Config config = configuration();
         SessionState state = ensureSession(config);
         boolean ok = TransmissionRpcCodec.success(
-                rpc(config, TransmissionRpcBody.torrentSetLocation(torrentsInfo.getId(), path), state).body(),
+                rpc(config, TransmissionRpcBody.torrentSetLocation(taskReference(torrentsInfo), path), state).body(),
                 state.dialect());
         Assert.isTrue(ok, "Transmission 修改保存位置失败");
+    }
+
+    private static String responseReference(JsonObject added) {
+        if (added == null) {
+            return "";
+        }
+        for (String field : List.of("hash_string", "hashString", "id")) {
+            if (added.has(field) && !added.get(field).isJsonNull()) {
+                String value = added.get(field).getAsString();
+                if (StrUtil.isNotBlank(value)) {
+                    return value;
+                }
+            }
+        }
+        return "";
+    }
+
+    private static String taskReference(TorrentsInfo torrentsInfo) {
+        if (torrentsInfo == null) {
+            return "";
+        }
+        return StrUtil.blankToDefault(
+                StrUtil.blankToDefault(torrentsInfo.getHash(), torrentsInfo.getId()), "");
+    }
+
+    private static String renameTarget(TorrentsInfo torrentsInfo, String reference) {
+        String target = RenameCacheUtil.get(reference);
+        if (StrUtil.isBlank(target) && !reference.equals(torrentsInfo.getId())) {
+            target = RenameCacheUtil.get(torrentsInfo.getId());
+        }
+        if (StrUtil.isBlank(target) && !reference.equals(torrentsInfo.getHash())) {
+            target = RenameCacheUtil.get(torrentsInfo.getHash());
+        }
+        return target;
+    }
+
+    private static void removeRenameTargets(TorrentsInfo torrentsInfo, String reference) {
+        RenameCacheUtil.remove(reference);
+        if (StrUtil.isNotBlank(torrentsInfo.getId()) && !reference.equals(torrentsInfo.getId())) {
+            RenameCacheUtil.remove(torrentsInfo.getId());
+        }
+        if (StrUtil.isNotBlank(torrentsInfo.getHash()) && !reference.equals(torrentsInfo.getHash())) {
+            RenameCacheUtil.remove(torrentsInfo.getHash());
+        }
     }
 
     private SessionState ensureSession(Config config) {

@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import wushuo.tmdb.api.entity.Tmdb;
 
-import java.util.Map;
+import java.util.List;
 import java.util.Optional;
 
 @RestController
@@ -73,9 +73,9 @@ public class NotificationController extends BaseController {
     @Auth
     @Operation(summary = "获取TG最近消息")
     @PostMapping("/getTgUpdates")
-    public Result<Map<String, String>> getUpdates(@RequestBody NotificationConfig notificationConfig) {
+    public Result<List<TelegramNotification.Message.Chat>> getUpdates(@RequestBody NotificationConfig notificationConfig) {
         notificationConfig = configService.notificationForOperation(notificationConfig);
-        Map<String, String> map = TelegramNotification.getUpdates(notificationConfig);
+        List<TelegramNotification.Message.Chat> map = TelegramNotification.getUpdates(notificationConfig);
         return Result.success(map);
     }
 

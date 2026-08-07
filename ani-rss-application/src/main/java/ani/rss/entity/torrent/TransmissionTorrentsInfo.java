@@ -2,6 +2,7 @@ package ani.rss.entity.torrent;
 
 import ani.rss.commons.FileUtils;
 import ani.rss.enums.TorrentsStateEnum;
+import cn.hutool.core.util.StrUtil;
 import com.google.gson.annotations.SerializedName;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -72,8 +73,10 @@ public class TransmissionTorrentsInfo implements Serializable {
 
         public TorrentsInfo toTorrentsInfo() {
             TorrentsStateEnum torrentsState = getTorrentsStateEnum();
+            String remoteId = StrUtil.blankToDefault(getId(), hashString);
 
             return progress(haveValid, totalSize)
+                    .setId(remoteId)
                     .setHash(hashString)
                     .setTagList(labels)
                     .setCompleted(haveValid)

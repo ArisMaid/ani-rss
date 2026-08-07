@@ -31,6 +31,7 @@ public class TransmissionRpcBody implements Serializable {
         arguments.put("download-dir", downloadDir);
         arguments.put("metainfo", Base64.encode(torrent));
         arguments.put("filename", "");
+        arguments.put("paused", false);
         return transmissionRpcBody;
     }
 
@@ -41,6 +42,7 @@ public class TransmissionRpcBody implements Serializable {
         arguments.put("download-dir", downloadDir);
         arguments.put("metainfo", "");
         arguments.put("filename", magnet);
+        arguments.put("paused", false);
         return transmissionRpcBody;
     }
 
@@ -85,7 +87,7 @@ public class TransmissionRpcBody implements Serializable {
     public static TransmissionRpcBody torrentRenamePath(String id, String path, String name) {
         TransmissionRpcBody transmissionRpcBody = getInstance(TransmissionMethodEnum.torrentRenamePath);
         Map<String, Object> arguments = transmissionRpcBody.getArguments();
-        arguments.put("id", id);
+        arguments.put("ids", List.of(id));
         arguments.put("path", path);
         arguments.put("name", name);
         return transmissionRpcBody;

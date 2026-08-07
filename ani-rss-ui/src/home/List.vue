@@ -153,7 +153,7 @@ let updateGridLayout = () => {
   let gridColumns = Math.max(1, Math.floor(app.offsetWidth / 400));
 
   const el = document.documentElement
-  el.style.setProperty('--grid-columns', String(gridColumns))
+  el.style.setProperty('--ani-grid-columns', String(gridColumns))
 }
 
 onMounted(() => {
@@ -179,7 +179,7 @@ let props = defineProps({
   display: grid;
   grid-gap: 8px;
   width: 100%;
-  grid-template-columns: repeat(var(--grid-columns), 1fr);
+  grid-template-columns: repeat(var(--ani-grid-columns), 1fr);
 }
 
 .list-container {

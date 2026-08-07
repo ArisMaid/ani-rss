@@ -1,6 +1,7 @@
 package ani.rss.util.basic;
 
 import ani.rss.commons.CacheUtils;
+import ani.rss.commons.GsonStatic;
 import ani.rss.commons.MavenUtils;
 import ani.rss.commons.ProjectMetadata;
 import ani.rss.entity.Config;
@@ -53,6 +54,13 @@ public class HttpReq {
         config(req);
         setProxy(req, config);
         return req;
+    }
+
+    public static HttpRequest post(String url, Object body) {
+        if (body instanceof String) {
+            return post(url).body((String) body);
+        }
+        return post(url).body(GsonStatic.toJson(body));
     }
 
     public static HttpRequest get(String url) {

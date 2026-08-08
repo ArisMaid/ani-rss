@@ -9,13 +9,17 @@ vi.mock('@/js/http.js', () => ({
   addAni: vi.fn()
 }))
 
+const mikanPreload = vi.hoisted(() => vi.fn())
+
 const providerStub = name => ({
   name,
+  methods: {preload: mikanPreload},
   template: '<div />'
 })
 
 describe('add subscription provider handoff', () => {
   beforeEach(() => {
+    mikanPreload.mockReset()
     vi.mocked(http.rssToAni).mockResolvedValue({
       data: {title: 'Example', url: 'https://feed.example.test/rss', bgmUrl: 'https://bgm.tv/subject/1'}
     })
@@ -94,5 +98,32 @@ describe('add subscription provider handoff', () => {
       match: [],
       type: 'mikan'
     }))
+  })
+
+  it('warms the Mikan cache after the Add dialog opens', async () => {
+    const wrapper = shallowMount(Add, {
+      global: {
+        stubs: {
+          Mikan: providerStub('Mikan'),
+          AniBT: providerStub('AniBT'),
+          AnimeGarden: providerStub('AnimeGarden'),
+          Bgm: providerStub('Bgm'),
+          Ani: providerStub('Ani'),
+          ElDialog: {name: 'ElDialog', template: '<div><slot /></div>'},
+          ElTabs: {template: '<div><slot /></div>'},
+          ElTabPane: {template: '<div><slot /></div>'},
+          ElForm: {template: '<form><slot /></form>'},
+          ElFormItem: {template: '<div><slot /></div>'},
+          ElInput: true,
+          ElButton: true,
+          ElText: true
+        }
+      }
+    })
+
+    wrapper.vm.show()
+    await wrapper.findComponent({name: 'ElDialog'}).vm.$emit('opened')
+
+    expect(mikanPreload).toHaveBeenCalledOnce()
   })
 })

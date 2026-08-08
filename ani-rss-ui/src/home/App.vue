@@ -253,11 +253,6 @@ onMounted(() => {
   initLayout()
   selectChange()
 
-  // Add.vue is loaded only after the toolbar action. Start the Mikan season
-  // request while the authenticated home view is already idle so the first
-  // Add → Mikan interaction can reuse its list and begin score warmup early.
-  Promise.resolve(http.preloadDefaultMikanList?.()).catch(() => {})
-
   http.about()
       .then(res => {
         about.value = res.data

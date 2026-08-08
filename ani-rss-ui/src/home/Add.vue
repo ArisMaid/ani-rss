@@ -3,7 +3,7 @@
   <AniBT ref="aniBTRef" @callback="rssCallback"/>
   <Mikan ref="mikanRef" @callback="rssCallback"/>
   <Bgm ref="bgmRef" @callback="bgmCallback"/>
-  <el-dialog v-model="dialogVisible" center title="添加订阅"
+  <el-dialog v-model="dialogVisible" center title="添加订阅" @opened="onDialogOpened"
              :close-on-click-modal="!rssButtonLoading"
              :close-on-press-escape="!rssButtonLoading"
              :show-close="!rssButtonLoading"
@@ -157,7 +157,7 @@
 </template>
 
 <script setup>
-import {nextTick, ref} from "vue";
+import {ref} from "vue";
 import {ElMessage} from "element-plus";
 import Mikan from "./Mikan.vue";
 import Ani from "./Ani.vue";
@@ -219,14 +219,16 @@ const preloadMikan = tab => {
   }
 }
 
+const onDialogOpened = () => {
+  // Warm the shared default-season cache only after the Add dialog is visible.
+  void mikanRef.value?.preload()
+}
+
 const show = () => {
   ani.value = JSON.parse(JSON.stringify(aniData))
   showRss.value = true
   dialogVisible.value = true
   rssButtonLoading.value = false
-  if (activeName.value === 'mikan') {
-    void nextTick(() => mikanRef.value?.preload())
-  }
 }
 
 let bgmCallback = it => {

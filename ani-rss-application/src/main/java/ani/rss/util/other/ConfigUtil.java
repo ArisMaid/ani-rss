@@ -162,6 +162,7 @@ public class ConfigUtil {
                 .setIpWhitelist(false)
                 .setIpWhitelistStr("")
                 .setOmit(true)
+                .setMissingEpisodeRecoveryEnabled(true)
                 .setBgmToken("")
                 .setBgmTokenType(BgmTokenTypeEnum.INPUT)
                 .setBgmAppID("")

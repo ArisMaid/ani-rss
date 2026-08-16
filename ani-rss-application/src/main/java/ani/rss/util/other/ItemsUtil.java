@@ -86,17 +86,11 @@ public class ItemsUtil {
 
         String xml = getRss(rssUrl);
 
-        List<String> exclude = ani.getExclude();
-        List<String> match = ani.getMatch();
-
         List<Item> items = new ArrayList<>();
 
         Document document = XmlUtil.readXML(xml);
         Node channel = document.getElementsByTagName("channel").item(0);
         NodeList childNodes = channel.getChildNodes();
-        List<String> globalExcludeList = config.getExclude();
-        Boolean globalExclude = ani.getGlobalExclude();
-
         for (int i = childNodes.getLength() - 1; i >= 0; i--) {
             Node item = childNodes.item(i);
             String nodeName = item.getNodeName();
@@ -217,39 +211,8 @@ public class ItemsUtil {
                     .setFormatSize(formatSize)
                     .setPubDate(pubDate);
 
-            Function<String, String> map = s -> {
-                String subgroup = ReUtil.get(StringEnum.SUBGROUP_REG_STR, s, 1);
-                if (StrUtil.isBlank(subgroup)) {
-                    return s;
-                }
-                if (subgroup.equals(subgroupName)) {
-                    return ReUtil.get(StringEnum.SUBGROUP_REG_STR, s, 2);
-                }
-                return "";
-            };
-
-            // 排除
-            if (!exclude.isEmpty()) {
-                if (exclude.stream().map(map).filter(StrUtil::isNotBlank)
-                        .anyMatch(s -> RegexRuleMatcher.matches(s, addNewItem.getTitle(), "subscription-exclude"))) {
-                    continue;
-                }
-            }
-
-            // 匹配
-            if (!match.isEmpty()) {
-                if (match.stream().map(map).filter(StrUtil::isNotBlank)
-                        .anyMatch(s -> RegexRuleMatcher.doesNotMatch(s, addNewItem.getTitle(), "subscription-match"))) {
-                    continue;
-                }
-            }
-
-            // 全局排除
-            if (globalExclude) {
-                if (globalExcludeList.stream().map(map).filter(StrUtil::isNotBlank)
-                        .anyMatch(s -> RegexRuleMatcher.matches(s, addNewItem.getTitle(), "global-exclude"))) {
-                    continue;
-                }
+            if (!isAllowedByDownloadRules(ani, addNewItem, config)) {
+                continue;
             }
             items.add(addNewItem);
         }
@@ -265,6 +228,47 @@ public class ItemsUtil {
                     return false;
                 }).toList();
         return CollUtil.distinct(items, item -> item.getEpisode().toString(), true);
+    }
+
+    /**
+     * Applies the exact subscription/global title rules used while parsing RSS.
+     * Recovery reuses this policy so a later setting change cannot revive an
+     * item that the normal feed path would now reject.
+     */
+    public static boolean isAllowedByDownloadRules(Ani ani, Item item, Config config) {
+        if (ani == null || item == null || config == null) {
+            return false;
+        }
+        String title = StrUtil.nullToEmpty(item.getTitle());
+        String subgroupName = StrUtil.blankToDefault(item.getSubgroup(), "未知字幕组");
+        Function<String, String> applicableRule = rule -> {
+            String subgroup = ReUtil.get(StringEnum.SUBGROUP_REG_STR, rule, 1);
+            if (StrUtil.isBlank(subgroup)) {
+                return rule;
+            }
+            if (subgroup.equals(subgroupName)) {
+                return ReUtil.get(StringEnum.SUBGROUP_REG_STR, rule, 2);
+            }
+            return "";
+        };
+
+        List<String> excludes = ObjectUtil.defaultIfNull(ani.getExclude(), List.of());
+        if (excludes.stream().map(applicableRule).filter(StrUtil::isNotBlank)
+                .anyMatch(rule -> RegexRuleMatcher.matches(rule, title, "subscription-exclude"))) {
+            return false;
+        }
+
+        List<String> matches = ObjectUtil.defaultIfNull(ani.getMatch(), List.of());
+        if (matches.stream().map(applicableRule).filter(StrUtil::isNotBlank)
+                .anyMatch(rule -> RegexRuleMatcher.doesNotMatch(rule, title, "subscription-match"))) {
+            return false;
+        }
+
+        List<String> globalExcludes = ObjectUtil.defaultIfNull(config.getExclude(), List.of());
+        return !Boolean.TRUE.equals(ani.getGlobalExclude()) || globalExcludes.stream()
+                .map(applicableRule)
+                .filter(StrUtil::isNotBlank)
+                .noneMatch(rule -> RegexRuleMatcher.matches(rule, title, "global-exclude"));
     }
 
     /**

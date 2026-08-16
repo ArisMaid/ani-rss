@@ -1,13 +1,14 @@
 package ani.rss.recovery;
 
 import ani.rss.commons.GsonStatic;
-import ani.rss.commons.RegexRuleMatcher;
+import ani.rss.commons.FileUtils;
 import ani.rss.download.DownloaderClient;
 import ani.rss.download.DownloaderResult;
 import ani.rss.download.OpenList;
 import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
 import ani.rss.entity.Item;
+import ani.rss.entity.StandbyRss;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.enums.NotificationStatusEnum;
 import ani.rss.enums.TorrentsStateEnum;
@@ -16,9 +17,9 @@ import ani.rss.ownership.OwnershipService;
 import ani.rss.ownership.OwnershipState;
 import ani.rss.service.DownloadService;
 import ani.rss.util.other.ConfigUtil;
+import ani.rss.util.other.ItemsUtil;
 import ani.rss.util.other.NotificationUtil;
 import ani.rss.util.other.TorrentUtil;
-import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -26,10 +27,14 @@ import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -89,16 +94,42 @@ public class MissingEpisodeRecoveryService {
      * restores instead of redownloading an entire historical feed.
      */
     public SubmissionDisposition prepareEligible(Ani ani, Item item, boolean cachedInput) {
+        return prepareEligible(ani, item, cachedInput, null);
+    }
+
+    public SubmissionDisposition prepareEligible(
+            Ani ani, Item item, boolean cachedInput, String saveRoot) {
         if (!valid(ani, item)) {
             return SubmissionDisposition.NEW;
         }
         RecoveryRepository.Observation observation = repository.observeWithStatus(ani, item);
         if (!observation.created()) {
+            RecoveryRecord current = observation.record();
+            if (current.state() == RecoveryState.SUPERSEDED && recoveryEnabled()) {
+                Optional<RecoveryRecord> equivalent = findHealthyEquivalent(
+                        ani, item, current, saveRoot, ConfigUtil.downloadToolType(),
+                        repository.listBySubscription(ani.getId()));
+                if (equivalent.isEmpty()) {
+                    repository.reactivate(current.subscriptionId(), current.sourceHash());
+                }
+            }
             return SubmissionDisposition.TRACKED;
         }
         if (cachedInput) {
             repository.markSatisfied(ani.getId(), item.getInfoHash());
             return SubmissionDisposition.LEGACY_CACHE_SATISFIED;
+        }
+        if (recoveryEnabled()) {
+            Optional<RecoveryRecord> equivalent = findHealthyEquivalent(
+                    ani, item, observation.record(), saveRoot, ConfigUtil.downloadToolType(),
+                    repository.listBySubscription(ani.getId()));
+            if (equivalent.isPresent()) {
+                repository.markSuperseded(ani.getId(), item.getInfoHash(),
+                        "RECOVERY_EQUIVALENT_PRESENT");
+                log.info("同版本媒体已存在，跳过新 hash subscriptionId:{} hash:{} existingHash:{}",
+                        ani.getId(), shortHash(item.getInfoHash()), shortHash(equivalent.get().infoHash()));
+                return SubmissionDisposition.TRACKED;
+            }
         }
         return SubmissionDisposition.NEW;
     }
@@ -154,6 +185,18 @@ public class MissingEpisodeRecoveryService {
      * numbering; records are created only from accepted RSS entries.
      */
     public void reconcile(Ani ani, List<TorrentsInfo> observedTasks) {
+        reconcile(ani, List.of(), observedTasks, activeDownloadCount(observedTasks));
+    }
+
+    public void reconcile(Ani ani, List<Item> eligibleItems, List<TorrentsInfo> observedTasks) {
+        reconcile(ani, eligibleItems, observedTasks, activeDownloadCount(observedTasks));
+    }
+
+    public void reconcile(
+            Ani ani,
+            List<Item> eligibleItems,
+            List<TorrentsInfo> observedTasks,
+            long activeDownloads) {
         if (ani == null || !Boolean.TRUE.equals(ani.getEnable())) {
             return;
         }
@@ -162,7 +205,10 @@ public class MissingEpisodeRecoveryService {
             return;
         }
         String downloaderType = client.configurationSnapshot().getDownloadToolType();
+        boolean recoveryEnabled = recoveryEnabled();
+        coordinateCandidates(ani, eligibleItems, downloaderType, recoveryEnabled, currentSaveRoot(ani));
         Map<String, TorrentsInfo> tasks = tasksByHash(observedTasks);
+        RecoverySubmissionBudget submissionBudget = new RecoverySubmissionBudget(activeDownloads);
         long now = System.currentTimeMillis();
         long satisfiedAuditBefore = now - SATISFIED_AUDIT_INTERVAL.toMillis();
         for (RecoveryRecord record : repository.listForReconciliation(
@@ -174,6 +220,9 @@ public class MissingEpisodeRecoveryService {
             }
             if (isExplicitlyExcluded(ani, item)) {
                 repository.cancel(record.subscriptionId(), record.infoHash());
+                continue;
+            }
+            if (!recoveryEnabled && record.state() != RecoveryState.DEFERRED) {
                 continue;
             }
 
@@ -218,18 +267,18 @@ public class MissingEpisodeRecoveryService {
                 }
                 if (task != null && verification.manifestAvailable()) {
                     if (due(record, now)) {
-                        recoverExistingTask(record, ani, item, task, observedTasks, client);
+                        recoverExistingTask(record, ani, item, task, client, submissionBudget);
                     }
                     continue;
                 }
                 if (!verification.manifestAvailable() && "OpenList".equalsIgnoreCase(downloaderType)) {
-                    reconcileOpenList(record, ani, item, ownership, observedTasks);
+                    reconcileOpenList(record, ani, item, ownership, submissionBudget);
                     continue;
                 }
                 if (verification.manifestAvailable() || ownership.state() == OwnershipState.FAILED ||
                         ownership.state() == OwnershipState.PENDING) {
                     if (due(record, now)) {
-                        requeue(record, ani, item, observedTasks);
+                        requeue(record, ani, item, submissionBudget);
                     }
                     continue;
                 }
@@ -240,9 +289,260 @@ public class MissingEpisodeRecoveryService {
             if (record.state() == RecoveryState.SATISFIED) {
                 touchSatisfiedAudit(record);
             } else if (due(record, now)) {
-                requeue(record, ani, item, observedTasks);
+                requeue(record, ani, item, submissionBudget);
             }
         }
+    }
+
+    void coordinateCandidates(
+            Ani ani,
+            List<Item> eligibleItems,
+            String downloaderType,
+            boolean recoveryEnabled,
+            String saveRoot) {
+        List<RecoveryRecord> records = repository.listBySubscription(ani.getId());
+        if (records.isEmpty()) {
+            return;
+        }
+        Config config = ConfigUtil.snapshot();
+        List<IndexedRecord> indexedRecords = new ArrayList<>();
+        Map<String, IndexedRecord> recordsBySource = new HashMap<>();
+        Map<String, List<IndexedRecord>> recordsByRelease = new HashMap<>();
+        for (RecoveryRecord record : records) {
+            Item recordItem = item(record);
+            if (recordItem == null) {
+                continue;
+            }
+            RecoveryItemIdentity.Value identity = RecoveryItemIdentity.from(ani, recordItem);
+            IndexedRecord indexed = new IndexedRecord(record, recordItem, identity);
+            indexedRecords.add(indexed);
+            recordsBySource.put(normalize(record.sourceHash()), indexed);
+            if (identity.named()) {
+                recordsByRelease.computeIfAbsent(identity.releaseKey(), ignored -> new ArrayList<>())
+                        .add(indexed);
+            }
+        }
+
+        List<SelectedCandidate> selected = new ArrayList<>();
+        Set<String> selectedSources = new HashSet<>();
+        Map<String, List<SelectedCandidate>> selectedByEpisode = new LinkedHashMap<>();
+        Map<String, List<SelectedCandidate>> selectedByRelease = new LinkedHashMap<>();
+        for (Item item : eligibleItems == null ? List.<Item>of() : eligibleItems) {
+            if (item == null || StrUtil.isBlank(item.getInfoHash())) {
+                continue;
+            }
+            IndexedRecord indexed = recordsBySource.get(normalize(item.getInfoHash()));
+            if (indexed == null || indexed.record().state() == RecoveryState.CANCELLED) {
+                continue;
+            }
+            SelectedCandidate candidate = new SelectedCandidate(
+                    item, indexed.record(), RecoveryItemIdentity.from(ani, item));
+            selected.add(candidate);
+            selectedSources.add(normalize(indexed.record().sourceHash()));
+            selectedByEpisode.computeIfAbsent(candidate.identity().episodeKey(), ignored -> new ArrayList<>())
+                    .add(candidate);
+            String releaseKey = candidate.identity().named()
+                    ? candidate.identity().releaseKey()
+                    : "record:" + candidate.record().recoveryId();
+            selectedByRelease.computeIfAbsent(releaseKey, ignored -> new ArrayList<>()).add(candidate);
+        }
+
+        Set<String> allowedSources = new HashSet<>();
+        Set<String> releaseHandled = new HashSet<>();
+        for (List<SelectedCandidate> releaseCandidates : selectedByRelease.values()) {
+            SelectedCandidate selectedRelease = releaseCandidates.get(0);
+            List<IndexedRecord> equivalentRecords = selectedRelease.identity().named()
+                    ? recordsByRelease.getOrDefault(selectedRelease.identity().releaseKey(), List.of())
+                    : List.of();
+            RecoveryRecord keeper = selectKeeper(
+                    releaseCandidates, equivalentRecords, downloaderType, saveRoot);
+            allowedSources.add(normalize(keeper.sourceHash()));
+            if (recoveryEnabled && keeper.state() == RecoveryState.SUPERSEDED) {
+                repository.reactivate(keeper.subscriptionId(), keeper.sourceHash());
+            }
+
+            boolean keeperIsCurrent = selectedSources.contains(normalize(keeper.sourceHash()));
+            for (IndexedRecord duplicate : equivalentRecords) {
+                RecoveryRecord duplicateRecord = duplicate.record();
+                if (duplicateRecord.recoveryId().equals(keeper.recoveryId()) ||
+                        duplicateRecord.state() == RecoveryState.CANCELLED) {
+                    continue;
+                }
+                String reason = keeperIsCurrent
+                        ? "RECOVERY_DUPLICATE_RELEASE"
+                        : "RECOVERY_EQUIVALENT_PRESENT";
+                supersede(duplicateRecord, reason);
+                releaseHandled.add(duplicateRecord.recoveryId());
+            }
+        }
+
+        boolean coexist = Boolean.TRUE.equals(config.getCoexist());
+        boolean rename = Boolean.TRUE.equals(config.getRename());
+        boolean downloadNew = Boolean.TRUE.equals(ani.getDownloadNew());
+        boolean skipHalfEpisode = Boolean.TRUE.equals(config.getSkip5());
+        for (IndexedRecord indexed : indexedRecords) {
+            RecoveryRecord record = indexed.record();
+            if (record.state() == RecoveryState.CANCELLED ||
+                    releaseHandled.contains(record.recoveryId()) ||
+                    allowedSources.contains(normalize(record.sourceHash()))) {
+                continue;
+            }
+            Item recordItem = indexed.item();
+            if (!sourceConfigured(ani, recordItem, config)) {
+                supersede(record, "RECOVERY_SOURCE_DISABLED");
+                continue;
+            }
+            if (skipHalfEpisode && ItemsUtil.is5(recordItem)) {
+                supersede(record, "RECOVERY_HALF_EPISODE_DISABLED");
+                continue;
+            }
+            if (selectedSources.contains(normalize(record.sourceHash()))) {
+                continue;
+            }
+            if (downloadNew && !selected.isEmpty()) {
+                supersede(record, "RECOVERY_DOWNLOAD_NEW_POLICY");
+                continue;
+            }
+            RecoveryItemIdentity.Value identity = indexed.identity();
+            List<SelectedCandidate> episodeCandidates = selectedByEpisode.get(identity.episodeKey());
+            if (episodeCandidates == null || episodeCandidates.isEmpty()) {
+                continue;
+            }
+            if (!coexist) {
+                supersede(record, "RECOVERY_CURRENT_RSS_REPLACED");
+                continue;
+            }
+            boolean sameFingerprint = episodeCandidates.stream()
+                    .anyMatch(candidate -> candidate.identity().sameRelease(identity));
+            boolean outputCollision = rename && episodeCandidates.stream()
+                    .anyMatch(candidate -> candidate.identity().sameOutput(identity));
+            if (sameFingerprint || outputCollision) {
+                supersede(record, outputCollision
+                        ? "RECOVERY_OUTPUT_NAME_COLLISION"
+                        : "RECOVERY_DUPLICATE_RELEASE");
+            }
+        }
+    }
+
+    private RecoveryRecord selectKeeper(
+            List<SelectedCandidate> selected,
+            List<IndexedRecord> equivalentRecords,
+            String downloaderType,
+            String saveRoot) {
+        for (SelectedCandidate candidate : selected) {
+            if (hasManagedOwnership(candidate.record(), downloaderType)) {
+                return candidate.record();
+            }
+        }
+        for (IndexedRecord equivalent : equivalentRecords) {
+            RecoveryRecord record = equivalent.record();
+            if (record.state() != RecoveryState.CANCELLED &&
+                    healthyOwnedMedia(record, downloaderType, saveRoot)) {
+                return record;
+            }
+        }
+        return selected.get(0).record();
+    }
+
+    private Optional<RecoveryRecord> findHealthyEquivalent(
+            Ani ani,
+            Item desiredItem,
+            RecoveryRecord current,
+            String saveRoot,
+            String downloaderType,
+            List<RecoveryRecord> records) {
+        if (StrUtil.isBlank(saveRoot) || StrUtil.isBlank(downloaderType)) {
+            return Optional.empty();
+        }
+        RecoveryItemIdentity.Value desired = RecoveryItemIdentity.from(ani, desiredItem);
+        return records.stream()
+                .filter(record -> !record.recoveryId().equals(current.recoveryId()))
+                .filter(record -> record.state() != RecoveryState.CANCELLED)
+                .filter(record -> {
+                    Item candidate = item(record);
+                    return candidate != null && desired.sameRelease(RecoveryItemIdentity.from(ani, candidate));
+                })
+                .filter(record -> healthyOwnedMedia(record, downloaderType, saveRoot))
+                .findFirst();
+    }
+
+    private boolean healthyOwnedMedia(RecoveryRecord record, String downloaderType, String saveRoot) {
+        return ownershipService.findManagedByInfoHash(downloaderType, record.infoHash())
+                .filter(ownership -> record.subscriptionId().equals(ownership.subscriptionId()))
+                .filter(ownership -> ownership.state() == OwnershipState.ACTIVE ||
+                        ownership.state() == OwnershipState.LEGACY_ADOPTED)
+                .filter(ownership -> sameRoot(ownership.saveRoot(), saveRoot))
+                .filter(ownership -> ownershipService.listFiles(ownership.ownershipId()).stream()
+                        .anyMatch(file -> Boolean.TRUE.equals(FileUtils.isVideoFormat(file.relativePath()))))
+                .filter(ownership -> ownershipService.verifyMediaFiles(ownership).healthy())
+                .isPresent();
+    }
+
+    private boolean hasManagedOwnership(RecoveryRecord record, String downloaderType) {
+        return ownershipService.findManagedByInfoHash(downloaderType, record.infoHash())
+                .filter(ownership -> record.subscriptionId().equals(ownership.subscriptionId()))
+                .filter(ownership -> ownership.state() != OwnershipState.FAILED &&
+                        ownership.state() != OwnershipState.QUARANTINED)
+                .isPresent();
+    }
+
+    private String currentSaveRoot(Ani ani) {
+        DownloadService service = downloadService.getIfAvailable();
+        if (service == null) {
+            return null;
+        }
+        try {
+            return service.getDownloadPath(ani);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static boolean sameRoot(String first, String second) {
+        if (StrUtil.isBlank(first) || StrUtil.isBlank(second)) {
+            return false;
+        }
+        try {
+            return Objects.equals(FileUtils.getAbsolutePath(first), FileUtils.getAbsolutePath(second));
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    private static boolean sourceConfigured(Ani ani, Item item, Config config) {
+        if (!Boolean.FALSE.equals(item.getMaster())) {
+            return true;
+        }
+        if (!Boolean.TRUE.equals(config.getStandbyRss()) || ani.getStandbyRssList() == null) {
+            return false;
+        }
+        String subgroup = RecoveryItemIdentity.normalize(item.getSubgroup());
+        return ani.getStandbyRssList().stream()
+                .filter(Objects::nonNull)
+                .map(StandbyRss::getLabel)
+                .map(RecoveryItemIdentity::normalize)
+                .anyMatch(subgroup::equals);
+    }
+
+    private void supersede(RecoveryRecord record, String reason) {
+        if (record.state() == RecoveryState.SUPERSEDED && reason.equals(record.lastErrorCode())) {
+            return;
+        }
+        repository.markSuperseded(record.subscriptionId(), record.sourceHash(), reason);
+        log.info("停止旧版本补下载 subscriptionId:{} hash:{} reason:{}",
+                record.subscriptionId(), shortHash(record.infoHash()), reason);
+    }
+
+    private static boolean recoveryEnabled() {
+        return !Boolean.FALSE.equals(ConfigUtil.snapshot().getMissingEpisodeRecoveryEnabled());
+    }
+
+    private record SelectedCandidate(
+            Item item, RecoveryRecord record, RecoveryItemIdentity.Value identity) {
+    }
+
+    private record IndexedRecord(
+            RecoveryRecord record, Item item, RecoveryItemIdentity.Value identity) {
     }
 
     public void cancelSubscription(String subscriptionId) {
@@ -259,7 +559,7 @@ public class MissingEpisodeRecoveryService {
 
     private void reconcileOpenList(
             RecoveryRecord record, Ani ani, Item item, DownloadOwnership ownership,
-            List<TorrentsInfo> observedTasks) {
+            RecoverySubmissionBudget submissionBudget) {
         DownloaderClient client = TorrentUtil.client();
         if (client == null || !(client.adapter() instanceof OpenList openList)) {
             scheduleRetry(record, "OPENLIST_RECOVERY_CLIENT_UNAVAILABLE");
@@ -279,13 +579,13 @@ public class MissingEpisodeRecoveryService {
             return;
         }
         if (due(record, System.currentTimeMillis())) {
-            requeue(record, ani, item, observedTasks);
+            requeue(record, ani, item, submissionBudget);
         }
     }
 
     private void recoverExistingTask(
             RecoveryRecord record, Ani ani, Item item, TorrentsInfo task,
-            List<TorrentsInfo> observedTasks, DownloaderClient client) {
+            DownloaderClient client, RecoverySubmissionBudget submissionBudget) {
         String key = key(record);
         if (!inFlight.add(key)) {
             return;
@@ -302,7 +602,7 @@ public class MissingEpisodeRecoveryService {
                 DownloaderResult<Void> removed = client.delete(task, false);
                 if (removed.isSuccess()) {
                     inFlight.remove(key);
-                    requeue(record, ani, item, observedTasks);
+                    requeue(record, ani, item, submissionBudget);
                     return;
                 }
                 scheduleRetry(record, removed.errorCode());
@@ -314,13 +614,26 @@ public class MissingEpisodeRecoveryService {
         }
     }
 
-    private void requeue(RecoveryRecord record, Ani ani, Item item, List<TorrentsInfo> observedTasks) {
+    private void requeue(
+            RecoveryRecord record,
+            Ani ani,
+            Item item,
+            RecoverySubmissionBudget submissionBudget) {
         String key = key(record);
         if (!inFlight.add(key)) {
             return;
         }
         try {
-            if (!hasDownloadCapacity(observedTasks)) {
+            if (!submissionBudget.hasCapacity()) {
+                return;
+            }
+            DownloadService service = downloadService.getIfAvailable();
+            if (service == null) {
+                scheduleRetry(record, "RECOVERY_DOWNLOAD_SERVICE_UNAVAILABLE");
+                return;
+            }
+            if (service.itemDownloaded(ani, item, false)) {
+                repository.markSatisfied(record.subscriptionId(), record.infoHash());
                 return;
             }
             File input = TorrentUtil.getTorrent(ani, item);
@@ -331,14 +644,12 @@ public class MissingEpisodeRecoveryService {
                 scheduleRetry(record, "RECOVERY_INPUT_UNAVAILABLE");
                 return;
             }
-            DownloadService service = downloadService.getIfAvailable();
-            if (service == null) {
-                scheduleRetry(record, "RECOVERY_DOWNLOAD_SERVICE_UNAVAILABLE");
-                return;
-            }
             boolean accepted = service.recoverDownload(ani, item, service.getDownloadPath(ani), input);
             String errorCode = accepted ? null : "RECOVERY_DOWNLOAD_REJECTED";
             markSubmissionResult(ani, item, accepted, errorCode);
+            if (accepted) {
+                submissionBudget.recordSubmission();
+            }
             notifyRecoveryTransition(record, ani, item, accepted, errorCode);
             if (accepted) {
                 log.info("已重新提交缺失集 subscriptionId:{} hash:{}", record.subscriptionId(), shortHash(record.infoHash()));
@@ -352,20 +663,34 @@ public class MissingEpisodeRecoveryService {
         }
     }
 
-    private boolean hasDownloadCapacity(List<TorrentsInfo> tasks) {
-        Config config = ConfigUtil.snapshot();
-        int limit = config.getDownloadCount() == null ? 0 : config.getDownloadCount();
-        if (limit < 1) {
-            return true;
-        }
-        long active = (tasks == null ? List.<TorrentsInfo>of() : tasks).stream()
-                .filter(task -> task != null && !isTerminal(task))
-                .count();
-        return active < limit;
-    }
-
     private static boolean due(RecoveryRecord record, long now) {
         return record.nextAttemptAt() <= now;
+    }
+
+    private static long activeDownloadCount(List<TorrentsInfo> tasks) {
+        return (tasks == null ? List.<TorrentsInfo>of() : tasks).stream()
+                .filter(Objects::nonNull)
+                .filter(task -> !task.finished())
+                .count();
+    }
+
+    private static final class RecoverySubmissionBudget {
+        private final int limit;
+        private long activeDownloads;
+
+        private RecoverySubmissionBudget(long activeDownloads) {
+            Integer configuredLimit = ConfigUtil.snapshot().getDownloadCount();
+            this.limit = configuredLimit == null ? 0 : configuredLimit;
+            this.activeDownloads = Math.max(0L, activeDownloads);
+        }
+
+        private boolean hasCapacity() {
+            return limit < 1 || activeDownloads < limit;
+        }
+
+        private void recordSubmission() {
+            activeDownloads++;
+        }
     }
 
     private void touchSatisfiedAudit(RecoveryRecord record) {
@@ -420,24 +745,8 @@ public class MissingEpisodeRecoveryService {
         if (item.getEpisode() != null && ani.getNotDownload() != null && ani.getNotDownload().contains(item.getEpisode())) {
             return true;
         }
-        String title = StrUtil.blankToDefault(item.getTitle(), item.getReName());
-        if (matchesAny(ani.getExclude(), title, "recovery-subscription-exclude")) {
-            return true;
-        }
-        if (anyDoesNotMatch(ani.getMatch(), title, "recovery-subscription-match")) {
-            return true;
-        }
         Config config = ConfigUtil.snapshot();
-        return Boolean.TRUE.equals(ani.getGlobalExclude()) &&
-                matchesAny(config.getExclude(), title, "recovery-global-exclude");
-    }
-
-    private static boolean matchesAny(List<String> rules, String value, String scope) {
-        return rules != null && rules.stream().anyMatch(rule -> RegexRuleMatcher.matches(rule, value, scope));
-    }
-
-    private static boolean anyDoesNotMatch(List<String> rules, String value, String scope) {
-        return rules != null && rules.stream().anyMatch(rule -> RegexRuleMatcher.doesNotMatch(rule, value, scope));
+        return !ItemsUtil.isAllowedByDownloadRules(ani, item, config);
     }
 
     private void scheduleRetry(RecoveryRecord record, String errorCode) {
@@ -450,15 +759,21 @@ public class MissingEpisodeRecoveryService {
 
     private static void notifyRecoveryTransition(
             RecoveryRecord before, Ani ani, Item item, boolean accepted, String errorCode) {
-        if (accepted) {
-            if (before.state() != RecoveryState.SUBMITTED) {
-                NotificationUtil.send(ConfigUtil.CONFIG, ani, item.getReName(), NotificationStatusEnum.DOWNLOAD_START);
+        try {
+            if (accepted) {
+                if (before.state() != RecoveryState.SUBMITTED) {
+                    NotificationUtil.send(
+                            ConfigUtil.CONFIG, ani, item.getReName(), NotificationStatusEnum.DOWNLOAD_START);
+                }
+                return;
             }
-            return;
-        }
-        String code = StrUtil.blankToDefault(errorCode, "RECOVERY_DOWNLOAD_REJECTED");
-        if (before.state() != RecoveryState.RETRY_WAIT || !code.equals(before.lastErrorCode())) {
-            NotificationUtil.send(ConfigUtil.CONFIG, ani, item.getReName(), NotificationStatusEnum.ERROR);
+            String code = StrUtil.blankToDefault(errorCode, "RECOVERY_DOWNLOAD_REJECTED");
+            if (before.state() != RecoveryState.RETRY_WAIT || !code.equals(before.lastErrorCode())) {
+                NotificationUtil.send(ConfigUtil.CONFIG, ani, item.getReName(), NotificationStatusEnum.ERROR);
+            }
+        } catch (RuntimeException notificationFailure) {
+            log.warn("补下载通知失败 subscriptionId:{} type:{}", before.subscriptionId(),
+                    notificationFailure.getClass().getSimpleName());
         }
     }
 

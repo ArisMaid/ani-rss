@@ -105,6 +105,7 @@ public class DownloadService {
         // 实时保存文件
         boolean sync = false;
         boolean failedSubmission = false;
+        List<Item> recoveryCandidates = new ArrayList<>();
 
         for (Item item : items) {
             log.debug("RSS 条目 name:{} episode:{}", item.getReName(), item.getEpisode());
@@ -160,6 +161,10 @@ public class DownloadService {
                 return;
             }
 
+            // Recovery consumes only candidates that passed the normal RSS
+            // policies above. It must never recreate its own selection rules.
+            recoveryCandidates.add(item);
+
             Date pubDate = item.getPubDate();
             if (Objects.nonNull(pubDate) && delayedDownload > 0) {
                 Date now = DateUtil.offset(new Date(), DateField.MINUTE, -delayedDownload);
@@ -184,7 +189,7 @@ public class DownloadService {
             // removed after completion can be immediately re-added here before
             // its durable local-file manifest is reconciled.
             SubmissionDisposition submissionDisposition = missingEpisodeRecoveryService
-                    .prepareEligible(ani, item, torrent.exists());
+                    .prepareEligible(ani, item, torrent.exists(), savePath);
             if (StrUtil.isNotBlank(canonicalHash)) {
                 missingEpisodeRecoveryService.promoteCanonicalHash(ani, item, canonicalHash);
             }
@@ -311,7 +316,7 @@ public class DownloadService {
 
         // This is deliberately separate from ItemsUtil.omit(): only durable
         // RSS acceptance records and verified owned media participate here.
-        missingEpisodeRecoveryService.reconcile(ani, torrentsInfos);
+        missingEpisodeRecoveryService.reconcile(ani, recoveryCandidates, torrentsInfos, count);
 
         if (sync && !failedSubmission) {
             int size = ItemsUtil.currentEpisodeNumber(ani, items);

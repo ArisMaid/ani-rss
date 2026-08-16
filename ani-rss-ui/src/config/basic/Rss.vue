@@ -78,6 +78,15 @@
         </el-text>
       </div>
     </el-form-item>
+    <el-form-item label="遗漏集自动补下">
+      <div>
+        <el-switch v-model:model-value="props.config.missingEpisodeRecoveryEnabled"/>
+        <br>
+        <el-text class="mx-1" size="small">
+          关闭后暂停失败或媒体缺失条目的自动重新提交，不影响正常RSS下载与延迟下载
+        </el-text>
+      </div>
+    </el-form-item>
     <el-form-item label="摸鱼检测">
       <div>
         <div>

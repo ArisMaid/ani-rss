@@ -75,8 +75,9 @@ class RecoveryRepositoryTest {
         repository.defer(ani.getId(), item.getInfoHash(), deadline);
 
         RecoveryRecord deferred = repository.find(ani.getId(), item.getInfoHash()).orElseThrow();
-        assertEquals(RecoveryState.PENDING, deferred.state());
+        assertEquals(RecoveryState.DEFERRED, deferred.state());
         assertEquals(deadline, deferred.nextAttemptAt());
+        assertTrue(repository.hasOutstanding(ani.getId()));
     }
 
     @Test
@@ -187,6 +188,27 @@ class RecoveryRepositoryTest {
         assertTrue(repository.hasOutstanding(ani.getId()));
         repository.markSatisfied(ani.getId(), item.getInfoHash());
         assertFalse(repository.hasOutstanding(ani.getId()));
+    }
+
+    @Test
+    void supersededHistoryLeavesRecoveryQueuesAndCanBeReactivated() {
+        Ani ani = new Ani().setId("subscription").setSeason(1);
+        Item item = new Item().setInfoHash("superseded")
+                .setTorrent("magnet:?xt=urn:btih:superseded");
+        repository.observe(ani, item);
+
+        repository.markSuperseded(ani.getId(), item.getInfoHash(), "RECOVERY_DUPLICATE_RELEASE");
+
+        RecoveryRecord superseded = repository.find(ani.getId(), item.getInfoHash()).orElseThrow();
+        assertEquals(RecoveryState.SUPERSEDED, superseded.state());
+        assertTrue(repository.listRecoverable(ani.getId()).isEmpty());
+        assertTrue(repository.listForReconciliation(ani.getId(), Long.MAX_VALUE).isEmpty());
+        assertFalse(repository.hasOutstanding(ani.getId()));
+
+        repository.reactivate(ani.getId(), item.getInfoHash());
+        assertEquals(RecoveryState.PENDING,
+                repository.find(ani.getId(), item.getInfoHash()).orElseThrow().state());
+        assertTrue(repository.hasOutstanding(ani.getId()));
     }
 
     @SuppressWarnings("unchecked")

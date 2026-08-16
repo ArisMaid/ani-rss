@@ -375,6 +375,12 @@ public class Config implements Serializable {
     private Boolean omit;
 
     /**
+     * 自动补下已受理但下载失败、任务丢失或媒体缺失的条目。
+     */
+    @Schema(description = "遗漏集自动补下")
+    private Boolean missingEpisodeRecoveryEnabled;
+
+    /**
      * bgmTokenType
      * <p>
      * INPUT or AUTO

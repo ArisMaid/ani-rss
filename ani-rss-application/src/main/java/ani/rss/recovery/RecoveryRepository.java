@@ -88,7 +88,26 @@ public class RecoveryRepository {
         return DatabaseManager.withConnection(connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT * FROM missing_episode_recovery
-                    WHERE subscription_id = ? AND state <> 'CANCELLED'
+                    WHERE subscription_id = ? AND state NOT IN ('CANCELLED', 'SUPERSEDED')
+                    ORDER BY created_at
+                    """)) {
+                statement.setString(1, subscriptionId);
+                try (ResultSet resultSet = statement.executeQuery()) {
+                    List<RecoveryRecord> records = new ArrayList<>();
+                    while (resultSet.next()) {
+                        records.add(map(resultSet));
+                    }
+                    return List.copyOf(records);
+                }
+            }
+        });
+    }
+
+    public List<RecoveryRecord> listBySubscription(String subscriptionId) {
+        return DatabaseManager.withConnection(connection -> {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT * FROM missing_episode_recovery
+                    WHERE subscription_id = ?
                     ORDER BY created_at
                     """)) {
                 statement.setString(1, subscriptionId);
@@ -109,7 +128,7 @@ public class RecoveryRepository {
                     SELECT * FROM (
                         SELECT * FROM missing_episode_recovery
                         WHERE subscription_id = ?
-                          AND state IN ('PENDING', 'SUBMITTED', 'RETRY_WAIT')
+                          AND state IN ('PENDING', 'DEFERRED', 'SUBMITTED', 'RETRY_WAIT')
                         UNION ALL
                         SELECT * FROM missing_episode_recovery
                         WHERE subscription_id = ?
@@ -140,7 +159,7 @@ public class RecoveryRepository {
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT 1 FROM missing_episode_recovery
                     WHERE subscription_id = ?
-                      AND state IN ('PENDING', 'SUBMITTED', 'RETRY_WAIT')
+                      AND state IN ('PENDING', 'DEFERRED', 'SUBMITTED', 'RETRY_WAIT')
                     LIMIT 1
                     """)) {
                 statement.setString(1, subscriptionId);
@@ -206,7 +225,7 @@ public class RecoveryRepository {
     }
 
     public boolean defer(String subscriptionId, String infoHash, long nextAttemptAt) {
-        return update(subscriptionId, infoHash, RecoveryState.PENDING, null, nextAttemptAt, false);
+        return update(subscriptionId, infoHash, RecoveryState.DEFERRED, null, nextAttemptAt, false);
     }
 
     public boolean markSatisfied(String subscriptionId, String infoHash) {
@@ -219,6 +238,15 @@ public class RecoveryRepository {
 
     public boolean armMissing(String subscriptionId, String infoHash) {
         return update(subscriptionId, infoHash, RecoveryState.PENDING, null, System.currentTimeMillis(), false);
+    }
+
+    public boolean reactivate(String subscriptionId, String infoHash) {
+        return update(subscriptionId, infoHash, RecoveryState.PENDING, null, System.currentTimeMillis(), false);
+    }
+
+    public boolean markSuperseded(String subscriptionId, String infoHash, String reason) {
+        return update(subscriptionId, infoHash, RecoveryState.SUPERSEDED,
+                StrUtil.blankToDefault(reason, "RECOVERY_SUPERSEDED"), Long.MAX_VALUE, false);
     }
 
     public void touchSatisfiedAudit(String recoveryId) {

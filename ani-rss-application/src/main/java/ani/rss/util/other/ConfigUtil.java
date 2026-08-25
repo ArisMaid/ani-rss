@@ -119,7 +119,7 @@ public class ConfigUtil {
                 .setDelete(false)
                 .setDeleteStandbyRSSOnly(false)
                 .setOffset(false)
-                .setTitleYear(false)
+                .setTitleYear(true)
                 .setAutoDisabled(false)
                 .setDownloadPathTemplate(downloadPathTemplate)
                 .setOvaDownloadPathTemplate(ovaDownloadPathTemplate)
@@ -129,6 +129,7 @@ public class ConfigUtil {
                 .setDownloadToolUsername(downloadToolUsername)
                 .setDownloadToolPassword(downloadToolPassword)
                 .setQbUseDownloadPath(false)
+                .setQbContentLayout("Original")
                 .setRatioLimit(-2)
                 .setSeedingTimeLimit(-2)
                 .setInactiveSeedingTimeLimit(-2)
@@ -153,7 +154,7 @@ public class ConfigUtil {
                 .setExclude(List.of("720[Pp]", "\\d-\\d", "合集", "特别篇"))
                 .setImportExclude(false)
                 .setEnabledExclude(false)
-                .setTmdb(false)
+                .setTmdb(true)
                 .setBgmJpName(false)
                 .setTmdbId(false)
                 .setTmdbLanguage("zh-CN")
@@ -342,6 +343,9 @@ public class ConfigUtil {
      * @param config 设置
      */
     public static void format(Config config) {
+        if (!List.of("Original", "Subfolder", "NoSubfolder").contains(config.getQbContentLayout())) {
+            config.setQbContentLayout("Original");
+        }
         formatPath(config);
         formatUrl(config);
 

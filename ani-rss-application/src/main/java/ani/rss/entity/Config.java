@@ -80,6 +80,10 @@ public class Config implements Serializable {
     @Schema(description = "使用 qb 自身保存路径")
     private Boolean qbUseDownloadPath;
 
+    /** qBittorrent content layout: Original, Subfolder, or NoSubfolder. */
+    @Schema(description = "qb 内容布局")
+    private String qbContentLayout;
+
     /**
      * 分享率
      */

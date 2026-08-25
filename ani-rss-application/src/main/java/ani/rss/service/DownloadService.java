@@ -651,7 +651,12 @@ public class DownloadService {
         downloadPathTemplate = downloadPathTemplate.replace("${letter}", letter);
 
         Date releaseDate = ani.getReleaseDate();
+        Tmdb tmdb = ani.getTmdb();
+        Date tmdbDate = Optional.ofNullable(tmdb)
+                .map(Tmdb::getDate)
+                .orElse(releaseDate);
 
+        int tmdbYear = DateUtil.year(tmdbDate);
         int year = DateUtil.year(releaseDate);
         int month = DateUtil.month(releaseDate) + 1;
         String monthFormat = String.format("%02d", month);
@@ -691,6 +696,7 @@ public class DownloadService {
             downloadPathTemplate = downloadPathTemplate.replace("${quarterName}", quarterName);
         }
 
+        downloadPathTemplate = downloadPathTemplate.replace("${tmdbYear}", String.valueOf(tmdbYear));
         downloadPathTemplate = downloadPathTemplate.replace("${year}", String.valueOf(year));
         downloadPathTemplate = downloadPathTemplate.replace("${month}", String.valueOf(month));
         downloadPathTemplate = downloadPathTemplate.replace("${monthFormat}", monthFormat);

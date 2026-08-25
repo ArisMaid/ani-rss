@@ -2,6 +2,7 @@ package ani.rss.util.other;
 
 import ani.rss.commons.NumberFormatUtils;
 import ani.rss.entity.Ani;
+import ani.rss.entity.BgmEpisodes;
 import ani.rss.entity.BgmInfo;
 import ani.rss.entity.Config;
 import ani.rss.entity.Item;
@@ -14,9 +15,9 @@ import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import lombok.extern.slf4j.Slf4j;
 import wushuo.tmdb.api.entity.Tmdb;
+import wushuo.tmdb.api.entity.TmdbEpisode;
 
 import java.util.*;
-import java.util.function.Function;
 
 @Slf4j
 public class RenameUtil {
@@ -189,8 +190,8 @@ public class RenameUtil {
     public static String replaceEpisodeTitle(String template, Double episode, Ani ani) {
         boolean is5 = ItemsUtil.is5(episode);
 
-        Map<Integer, String> episodeTitleMap = new HashMap<>();
-        Map<Integer, Function<Boolean, String>> bgmEpisodeTitleMap = new HashMap<>();
+        Map<Integer, TmdbEpisode> episodeTitleMap = new HashMap<>();
+        Map<Integer, BgmEpisodes.BgmEpisode> bgmEpisodeTitleMap = new HashMap<>();
 
         if (template.contains("${episodeTitle}")) {
             episodeTitleMap = TmdbUtils.getEpisodeTitleMap(ani);
@@ -202,16 +203,21 @@ public class RenameUtil {
 
         String defaultEpisodeTitle = "第" + NumberFormatUtils.format(episode, 1, 0) + "集";
 
-        String episodeTitle = is5 ? defaultEpisodeTitle :
-                episodeTitleMap.getOrDefault(episode.intValue(), defaultEpisodeTitle);
-
-        String bgmEpisodeTitle = is5 ? defaultEpisodeTitle :
-                bgmEpisodeTitleMap.getOrDefault(episode.intValue(), jp -> defaultEpisodeTitle)
-                        .apply(false);
-
-        String bgmJpEpisodeTitle = is5 ? defaultEpisodeTitle :
-                bgmEpisodeTitleMap.getOrDefault(episode.intValue(), jp -> defaultEpisodeTitle)
-                        .apply(true);
+        String episodeTitle = defaultEpisodeTitle;
+        String bgmEpisodeTitle = defaultEpisodeTitle;
+        String bgmJpEpisodeTitle = defaultEpisodeTitle;
+        if (!is5) {
+            int episodeNumber = episode.intValue();
+            TmdbEpisode tmdbEpisode = episodeTitleMap.get(episodeNumber);
+            if (tmdbEpisode != null && StrUtil.isNotBlank(tmdbEpisode.getName())) {
+                episodeTitle = tmdbEpisode.getName();
+            }
+            BgmEpisodes.BgmEpisode bgmEpisode = bgmEpisodeTitleMap.get(episodeNumber);
+            if (bgmEpisode != null) {
+                bgmEpisodeTitle = StrUtil.blankToDefault(bgmEpisode.getNameCn(), defaultEpisodeTitle);
+                bgmJpEpisodeTitle = StrUtil.blankToDefault(bgmEpisode.getName(), defaultEpisodeTitle);
+            }
+        }
 
         template = template.replace("${episodeTitle}", episodeTitle);
         template = template.replace("${bgmEpisodeTitle}", bgmEpisodeTitle);

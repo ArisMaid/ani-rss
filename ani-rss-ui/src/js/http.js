@@ -82,6 +82,10 @@ export let about = () => api.get('api/v2/about')
  */
 export let update = () => api.post('api/v2/update')
 
+export let webuiUpdate = () => api.post('api/webui/update')
+export let webuiGetUpdate = () => api.post('api/webui/getUpdate')
+export let webuiDelete = () => api.post('api/webui/delete')
+
 /**
  * 获取Mikan番剧列表
  * @param text 关键词

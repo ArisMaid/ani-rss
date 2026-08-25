@@ -831,7 +831,7 @@ public class MikanService {
                         groups.add(group);
                         // 字幕组更新日期
                         String day = subgroupText.select(".date").text().trim();
-                        group.setUpdateDay(day);
+                        group.setUpdateDay(DateUtil.formatDate(DateUtil.parse(day, "MM/dd/yyyy")));
 
                         Element subgroupAnchor = document.selectFirst(id);
                         Element table = subgroupAnchor == null ? null : subgroupAnchor.nextElementSibling();
@@ -935,7 +935,7 @@ public class MikanService {
                         // 字幕组更新日期
                         String day = subgroupText.select(".date").text().trim();
 
-                        group.setUpdateDay(day);
+                        group.setUpdateDay(DateUtil.formatDate(DateUtil.parse(day, "MM/dd/yyyy")));
 
                         Element subgroupAnchor = html.selectFirst(id);
                         Element table = subgroupAnchor == null ? null : subgroupAnchor.nextElementSibling();

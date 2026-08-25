@@ -164,12 +164,13 @@ public class qBittorrent implements BaseDownload {
 
         Long upLimit = config.getUpLimit() * 1024;
         Long dlLimit = config.getDlLimit() * 1024;
+        String qbContentLayout = StrUtil.blankToDefault(config.getQbContentLayout(), "Original");
 
         HttpRequest httpRequest = postApi("/api/v2/torrents/add")
                 .form("addToTopOfQueue", false)
                 .form("autoTMM", false)
                 .form("category", TorrentsTagEnum.ANI_RSS.getValue())
-                .form("contentLayout", "Original")
+                .form("contentLayout", qbContentLayout)
                 .form("dlLimit", dlLimit)
                 .form("firstLastPiecePrio", false)
                 .form("rename", name)
@@ -519,12 +520,13 @@ public class qBittorrent implements BaseDownload {
     public Boolean addCollection(String name, File torrentFile, String savePath, List<String> tags) {
         long upLimit = config.getUpLimit() * 1024L;
         long dlLimit = config.getDlLimit() * 1024L;
+        String qbContentLayout = StrUtil.blankToDefault(config.getQbContentLayout(), "Original");
         return execute(postApi("/api/v2/torrents/add")
                         .form("torrents", torrentFile)
                         .form("addToTopOfQueue", false)
                         .form("autoTMM", false)
                         .form("category", "")
-                        .form("contentLayout", "Original")
+                        .form("contentLayout", qbContentLayout)
                         .form("dlLimit", dlLimit)
                         .form("firstLastPiecePrio", false)
                         .form("paused", true)

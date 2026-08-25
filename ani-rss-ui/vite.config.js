@@ -1,11 +1,14 @@
 import {defineConfig} from 'vite'
 import vue from '@vitejs/plugin-vue'
-import {fileURLToPath, URL} from 'node:url'
+import path from 'path'
 import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
 import {ElementPlusResolver} from 'unplugin-vue-components/resolvers'
+import compression from 'vite-plugin-compression'
 
 let serverHost = process.env['SERVER_HOST'];
+
+let dirname = import.meta.dirname;
 
 export default defineConfig({
     base: './',
@@ -29,18 +32,30 @@ export default defineConfig({
                 importStyle: 'css',
             })]
         }),
+        compression({
+            // 输出压缩日志
+            verbose: true,
+            // 是否禁用压缩
+            disable: false,
+            // 对超过10KB的文件进行压缩
+            threshold: 10240,
+            // 使用gzip压缩
+            algorithm: 'gzip',
+            // 压缩后文件的扩展名
+            ext: '.gz'
+        }),
     ],
     resolve: {
         alias: {
-            '@': fileURLToPath(new URL('./src/', import.meta.url))
+            '@': path.resolve(dirname, './src/')
         }
     },
     build: {
-        manifest: true,
+        chunkSizeWarningLimit: 1024,
         rollupOptions: {
             input: {
-                main: fileURLToPath(new URL('./index.html', import.meta.url)),
-                bgmOauthCallback: fileURLToPath(new URL('./bgm-oauth-callback.html', import.meta.url))
+                main: path.resolve(dirname, 'index.html'),
+                bgmOauthCallback: path.resolve(dirname, 'bgm-oauth-callback.html')
             },
             output: {
                 codeSplitting: {
@@ -51,7 +66,7 @@ export default defineConfig({
                         },
                         {
                             name: 'utils',
-                            test: /node_modules[\\/](markdown-it|markdown-it-github-alerts)/,
+                            test: /node_modules[\\/](js-md5|markdown-it|markdown-it-github-alerts)/,
                         },
                         {
                             name: 'element-icon',
@@ -60,10 +75,6 @@ export default defineConfig({
                         {
                             name: 'artplayer',
                             test: /node_modules[\\/](artplayer|artplayer-plugin-multiple-subtitles)/,
-                        },
-                        {
-                            name: 'shiki',
-                            test: /node_modules[\\/]shiki/,
                         },
                         {
                             name: 'element-plus',

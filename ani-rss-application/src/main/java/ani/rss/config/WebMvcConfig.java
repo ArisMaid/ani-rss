@@ -25,7 +25,8 @@ public class WebMvcConfig implements WebMvcConfigurer {
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
         File webuiDir = new File(ConfigUtil.getConfigDir(), "webui");
         registry.addResourceHandler("/**")
-                .addResourceLocations(webuiDir.toURI().toString(), "classpath:/META-INF/dist/")
+                .addResourceLocations(webuiDir.toURI().toString(),
+                        "classpath:/META-INF/resources/", "classpath:/META-INF/dist/")
                 .resourceChain(false)
                 .addResolver(new EncodedResourceResolver());
     }

@@ -49,6 +49,16 @@ const showScore = useLocalStorage('show-score', true)
 const showWeek = useLocalStorage("show-week", true)
 
 /**
+ * 订阅页面布局
+ */
+const subscriptionViewMode = useLocalStorage('subscription-view-mode', 'cover')
+
+/**
+ * 启动页
+ */
+const startupPage = useLocalStorage('startup-page', '/home')
+
+/**
  * 显示视频列表
  */
 const showPlaylist = useLocalStorage('show-playlist', true)
@@ -257,6 +267,8 @@ export {
     maxContentWidth,
     showScore,
     showWeek,
+    subscriptionViewMode,
+    startupPage,
     showPlaylist,
     showLastDownloadTime,
     color,

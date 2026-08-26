@@ -58,30 +58,8 @@ export default defineConfig({
                 bgmOauthCallback: path.resolve(dirname, 'bgm-oauth-callback.html')
             },
             output: {
-                codeSplitting: {
-                    groups: [
-                        {
-                            name: 'vue',
-                            test: /node_modules[\\/](vue|@vueuse[\\/]core|@vicons[\\/]fa)/,
-                        },
-                        {
-                            name: 'utils',
-                            test: /node_modules[\\/](js-md5|markdown-it|markdown-it-github-alerts)/,
-                        },
-                        {
-                            name: 'element-icon',
-                            test: /node_modules[\\/](@element-plus[\\/]icons-vue)/,
-                        },
-                        {
-                            name: 'artplayer',
-                            test: /node_modules[\\/](artplayer|artplayer-plugin-multiple-subtitles)/,
-                        },
-                        {
-                            name: 'element-plus',
-                            test: /node_modules[\\/]element-plus/
-                        }
-                    ]
-                },
+                // Keep Rollup's default graph splitting. Forced Element Plus chunks
+                // create a circular initialization path with the wildcard icon registry.
                 chunkFileNames: () => {
                     return `assets/[name]-[hash].js`;
                 }

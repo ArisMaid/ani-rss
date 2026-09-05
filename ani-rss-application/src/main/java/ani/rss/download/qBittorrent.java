@@ -316,6 +316,11 @@ public class qBittorrent implements BaseDownload {
 
     @Override
     public List<TorrentsInfo> getTorrentsInfos() {
+        String host = config.getDownloadToolHost();
+        String password = config.getDownloadToolPassword();
+        if (StrUtil.isBlank(host) || StrUtil.isBlank(password)) {
+            return new ArrayList<>();
+        }
         return execute(getApi("/api/v2/torrents/info"), res -> {
                     requireSuccess(res);
                     List<qBittorrentTorrentsInfo> torrentsInfos = GsonStatic.fromJsonList(res.body(), qBittorrentTorrentsInfo.class);

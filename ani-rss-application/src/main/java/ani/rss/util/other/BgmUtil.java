@@ -807,10 +807,10 @@ public class BgmUtil {
      *
      * @param bgmInfo bgm信息
      * @param ani     订阅
-     * @return 订阅
+    * @return 订阅
      */
     public static Ani toAni(BgmInfo bgmInfo, Ani ani) {
-        String bgmImage = config.getBgmImage();
+        String bgmImageSize = config.getBgmImageSize();
         // 使用tmdb标题
         Boolean tmdb = config.getTmdb();
 
@@ -820,7 +820,7 @@ public class BgmUtil {
 
         BgmInfo.Images images = bgmInfo.getImages();
 
-        String image = (String) ReflectUtil.getFieldValue(images, bgmImage);
+        String image = (String) ReflectUtil.getFieldValue(images, bgmImageSize);
 
         double score = Optional.ofNullable(bgmInfo.getRating())
                 .map(BgmInfo.Rating::getScore)

@@ -1,15 +1,13 @@
 <template>
-  <el-form @submit.prevent label-width="auto"
-           class="full-width">
-    <el-form-item label="更新地址">
+  <div>
+    <SettingsItem label="更新地址">
       <div class="full-width">
         <div>
           <el-input v-model:model-value="props.config.trackersUpdateUrls" :autosize="{ minRows: 2}"
                     placeholder="换行输入多个"
                     class="full-width" type="textarea"/>
         </div>
-        <div class="spacer-12"/>
-        <div class="flex justify-space-between">
+        <div class="flex justify-space-between" style="margin-top: 8px">
           <el-checkbox v-model:model-value="props.config.autoTrackersUpdate" label="每天1:00自动更新"/>
           <el-button :loading="trackersUpdateLoading" bg icon="Refresh" @click="trackersUpdate">更新
           </el-button>
@@ -20,11 +18,12 @@
           </el-text>
         </div>
       </div>
-    </el-form-item>
-  </el-form>
+    </SettingsItem>
+  </div>
 </template>
 
 <script setup>
+import SettingsItem from "@/view/custom/SettingsItem.vue";
 import {ElMessage, ElText} from "element-plus";
 import {ref} from "vue";
 import * as http from "@/js/http.js";
@@ -46,10 +45,6 @@ let props = defineProps(['config'])
 </script>
 
 <style scoped>
-.spacer-12 {
-  height: 12px;
-}
-
 .justify-space-between {
   justify-content: space-between;
 }

@@ -182,7 +182,8 @@ defineExpose({
 }
 
 .list-week-title {
-  margin: 16px 0 8px 4px;
+  margin-top: 12px;
+  margin-bottom: 4px;
 }
 
 .list-bottom-spacer {
@@ -190,20 +191,22 @@ defineExpose({
 }
 
 .card-grid-container {
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
 }
 
 .cover-grid-container {
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-gap: 24px;
 }
 
-@media (min-width: 960px) {
+@media (max-width: 800px) {
   .card-grid-container {
-    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    grid-template-columns: 1fr;
   }
 
   .cover-grid-container {
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-gap: 12px;
   }
 }
 </style>

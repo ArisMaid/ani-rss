@@ -113,7 +113,7 @@ public class AniUtil {
             // 自动修补缺失的封面
             if (hydrateCovers) {
                 String image = ani.getImage();
-                saveCover(image);
+                ani.setCover(saveCover(image));
             }
 
             Ani newAni = AniUtil.createAni();

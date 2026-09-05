@@ -25,6 +25,7 @@ import cn.hutool.crypto.SecureUtil;
 import cn.hutool.http.HttpRequest;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
+import org.jsoup.Jsoup;
 import org.springframework.boot.info.GitProperties;
 import org.springframework.stereotype.Service;
 
@@ -230,11 +231,15 @@ public class ConfigService {
             }
             HttpRequest httpRequest = HttpReq.get(uri.toString(), config);
             try (var response = httpRequest.execute()) {
-            int status = response.getStatus();
-            proxyTest.setStatus(status).setSuccess(status >= 200 && status < 300);
-            if (!proxyTest.getSuccess()) {
-                proxyTest.setFailureType("HTTP_" + status);
-            }
+                int status = response.getStatus();
+                proxyTest.setStatus(status).setSuccess(status >= 200 && status < 300);
+                if (!proxyTest.getSuccess()) {
+                    proxyTest.setFailureType("HTTP_" + status);
+                }
+                String body = response.body();
+                if (body != null) {
+                    proxyTest.setTitle(Jsoup.parse(body).title());
+                }
             }
         } catch (IllegalArgumentException e) {
             proxyTest.setSuccess(false).setFailureType("INVALID_URL");

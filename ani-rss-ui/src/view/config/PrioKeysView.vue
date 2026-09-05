@@ -1,12 +1,12 @@
 <template>
   <el-dialog title="关键词设置" v-if="add" v-model:model-value="add" center align-center width="300"
              @open="$nextTick(() => $refs.keywordInputRef?.focus())">
-    <el-form @submit.prevent="addKeyword" label-width="auto">
-      <el-form-item label="关键词">
+    <form @submit.prevent="addKeyword">
+      <SettingsItem label="关键词">
         <el-input ref="keywordInputRef" placeholder="如：简体、繁体、1080p" v-model="keyword"
                   @keyup.enter="addKeyword"/>
-      </el-form-item>
-    </el-form>
+      </SettingsItem>
+    </form>
     <div class="flex prio-keys-dialog-footer">
       <el-button bg text @click="addKeyword" icon="Plus">添加</el-button>
     </div>
@@ -32,10 +32,7 @@
     </div>
     <div class="flex prio-keys-footer">
       <el-button bg text size="small" @click="importGlobalKeywords" v-if="props.importGlobal"
-                 :disabled="disabledImport" :loading="importLoading">
-        <el-icon>
-          <Download/>
-        </el-icon>
+                 :disabled="disabledImport" :loading="importLoading" icon="Download">
         从全局导入关键词
       </el-button>
       <el-text class="mx-1" size="small" v-if="props.showText">
@@ -46,9 +43,9 @@
 </template>
 
 <script setup>
+import SettingsItem from "@/view/custom/SettingsItem.vue";
 import {ref} from "vue";
 import {ElMessage} from "element-plus";
-import {Download} from '@element-plus/icons-vue'
 import {config} from "@/js/http.js";
 
 const handleClose = (index) => {

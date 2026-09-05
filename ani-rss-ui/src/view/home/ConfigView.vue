@@ -1,54 +1,50 @@
 <template>
-  <div v-loading="loading" class="config-page">
-    <header class="config-header">
-      <div class="config-heading">
-        <h2>设置</h2>
-        <el-text size="small" type="info">{{ activeDescription }}</el-text>
-      </div>
-      <el-button
-          bg text
-          :disabled="loading"
-          :loading="configButtonLoading"
-          type="primary"
-          @click="saveConfig">
-        <el-icon class="el-icon--left">
-          <Check/>
-        </el-icon>
-        保存
-      </el-button>
-    </header>
-
-    <el-tabs v-model="activeName" class="segmented-tabs config-tabs">
-      <el-tab-pane
-          v-for="tab in tabs"
-          :key="tab.name"
-          :label="tab.label"
-          :name="tab.name"
-          :lazy="true">
-        <el-scrollbar class="config-scrollbar">
-          <div class="tab-scroll-content">
-            <DownloadView v-if="tab.name === 'download'" v-model:config="config"/>
-            <BasicView v-else-if="tab.name === 'basic'" v-model:config="config"/>
-            <ExcludeView
-                v-else-if="tab.name === 'exclude'"
-                v-model:exclude="config.exclude"
-                :show-text="true"/>
-            <ProxyView v-else-if="tab.name === 'proxy'" v-model:config="config"/>
-            <LoginConfigView v-else-if="tab.name === 'login'" :config="config"/>
-            <NotificationView v-else-if="tab.name === 'notification'" v-model:config="config"/>
-            <AfdianView v-else-if="tab.name === 'afdian'" :config="config"/>
-            <AboutView v-else-if="tab.name === 'about'" :config="config"/>
-          </div>
-        </el-scrollbar>
-      </el-tab-pane>
-    </el-tabs>
+  <div v-loading="loading" class="config-page app-page-layout">
+    <PageHeaderView title="设置" :subtitle="activeDescription">
+      <template #actions>
+        <el-button
+            class="auto-button"
+            icon="Check"
+            :disabled="loading"
+            :loading="configButtonLoading"
+            type="primary"
+            @click="saveConfig">
+          保存
+        </el-button>
+      </template>
+    </PageHeaderView>
+    <div class="config-content app-page-content app-page-padding">
+      <el-tabs v-model="activeName" class="segmented-tabs config-tabs">
+        <el-tab-pane
+            v-for="tab in tabs"
+            :key="tab.name"
+            :label="tab.label"
+            :name="tab.name"
+            :lazy="true">
+          <el-scrollbar class="config-scrollbar">
+            <div class="tab-scroll-content">
+              <DownloadView v-if="tab.name === 'download'" v-model:config="config"/>
+              <BasicView v-else-if="tab.name === 'basic'" v-model:config="config"/>
+              <ExcludeView
+                  v-else-if="tab.name === 'exclude'"
+                  v-model:exclude="config.exclude"
+                  :show-text="true"/>
+              <ProxyView v-else-if="tab.name === 'proxy'" v-model:config="config"/>
+              <LoginConfigView v-else-if="tab.name === 'login'" :config="config"/>
+              <NotificationView v-else-if="tab.name === 'notification'" v-model:config="config"/>
+              <AfdianView v-else-if="tab.name === 'afdian'" :config="config"/>
+              <AboutView v-else-if="tab.name === 'about'" :config="config"/>
+            </div>
+          </el-scrollbar>
+        </el-tab-pane>
+      </el-tabs>
+    </div>
   </div>
 </template>
 
 <script setup>
 import {computed, onMounted, ref} from "vue";
 import {ElMessage} from "element-plus";
-import {Check} from "@element-plus/icons-vue";
 import {md5} from "js-md5";
 import ExcludeView from "@/view/config/ExcludeView.vue";
 import NotificationView from "@/view/config/NotificationView.vue";
@@ -58,6 +54,7 @@ import BasicView from "@/view/config/BasicView.vue";
 import AboutView from "@/view/config/AboutView.vue";
 import LoginConfigView from "@/view/config/LoginConfigView.vue";
 import AfdianView from "@/view/config/AfdianView.vue";
+import PageHeaderView from "@/view/custom/PageHeaderView.vue";
 import {configData} from "@/js/config.js";
 import * as http from "@/js/http.js";
 
@@ -118,28 +115,7 @@ onMounted(() => {
 </script>
 <style scoped>
 .config-page {
-  height: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.config-header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-bottom: 12px;
-}
-
-.config-heading {
-  min-width: 0;
-}
-
-.config-heading h2 {
-  line-height: 1.4;
+  padding-bottom: 8px;
 }
 
 .config-tabs {
@@ -157,7 +133,6 @@ onMounted(() => {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--el-border-color-light);
   border-radius: 8px;
   background: var(--el-bg-color);
 }
@@ -177,55 +152,14 @@ onMounted(() => {
   padding: 24px 28px 40px;
 }
 
-.config-tabs :deep(.el-form-item) {
-  margin-bottom: 20px;
-}
-
-.config-tabs :deep(.el-form-item__label) {
-  padding-right: 18px;
-  color: var(--el-text-color-regular);
-  font-weight: 500;
-}
-
 .config-tabs :deep(.el-alert) {
   border-radius: 6px;
 }
 
 @media (max-width: 700px) {
-  .config-header {
-    padding-bottom: 8px;
-  }
-
-  .config-header .el-button {
-    min-width: 72px;
-  }
-
-  .config-tabs :deep(.el-tabs__content) {
-    border-right: 0;
-    border-left: 0;
-    border-radius: 0;
-  }
-
   .tab-scroll-content {
     padding: 18px 4px 30px;
   }
 
-  .config-tabs :deep(.el-form-item) {
-    display: block;
-    margin-bottom: 18px;
-  }
-
-  .config-tabs :deep(.el-form-item__label) {
-    width: 100% !important;
-    height: auto;
-    margin-bottom: 7px;
-    padding: 0;
-    line-height: 1.4;
-    justify-content: flex-start;
-  }
-
-  .config-tabs :deep(.el-form-item__content) {
-    margin-left: 0 !important;
-  }
 }
 </style>

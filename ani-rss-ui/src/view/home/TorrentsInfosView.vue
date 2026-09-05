@@ -1,96 +1,93 @@
 <template>
-  <div class="torrents-page">
-    <header class="torrents-header">
-      <h2>下载</h2>
-      <el-text size="small" type="info">共 {{ torrentsInfos.length }} 个任务</el-text>
-    </header>
-    <div class="torrents-container">
-      <div class="torrents-toolbar">
-        <el-tabs v-model="activeTab" class="torrents-tabs">
-          <el-tab-pane name="downloading">
-            <template #label>
-              <span class="tab-label">下载中</span>
-              <el-tag size="small" type="primary">{{ downloadingInfos.length }}</el-tag>
-            </template>
-          </el-tab-pane>
-          <el-tab-pane name="completed">
-            <template #label>
-              <span class="tab-label">已完成</span>
-              <el-tag size="small" type="success">{{ completedInfos.length }}</el-tag>
-            </template>
-          </el-tab-pane>
-        </el-tabs>
-        <div class="sort-actions">
-          <el-dropdown trigger="click" @command="changeSortType">
-            <el-button class="sort-field-button" bg text>
-              <el-icon>
-                <Sort/>
-              </el-icon>
-              <span>{{ currentSortLabel }}</span>
-              <el-icon class="sort-field-arrow">
-                <ArrowDown/>
-              </el-icon>
-            </el-button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item
-                    v-for="item in sortTypeList"
-                    :key="item.value"
-                    :command="item.value">
-                  <span class="sort-option-label">{{ item.label }}</span>
-                  <el-icon v-if="sortType === item.value">
-                    <Check/>
-                  </el-icon>
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
-          <el-tooltip :content="sortOrder === 'asc' ? '正序' : '倒序'" placement="top">
-            <el-button
-                :aria-label="sortOrder === 'asc' ? '正序' : '倒序'"
-                class="sort-order-button"
-                bg
-                text
-                @click="toggleSortOrder">
-              <el-icon>
-                <SortUp v-if="sortOrder === 'asc'"/>
-                <SortDown v-else/>
-              </el-icon>
-            </el-button>
-          </el-tooltip>
+  <div class="torrents-page app-page-layout">
+    <PageHeaderView title="下载" :subtitle="`共 ${torrentsInfos.length} 个任务`"/>
+    <div class="torrents-body app-page-content app-page-padding">
+      <div class="torrents-container">
+        <div class="torrents-toolbar">
+          <el-tabs v-model="activeTab" class="torrents-tabs">
+            <el-tab-pane name="downloading">
+              <template #label>
+                <span class="tab-label">下载中</span>
+                <el-tag size="small" type="primary">{{ downloadingInfos.length }}</el-tag>
+              </template>
+            </el-tab-pane>
+            <el-tab-pane name="completed">
+              <template #label>
+                <span class="tab-label">已完成</span>
+                <el-tag size="small" type="success">{{ completedInfos.length }}</el-tag>
+              </template>
+            </el-tab-pane>
+          </el-tabs>
+          <div class="sort-actions">
+            <el-dropdown trigger="click" @command="changeSortType">
+              <el-button class="sort-field-button">
+                <el-icon>
+                  <Sort/>
+                </el-icon>
+                <span>{{ currentSortLabel }}</span>
+                <el-icon class="sort-field-arrow">
+                  <ArrowDown/>
+                </el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                      v-for="item in sortTypeList"
+                      :key="item.value"
+                      :command="item.value">
+                    <span class="sort-option-label">{{ item.label }}</span>
+                    <el-icon v-if="sortType === item.value" class="el-icon--right">
+                      <Check/>
+                    </el-icon>
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+            <el-tooltip :content="sortOrder === 'asc' ? '正序' : '倒序'" placement="top">
+              <el-button
+                  :aria-label="sortOrder === 'asc' ? '正序' : '倒序'"
+                  class="sort-order-button"
+                  @click="toggleSortOrder">
+                <el-icon>
+                  <SortUp v-if="sortOrder === 'asc'"/>
+                  <SortDown v-else/>
+                </el-icon>
+              </el-button>
+            </el-tooltip>
+          </div>
         </div>
-      </div>
-      <el-empty v-if="!activeTorrentsInfos.length" :description="emptyDescription" class="torrents-empty"/>
-      <el-scrollbar v-else class="torrents-scrollbar">
-        <el-card v-for="torrentsInfo in activeTorrentsInfos"
-                 :key="torrentsInfo.hash || torrentsInfo.id || torrentsInfo.name"
-                 shadow="never"
-                 class="torrents-card">
-          <p>{{ torrentsInfo.name }}</p>
-          <el-progress :percentage="torrentsInfo['progress']"/>
-          <div class="torrents-size-info">
+        <el-empty v-if="!activeTorrentsInfos.length" :description="emptyDescription" class="torrents-empty"/>
+        <el-scrollbar v-else class="torrents-scrollbar">
+          <el-card v-for="torrentsInfo in activeTorrentsInfos"
+                   :key="torrentsInfo.hash || torrentsInfo.id || torrentsInfo.name"
+                   shadow="never"
+                   class="torrents-card">
+            <p>{{ torrentsInfo.name }}</p>
+            <el-progress :percentage="torrentsInfo['progress']"/>
+            <div class="torrents-size-info">
             <span>
               <span class="torrents-size-value">{{ formatTorrentSize(torrentsInfo['completed']) }}</span>
               /
               <span class="torrents-size-value">{{ formatTorrentSize(torrentsInfo['size']) }}</span>
             </span>
-          </div>
-          <template #footer>
-            <div class="flex torrents-footer">
-              <div>
-                <el-tag v-for="tag in torrentsInfo['tagList']" class="torrents-tag-spacer" type="info">
-                  {{ tag }}
-                </el-tag>
-              </div>
-              <div>
-                <el-tag class="torrents-tag-spacer" type="primary">
-                  {{ torrentsInfo['state'] }}
-                </el-tag>
-              </div>
             </div>
-          </template>
-        </el-card>
-      </el-scrollbar>
+            <template #footer>
+              <div class="flex torrents-footer">
+                <div>
+                  <el-tag v-for="tag in torrentsInfo['tagList']" class="torrents-tag-spacer" type="info">
+                    {{ tag }}
+                  </el-tag>
+                </div>
+                <div>
+                  <el-tag class="torrents-tag-spacer" type="primary">
+                    {{ torrentsInfo['state'] }}
+                  </el-tag>
+                </div>
+              </div>
+            </template>
+          </el-card>
+        </el-scrollbar>
+      </div>
     </div>
   </div>
 </template>
@@ -100,6 +97,7 @@ import {computed, onActivated, onDeactivated, onUnmounted, ref} from "vue";
 import * as http from "@/js/http.js";
 import {ArrowDown, Check, Sort, SortDown, SortUp} from "@element-plus/icons-vue";
 import {formatSize} from "@/js/format.js";
+import PageHeaderView from "@/view/custom/PageHeaderView.vue";
 
 const activeTab = ref('downloading')
 // 记录排序方式
@@ -213,23 +211,6 @@ onUnmounted(pausePolling)
 </script>
 
 <style scoped>
-.torrents-page {
-  height: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.torrents-header {
-  flex-shrink: 0;
-  padding-bottom: 12px;
-}
-
-.torrents-header h2 {
-  line-height: 1.4;
-}
-
 .torrents-container {
   flex: 1;
   min-height: 0;
@@ -286,7 +267,7 @@ onUnmounted(pausePolling)
 }
 
 .sort-field-arrow {
-  margin-left: 2px;
+  margin-left: 6px;
   color: var(--el-text-color-placeholder);
   font-size: 12px;
 }

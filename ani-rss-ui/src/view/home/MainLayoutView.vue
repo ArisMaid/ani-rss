@@ -70,7 +70,6 @@ onMounted(() => {
   width: 100%;
   height: 100%;
   display: flex;
-  background: var(--el-bg-color);
 }
 
 .app-nav {
@@ -78,8 +77,7 @@ onMounted(() => {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  background-color: var(--el-bg-color);
-  border-right: 1px solid var(--el-border-color-light);
+  background: var(--el-bg-color);
 }
 
 .app-brand {
@@ -92,7 +90,6 @@ onMounted(() => {
   color: var(--el-text-color-primary);
   font-size: 13px;
   font-weight: 600;
-  border-bottom: 1px solid var(--el-border-color-extra-light);
 }
 
 .app-logo {
@@ -103,11 +100,12 @@ onMounted(() => {
 .app-menu {
   flex: 1;
   border: 0;
+  background: none;
 }
 
 .app-menu :deep(.el-menu-item) {
   height: 46px;
-  margin: 4px 8px;
+  margin: 8px 12px;
   border-radius: 8px;
   border: none !important;
 }
@@ -121,8 +119,6 @@ onMounted(() => {
   min-width: 0;
   height: 100%;
   overflow: hidden;
-  padding: 12px;
-  background: var(--el-bg-color);
 }
 
 @media (max-width: 800px) {
@@ -178,7 +174,6 @@ onMounted(() => {
 
   .app-main {
     height: 100%;
-    padding: 8px;
   }
 }
 </style>

@@ -4,18 +4,18 @@
 
 ## 版本与环境
 
-最近一次隔离夹具运行：待 3.2.28.60 最终提交后生成；原始 JSON 与提交哈希保持一一对应。
+最近一次隔离夹具运行：`t0-29e3648e`；原始 JSON 与提交哈希保持一一对应。
 
 | 项目 | 实际值 |
 | --- | --- |
 | 对照提交 | `562454f287645531e09bb2ada65afd31dbfa4091` (`3.2.28.58`) |
-| 当前提交 | `待最终提交` (`3.2.28.60`) |
+| 当前提交 | `29e3648e16e07cc4810267ad8deff61cad570360` (`3.2.28.60`) |
 | Node / pnpm | Node `v24.16.0` / pnpm `11.19.0` |
 | Java / Maven | Temurin `25.0.4.1` / Apache Maven `3.9.11`，项目按 Java 17 release 编译 |
 | 机器 | Windows `win32/x64`；CPU 型号记录在原始 JSON |
 | HTTP 模式 | `127.0.0.1` 隔离 HTTP stub；不读取真实账号数据 |
 | fixture | 100 个订阅、96 个 Mikan 条目、50 张内存小图片 |
-| 原始数据 | 最终提交后由 `pnpm measure:baseline` 生成 |
+| 原始数据 | [`docs/performance-data/t0-29e3648e.json`](performance-data/t0-29e3648e.json) |
 
 ## 可重复命令
 
@@ -40,13 +40,13 @@ pnpm measure:baseline
 
 | 场景 | 实测结果 | 验收解释 |
 | --- | --- | --- |
-| 热 Mikan 列表 | 最终提交后重跑 | 仅证明本地 stub 往返，不证明真实 Mikan p95 |
+| 热 Mikan 列表 | 30 次；stub p50 `0.406ms`、p95 `1.522ms`、最大 `9.581ms` | 仅证明本地 stub 往返，不证明真实 Mikan p95 |
 | Mikan 评分 | 96 条，批量上限 48；外部 stub 请求 `2`；剩余 retryable `0` | 证明首轮覆盖两个批次；真实评分源仍未测 |
 | 同资源图片 | 20 个消费者、相同 key 外部请求 `1` | 证明 fixture 单飞；Java `ImageCacheServiceTest` 另测认证/重启缓存 |
 | 图片失败恢复 | 首次失败后下一轮恢复，恢复实体 `15` bytes；含恢复共 `3` 次外部请求 | 证明 fixture 可恢复；30 秒失败缓存由 Java 实现测试/审查 |
 | 慢下载器轮询 | 响应模拟 8 秒；隐藏后只启动 `1` 个请求；最大在途 `1` | 仅验证前端调度模型，真实下载器未连接 |
-| RSS 刷新 | 最终提交后重跑 | 证明 fixture 不包含固定等待；RssTask/真实源仍需 Java/下载器环境复核 |
-| 首屏依赖闭包 | JS gzip `105,196` bytes，CSS gzip `48,953` bytes | 对照 `562454f2` 实测首入口 JS 闭包 `431,801` bytes，减少约 `75.6%`；门禁见 `scripts/bundle-budget.json` |
+| RSS 刷新 | 100 个启用订阅、100 个 RSS stub 请求；主动 sleep `0ms`；网络 `34.455ms`，业务 `4.253ms` | 证明 fixture 不包含固定等待；RssTask/真实源仍需 Java/下载器环境复核 |
+| 首屏依赖闭包 | JS gzip `105,198` bytes，CSS gzip `48,953` bytes | 对照 `562454f2` 实测首入口 JS 闭包 `431,801` bytes，减少约 `75.6%`；门禁见 `scripts/bundle-budget.json` |
 
 ## 已通过的代码门禁
 

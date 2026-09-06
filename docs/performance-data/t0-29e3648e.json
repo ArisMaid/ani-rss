@@ -1,0 +1,1010 @@
+{
+  "runId": "29e3648e",
+  "startedAt": "2026-09-06T19:58:48.751Z",
+  "commit": "29e3648e",
+  "environment": {
+    "node": "v24.16.0",
+    "platform": "win32",
+    "arch": "x64",
+    "cpu": "AMD Ryzen 9 9950X 16-Core Processor            "
+  },
+  "fixture": {
+    "subscriptions": 100,
+    "mikanItems": 96,
+    "smallImages": 50,
+    "imageBytes": 15,
+    "httpStub": "127.0.0.1"
+  },
+  "scenarios": {
+    "hotMikanList": {
+      "runs": 30,
+      "p50Ms": 0.406,
+      "p95Ms": 1.522,
+      "maxMs": 9.581
+    },
+    "scoreEnrichment": {
+      "itemCount": 96,
+      "batchSize": 48,
+      "remainingRetryableIds": 0,
+      "externalRequests": 2
+    },
+    "imageSingleFlight": {
+      "sameKeyConsumers": 20,
+      "externalRequestsForSameKey": 1,
+      "observedFailure": true,
+      "recoveredBytes": 15,
+      "externalRequestsIncludingFailureRecovery": 3
+    },
+    "downloaderPolling": {
+      "startedRequests": 1,
+      "maxInFlight": 1,
+      "hiddenAtMs": 40
+    },
+    "rssRefresh": {
+      "enabledSubscriptions": 100,
+      "activeSleepMs": 0,
+      "networkMs": 34.455,
+      "businessMs": 4.253,
+      "rssRequests": 100
+    },
+    "firstEntryBundle": {
+      "jsGzipBytes": 105198,
+      "cssGzipBytes": 48953
+    },
+    "stubMaxConcurrentRequests": 2
+  },
+  "raw": {
+    "requestCount": 135,
+    "requests": [
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 1.07
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.153
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.152
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.137
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.164
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.128
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.152
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.156
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.121
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.151
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.111
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.11
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.106
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.096
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.121
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.099
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.092
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.095
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.104
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.107
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.101
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.159
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.129
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.094
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.092
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.106
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.117
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.098
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.094
+      },
+      {
+        "method": "GET",
+        "path": "/mikan/list",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.13
+      },
+      {
+        "method": "POST",
+        "path": "/mikan/score",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.268
+      },
+      {
+        "method": "POST",
+        "path": "/mikan/score",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.194
+      },
+      {
+        "method": "GET",
+        "path": "/image",
+        "query": "?id=1",
+        "status": 200,
+        "durationMs": 0.132
+      },
+      {
+        "method": "GET",
+        "path": "/image",
+        "query": "?failure=once",
+        "status": 503,
+        "durationMs": 0.126
+      },
+      {
+        "method": "GET",
+        "path": "/image",
+        "query": "?failure=once",
+        "status": 200,
+        "durationMs": 0.101
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-1",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.14
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-2",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.106
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-3",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.089
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-4",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.108
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-5",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.102
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-6",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.085
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-7",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.087
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-8",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-9",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-10",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.077
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-11",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.079
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-12",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-13",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.085
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-14",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-15",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-16",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.102
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-17",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-18",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.079
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-19",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-20",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-21",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-22",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.077
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-23",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.079
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-24",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.092
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-25",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.077
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-26",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.084
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-27",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-28",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.091
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-29",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.077
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-30",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.077
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-31",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.089
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-32",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.075
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-33",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.101
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-34",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.1
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-35",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.084
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-36",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.079
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-37",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.091
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-38",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.091
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-39",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.112
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-40",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.089
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-41",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.087
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-42",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.093
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-43",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.08
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-44",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.081
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-45",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.081
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-46",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.083
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-47",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-48",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-49",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.083
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-50",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.084
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-51",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.087
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-52",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-53",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.075
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-54",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-55",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.085
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-56",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-57",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.077
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-58",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-59",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-60",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-61",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.088
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-62",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-63",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.075
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-64",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.074
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-65",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.077
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-66",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.083
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-67",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.093
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-68",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.096
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-69",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.112
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-70",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.083
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-71",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-72",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-73",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.075
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-74",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.075
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-75",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.09
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-76",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.078
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-77",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.085
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-78",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.074
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-79",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.08
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-80",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.075
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-81",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.074
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-82",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.075
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-83",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.083
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-84",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.098
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-85",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.075
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-86",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.075
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-87",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.077
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-88",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-89",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.084
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-90",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.108
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-91",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.101
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-92",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.087
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-93",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.075
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-94",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.075
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-95",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.103
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-96",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.077
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-97",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.079
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-98",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-99",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.073
+      },
+      {
+        "method": "GET",
+        "path": "/rss/subscription-100",
+        "query": "",
+        "status": 200,
+        "durationMs": 0.076
+      }
+    ]
+  },
+  "limitations": [
+    "This is an isolated local HTTP fixture; it does not claim real Mikan/Bangumi/downloader/browser timings.",
+    "Java service integration and authenticated browser smoke remain separate verification gates."
+  ]
+}

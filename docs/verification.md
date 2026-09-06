@@ -5,11 +5,11 @@
 - 前端 Vitest：6/6 通过，覆盖 48 项分批、失败重试、公共批次不饥饿和截止时间取消。
 - 前端 `pnpm build:verify`：隔离输出 `.verify-dist` 构建通过，未运行 `clean`。
 - 前端 `pnpm check:bundle`：按 Vite manifest 递归入口闭包统计，播放器、Markdown、播放页和备份页未进入 `index.html` 首入口，25% JS 门槛通过。
-- T0 fixture：100 个订阅、96 个 Mikan 条目、50 张小图片、8 秒下载器 stub；热列表 30 次 p95 `1.409ms`，同 key 20 个消费者外部请求 `1`，轮询最大在途 `1`，RSS 主动 sleep `0ms`。
+- T0 fixture：100 个订阅、96 个 Mikan 条目、50 张小图片、8 秒下载器 stub；热列表 30 次 p95 `1.522ms`，同 key 20 个消费者外部请求 `1`，轮询最大在途 `1`，RSS 主动 sleep `0ms`。
 - 后端 Java 17 release 编译通过。
 - 相关后端测试：37 tests，0 failures，0 errors。
 - 后端完整回归：289 tests，0 failures，0 errors，4 skipped。
-- 首入口实际 gzip：JS `105,196` bytes、CSS `48,953` bytes；对照提交 `562454f2` 的 JS `431,801` bytes，JS 下降约 `75.6%`。
+- 首入口实际 gzip：JS `105,198` bytes、CSS `48,953` bytes；对照提交 `562454f2` 的 JS `431,801` bytes，JS 下降约 `75.6%`。
 - 发布包工作流已保留为 tag 触发；镜像使用 `linux/amd64`、`linux/arm64`、`linux/arm/v7` 构建矩阵。
 
 ## 浏览器冒烟

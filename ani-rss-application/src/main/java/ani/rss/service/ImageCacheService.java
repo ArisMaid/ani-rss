@@ -321,7 +321,7 @@ public class ImageCacheService {
                 } finally {
                     Files.deleteIfExists(temporary);
                 }
-            } catch (Exception ignored) {
+            } catch (IOException | RuntimeException ignored) {
                 // Public caching is an acceleration layer, not a reason to fail a request.
             }
         }

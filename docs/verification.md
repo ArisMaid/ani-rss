@@ -1,4 +1,4 @@
-# 3.2.28.60 验证记录
+# 3.2.28.61 验证记录
 
 ## 已通过
 
@@ -9,6 +9,7 @@
 - 后端 Java 17 release 编译通过。
 - 相关后端测试：37 tests，0 failures，0 errors。
 - 后端完整回归：289 tests，0 failures，0 errors，4 skipped。
+- `mvn -B -Pci -Dskip.frontend=true verify`：SpotBugs、JaCoCo、SBOM 和完整后端回归通过；SpotBugs `BugInstance size is 0`。
 - 首入口实际 gzip：JS `105,198` bytes、CSS `48,953` bytes；对照提交 `562454f2` 的 JS `431,801` bytes，JS 下降约 `75.6%`。
 - 发布包工作流已保留为 tag 触发；镜像使用 `linux/amd64`、`linux/arm64`、`linux/arm/v7` 构建矩阵。
 
@@ -23,6 +24,6 @@
 - 真实下载器 8 秒响应、100 订阅 RSS 周期的锁等待、数据库调用、文件 walk 和缺集恢复。
 - 真实运行中的图片缓存容量淘汰、失败清理重试、manifest 文件系统异常恢复。
 - Docker Desktop/Linux engine 本地构建；本机 engine 不可用。
-- GitHub Actions 多架构镜像、GHCR/Docker Hub 推送及 GitHub Release 产物，必须等待 `v3.2.28.60` tag workflow 成功后再标记为已发布。
+- GitHub Actions 多架构镜像、GHCR/Docker Hub 推送及 GitHub Release 产物，必须等待 `v3.2.28.61` tag workflow 成功后再标记为已发布。
 
 任何未完成项在发布流水线成功前都不标记为“已发布”；即使发布成功，以上真实环境项目仍保持“未验证”。

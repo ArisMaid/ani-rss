@@ -66,9 +66,10 @@ public class WebUIService {
     }
 
     public void upload(MultipartFile file) {
+        String originalFilename = file == null ? null : file.getOriginalFilename();
         if (file == null || file.isEmpty() || file.getSize() > MAX_ARCHIVE_BYTES ||
-                file.getOriginalFilename() == null ||
-                !"zip".equalsIgnoreCase(extension(file.getOriginalFilename()))) {
+                originalFilename == null ||
+                !"zip".equalsIgnoreCase(extension(originalFilename))) {
             throw new IllegalArgumentException("WebUI 必须是 50 MiB 以内的 ZIP 文件");
         }
         Path temporary = null;
@@ -171,7 +172,7 @@ public class WebUIService {
                     }
                 }
             }
-        } catch (Exception e) {
+        } catch (IOException | RuntimeException e) {
             deleteTree(staging);
             if (e instanceof IOException io) throw io;
             if (e instanceof IllegalArgumentException argument) throw argument;
@@ -198,7 +199,11 @@ public class WebUIService {
 
     private void replace(Path staging) throws IOException {
         Path target = getWebUIDir();
-        Files.createDirectories(target.getParent());
+        Path parent = target.getParent();
+        if (parent == null) {
+            throw new IOException("WebUI 目标目录没有父目录");
+        }
+        Files.createDirectories(parent);
         deleteTree(target);
         try {
             Files.move(staging, target, StandardCopyOption.ATOMIC_MOVE);

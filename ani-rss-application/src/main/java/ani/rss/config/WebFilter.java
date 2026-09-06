@@ -29,7 +29,9 @@ public class WebFilter implements Filter {
     /**
      * 指定缓存的文件
      */
-    private static final List<String> CACHE_EXT = List.of("css", "js", "jpg", "png", "svg", "ico");
+    private static final List<String> CACHE_EXT = List.of(
+            "css", "js", "jpg", "jpeg", "png", "gif", "webp", "svg", "ico",
+            "woff", "woff2", "ttf", "otf");
 
     @Override
     public void doFilter(ServletRequest req, ServletResponse res, FilterChain filterChain) throws IOException, ServletException {
@@ -61,8 +63,9 @@ public class WebFilter implements Filter {
                 return;
             }
 
-            if (StrUtil.isNotBlank(extName) && CACHE_EXT.contains(extName)) {
-                setCacheControl(response, 86400);
+            if (isImmutableAsset(uri, extName)) {
+                response.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+                response.setHeader("Vary", "Accept-Encoding");
             } else {
                 setCacheControl(response, 0);
             }
@@ -118,5 +121,17 @@ public class WebFilter implements Filter {
 
     private static boolean isV2(String uri) {
         return "/api/v2".equals(uri) || uri != null && uri.startsWith("/api/v2/");
+    }
+
+    private static boolean isImmutableAsset(String uri, String extName) {
+        String effectiveExtension = extName;
+        if ("gz".equalsIgnoreCase(extName) && uri.endsWith(".gz")) {
+            effectiveExtension = FileUtil.extName(uri.substring(0, uri.length() - 3));
+        }
+        return StrUtil.isNotBlank(uri)
+                && uri.startsWith("/assets/")
+                && StrUtil.isNotBlank(effectiveExtension)
+                && CACHE_EXT.contains(effectiveExtension.toLowerCase())
+                && uri.matches(".*/[^/]+-[A-Za-z0-9_-]{6,}\\.[A-Za-z0-9]+(?:\\.gz)?$");
     }
 }

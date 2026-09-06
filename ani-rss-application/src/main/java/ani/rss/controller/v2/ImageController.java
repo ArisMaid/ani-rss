@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -37,6 +38,34 @@ public class ImageController {
     }
 
     @Auth
+    @GetMapping(params = "url")
+    public void publicImage(@RequestParam("url") String url,
+                            HttpServletRequest request,
+                            HttpServletResponse response) {
+        ImageCacheService.PublicImage image = cache.publicImage(url, request);
+        String ifNoneMatch = request.getHeader("If-None-Match");
+        response.setHeader("ETag", image.etag());
+        response.setHeader("Cache-Control", "private, max-age=3600");
+        response.setHeader("Vary", "Cookie");
+        response.setHeader("X-Content-Type-Options", "nosniff");
+        if (ifNoneMatch != null && matchesIfNoneMatch(ifNoneMatch, image.etag())) {
+            response.setStatus(HttpServletResponse.SC_NOT_MODIFIED);
+            return;
+        }
+        try {
+            response.setContentType(image.contentType());
+            response.setContentLengthLong(image.length());
+            try (InputStream input = Files.newInputStream(
+                    image.path(), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
+                 OutputStream output = response.getOutputStream()) {
+                input.transferTo(output);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("stream public image failed", e);
+        }
+    }
+
+    @Auth
     @GetMapping("/{id}")
     public void image(@PathVariable String id, HttpServletRequest request,
                       HttpServletResponse response) {
@@ -57,5 +86,16 @@ public class ImageController {
     }
 
     public record ImageRequest(String url) {
+    }
+
+    private static boolean matchesIfNoneMatch(String header, String etag) {
+        String normalized = etag.startsWith("W/") ? etag.substring(2) : etag;
+        for (String candidate : header.split(",")) {
+            String value = candidate.trim();
+            if ("*".equals(value)) return true;
+            if (value.startsWith("W/")) value = value.substring(2);
+            if (normalized.equals(value)) return true;
+        }
+        return false;
     }
 }

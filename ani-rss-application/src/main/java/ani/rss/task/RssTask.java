@@ -3,6 +3,7 @@ package ani.rss.task;
 import ani.rss.commons.ExceptionUtils;
 import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
+import ani.rss.entity.ListAni;
 import ani.rss.service.DownloadService;
 import ani.rss.service.TaskService;
 import ani.rss.util.other.AniUtil;
@@ -39,6 +40,11 @@ public class RssTask implements BaseTask {
         enqueue(aniList, command -> ThreadUtil.execute(command));
     }
 
+    public static ListAni.Refresh refreshStatus() {
+        SubscriptionDownloadQueue.Status status = DOWNLOAD_QUEUE.snapshot();
+        return new ListAni.Refresh(status.running(), status.failedCount(), status.finishedAt());
+    }
+
     private static void enqueue(List<Ani> aniList, Executor executor) {
         List<String> subscriptionIds = aniList == null ? List.of() : aniList.stream()
                 .filter(Objects::nonNull)
@@ -50,22 +56,26 @@ public class RssTask implements BaseTask {
         DOWNLOAD_QUEUE.submit(subscriptionIds, executor, RssTask::downloadByIds);
     }
 
-    private static void downloadByIds(List<String> subscriptionIds) {
+    private static int downloadByIds(List<String> subscriptionIds) {
         DownloadService downloadService = SpringUtil.getBean(DownloadService.class);
+        int failedCount = 0;
         try {
             if (!TorrentUtil.login()) {
                 log.error("downloader login failed");
-                return;
+                return subscriptionIds.size();
             }
         } catch (Exception e) {
             log.error("downloader login failed type:{}", e.getClass().getSimpleName());
-            return;
+            return subscriptionIds.size();
         }
-        for (String subscriptionId : subscriptionIds) {
+        for (int index = 0; index < subscriptionIds.size(); index++) {
             if (!TaskService.LOOP.get()) {
-                // 停止循环
-                return;
+                // 停止循环时，未处理的订阅必须显示为异常结束，不能让刷新页误报成功。
+                failedCount += subscriptionIds.size() - index;
+                break;
             }
+
+            String subscriptionId = subscriptionIds.get(index);
 
             Ani ani = AniUtil.findRuntimeById(subscriptionId).orElse(null);
             if (ani == null) {
@@ -83,6 +93,7 @@ public class RssTask implements BaseTask {
             try {
                 downloadService.downloadAni(ani);
             } catch (Exception e) {
+                failedCount++;
                 String message = ExceptionUtils.getMessage(e);
                 log.error("{} {}", title, message);
                 log.error(message, e);
@@ -90,6 +101,7 @@ public class RssTask implements BaseTask {
             // 避免短时间频繁请求导致流控
             ThreadUtil.sleep(500);
         }
+        return failedCount;
     }
 
     @Override

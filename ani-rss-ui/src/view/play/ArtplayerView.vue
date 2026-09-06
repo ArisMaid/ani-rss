@@ -6,7 +6,7 @@
         <el-button bg text icon="MoreFilled"/>
         <template #dropdown>
           <el-dropdown-menu>
-            <el-dropdown-item @click="openUrl(`potplayer://${playItem.src}`)">
+            <el-dropdown-item @click="externalUrl(src => `potplayer://${src}`)">
               <el-text>
                 <el-icon>
                   <img alt="PotPlayer" class="el-icon--left icon" src="@/icon/icon-PotPlayer.webp"/>
@@ -14,7 +14,7 @@
                 Pot
               </el-text>
             </el-dropdown-item>
-            <el-dropdown-item @click="openUrl(`vlc://${playItem.src}`)">
+            <el-dropdown-item @click="externalUrl(src => `vlc://${src}`)">
               <el-text>
                 <el-icon>
                   <img alt="VLC" class="el-icon--left icon" src="@/icon/icon-VLC.webp"/>
@@ -23,7 +23,7 @@
               </el-text>
             </el-dropdown-item>
             <el-dropdown-item
-                @click="openUrl(`iina://weblink?url=${encodeUrl(playItem.src)}&mpv_force-media-title=${playItem.name}`)">
+                @click="externalUrl(src => `iina://weblink?url=${encodeUrl(src)}&mpv_force-media-title=${encodeUrl(playItem.name)}`)">
               <el-text>
                 <el-icon>
                   <img alt="IINA" class="el-icon--left icon" src="@/icon/icon-IINA.webp"/>
@@ -31,7 +31,7 @@
                 IINA
               </el-text>
             </el-dropdown-item>
-            <el-dropdown-item @click="openUrl(`mpvplay://${playItem.src}&mpv_force-media-title=${playItem.name}`)">
+            <el-dropdown-item @click="externalUrl(src => `mpvplay://${src}&mpv_force-media-title=${encodeUrl(playItem.name)}`)">
               <el-text>
                 <el-icon>
                   <img alt="MPV" class="el-icon--left icon" src="@/icon/icon-MPV.webp"/>
@@ -40,7 +40,7 @@
               </el-text>
             </el-dropdown-item>
             <el-dropdown-item
-                @click="openUrl(`infuse://x-callback-url/play?url=${encodeUrl(playItem.src)}&filename=${playItem.name}`)">
+                @click="externalUrl(src => `infuse://x-callback-url/play?url=${encodeUrl(src)}&filename=${encodeUrl(playItem.name)}`)">
               <el-text>
                 <el-icon>
                   <img alt="Infuse" class="el-icon--left icon" src="@/icon/icon-Infuse.png"/>
@@ -49,7 +49,7 @@
               </el-text>
             </el-dropdown-item>
           </el-dropdown-menu>
-          <el-dropdown-item @click="openUrl(`ddplay:${encodeUrl(playItem.src)}|filePath=${playItem.name}`)">
+          <el-dropdown-item @click="externalUrl(src => `ddplay:${encodeUrl(src)}|filePath=${encodeUrl(playItem.name)}`)">
             <el-text>
               <el-icon>
                 <img alt="DandanPlay" class="el-icon--left icon" src="@/icon/icon-DandanPlay.webp"/>
@@ -57,7 +57,7 @@
               弹弹Play
             </el-text>
           </el-dropdown-item>
-          <el-dropdown-item @click="openUrl(`anix://openVideo/${encodeUrl(playItem.src)}`)">
+          <el-dropdown-item @click="externalUrl(src => `anix://openVideo/${encodeUrl(src)}`)">
             <el-text>
               <el-icon>
                 <img alt="AnimacX" class="el-icon--left icon" src="@/icon/icon-AnimacX.webp"/>
@@ -66,7 +66,7 @@
             </el-text>
           </el-dropdown-item>
           <el-dropdown-item
-              @click="openUrl(`SenPlayer://x-callback-url/play?url=${encodeUrl(playItem.src)}&name=${playItem.name}`)">
+              @click="externalUrl(src => `SenPlayer://x-callback-url/play?url=${encodeUrl(src)}&name=${encodeUrl(playItem.name)}`)">
             <el-text>
               <el-icon>
                 <img alt="SenPlayer" class="el-icon--left icon" src="@/icon/icon-SenPlayer.webp"/>
@@ -81,14 +81,28 @@
 </template>
 
 <script setup>
-import {onBeforeUnmount, onMounted} from 'vue'
+import {onBeforeUnmount, onMounted, watch} from 'vue'
 import Artplayer from 'artplayer';
 import artplayerPluginMultipleSubtitles from 'artplayer-plugin-multiple-subtitles';
+import {ElMessage} from 'element-plus';
+import {toApiMedia} from '@/js/global.js';
+import * as http from '@/js/http.js'
 
 const props = defineProps(['playItem'])
 
 let openUrl = (url) => {
   window.open(url)
+}
+
+let externalUrl = async (builder) => {
+  try {
+    const response = await http.externalMediaHandle(props.playItem.filename)
+    const handle = response?.data?.handle
+    if (!handle) throw new Error('媒体句柄已过期')
+    openUrl(builder(toApiMedia(handle)))
+  } catch (error) {
+    ElMessage.error(error?.message || '无法生成外部播放地址')
+  }
 }
 
 let encodeUrl = (str) => {
@@ -97,8 +111,19 @@ let encodeUrl = (str) => {
 
 let art = null
 
-onMounted(() => {
-  let {src, subtitles, extName} = props['playItem'];
+const destroyPlayer = () => {
+  if (!art) return
+  try {
+    art.destroy(true);
+  } catch (e) {
+  }
+  art = null
+}
+
+const createPlayer = () => {
+  if (!props.playItem?.src) return
+  let {src, subtitles = [], extName} = props['playItem'];
+  subtitles = subtitles.map(subtitle => ({...subtitle}))
   let defaultName = ''
   let settings = []
   if (subtitles.length) {
@@ -143,18 +168,19 @@ onMounted(() => {
       art.plugins['multipleSubtitles'].tracks([defaultName]);
     }
   });
-})
+}
 
-onBeforeUnmount(() => {
-  if (!art) {
-    return
-  }
-  try {
-    art.destroy(true);
-    art = null;
-  } catch (e) {
-  }
-})
+onMounted(createPlayer)
+
+watch(() => props.playItem?.subtitles, subtitles => {
+  if (!art || !subtitles?.length) return
+  // The multiple-subtitles plugin builds one merged VTT when it is created;
+  // rebuild only after the non-blocking internal subtitle request completes.
+  destroyPlayer()
+  createPlayer()
+}, {deep: true})
+
+onBeforeUnmount(destroyPlayer)
 </script>
 
 <style scoped>

@@ -34,7 +34,7 @@
       </el-button>
     </div>
   </el-dialog>
-  <el-dialog v-model="dialogVisible" center title="Mikan">
+  <el-dialog v-model="dialogVisible" center title="Mikan" @closed="close">
     <el-checkbox-group v-model="rssList">
       <div class="content-wrapper">
         <div class="search-section">
@@ -149,11 +149,13 @@
 </template>
 
 <script setup>
-import {ref} from "vue";
+import {onBeforeUnmount, ref, watch} from "vue";
 import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy, Download as DownloadIcon} from "@element-plus/icons-vue";
 import SafeImageView from "@/view/custom/SafeImageView.vue";
 import * as http from "@/js/http.js";
+import {enrichScores, mergeScores} from "@/js/mikan-loader.js";
+import {showScore} from "@/js/global.js";
 
 // 批量添加订阅
 let rssList = ref([]);
@@ -171,6 +173,8 @@ let data = ref({
 let seasonSelect = ref('')
 
 let show = (ani) => {
+  listGeneration++
+  cancelListRequests()
   seasonSelect.value = ''
   dialogVisible.value = true
   text.value = ''
@@ -210,6 +214,11 @@ let searchAni = ani => {
 let text = ref('')
 
 let searchLoading = ref(false)
+let listGeneration = 0
+let listController
+let scoreController
+let groupGeneration = 0
+let groupController
 let search = () => {
   if (text.value.length === 1) {
     ElMessage.error("搜索最少需要两个字符")
@@ -221,41 +230,85 @@ let search = () => {
   })
 }
 
+let cancelListRequests = () => {
+  listController?.abort()
+  scoreController?.abort()
+  groupController?.abort()
+  listController = undefined
+  scoreController = undefined
+  groupController = undefined
+}
+
+let startScores = async (generation = listGeneration) => {
+  if (!showScore.value || !dialogVisible.value || generation !== listGeneration) return
+  const week = data.value.weeks.find(item => item.weekLabel === activeName.value)
+  const items = week?.items || []
+  if (!items.length) return
+  scoreController?.abort()
+  const controller = new AbortController()
+  scoreController = controller
+  try {
+    await enrichScores({
+      items,
+      fetchScores: (ids, options) => http.mikanScores(ids, options),
+      onUpdate: ({scores, subscribedBgmIds}) => {
+        if (generation !== listGeneration || controller.signal.aborted) return
+        mergeScores(data.value.weeks, scores, subscribedBgmIds)
+      },
+      signal: controller.signal
+    })
+  } catch (error) {
+    if (error?.name !== 'AbortError' && generation === listGeneration) {
+      ElMessage.warning('评分暂时不可用，可重新切换星期重试')
+    }
+  } finally {
+    if (scoreController === controller) scoreController = undefined
+  }
+}
+
 let list = async (text, body) => {
+  const generation = ++listGeneration
+  cancelListRequests()
+  const controller = new AbortController()
+  listController = controller
+  const textSnapshot = text || ''
+  const bodySnapshot = body ? {...body} : {}
   loading.value = true
-  text = text ? text : ''
-  body = body ? body : {}
-  return http.mikan(text, body)
-      .then(res => {
+  try {
+    const res = await http.mikan(textSnapshot, bodySnapshot, {signal: controller.signal})
+    if (generation !== listGeneration || controller.signal.aborted) return
         let {seasons, weeks, totalItems} = res.data;
 
         if (totalItems < 1) {
           ElMessage.warning("搜索结果为空")
         }
 
-        if (seasons.length) {
-          data.value.seasons = seasons
-        }
-        data.value.weeks = weeks
-        if (weeks.length) {
-          activeName.value = weeks[0].weekLabel
+        data.value.seasons = seasons.length ? seasons : data.value.seasons
+        data.value.weeks = weeks || []
+        if (data.value.weeks.length) {
+          activeName.value = data.value.weeks[0].weekLabel
         }
         for (let season of data.value.seasons) {
           if (season['select'] && !seasonSelect.value) {
             seasonSelect.value = season['seasonLabel']
-            return
           }
         }
-      })
-      .finally(() => {
-        loading.value = false
-      });
+    void startScores(generation)
+  } catch (error) {
+    if (error?.code !== 'REQUEST_ABORTED' && generation === listGeneration) {
+      ElMessage.error(error?.message || 'Mikan 列表加载失败')
+    }
+  } finally {
+    if (generation === listGeneration) {
+      loading.value = false
+    }
+  }
 }
 
 let change = (v) => {
   let body = data.value.seasons.filter(item => item['seasonLabel'] === v)
   if (body.length) {
-    list('', body[0])
+    list('', {...body[0]})
   }
 }
 
@@ -264,21 +317,47 @@ let groups = ref({})
 
 let collapseChange = (v) => {
   if (!v) {
+    groupGeneration++
+    groupController?.abort()
     return
   }
   selectName.value = v
   if (groups.value[v]) {
     return;
   }
+  const generation = ++groupGeneration
+  groupController?.abort()
+  const controller = new AbortController()
+  groupController = controller
   groupLoading.value = true
-  http.mikanGroup(v)
+  http.mikanGroup(v, {signal: controller.signal})
       .then(res => {
+        if (generation !== groupGeneration || controller.signal.aborted) return
         groups.value[v] = res.data
       })
+      .catch(error => {
+        if (error?.code !== 'REQUEST_ABORTED' && generation === groupGeneration) {
+          ElMessage.error(error?.message || '字幕组加载失败')
+        }
+      })
       .finally(() => {
-        groupLoading.value = false
+        if (generation === groupGeneration) groupLoading.value = false
       })
 }
+
+let close = () => {
+  listGeneration++
+  cancelListRequests()
+  dialogVisible.value = false
+}
+
+watch(activeName, () => startScores())
+watch(showScore, value => {
+  if (value) startScores()
+  else scoreController?.abort()
+})
+
+onBeforeUnmount(close)
 
 
 let matchDialogVisible = ref(false)

@@ -1,6 +1,8 @@
 import {ElMessage} from "element-plus";
 import {clearAuthentication, csrfToken} from "@/js/global.js";
 
+let authenticationReloadTimer
+
 /**
  * @typedef {object} ApiResponse
  * @property {number} code
@@ -73,9 +75,8 @@ let fetch_ = async (url, method, body, options = {}) => {
     if (!response.ok) {
         const message = result.detail || result.message || `请求失败 (${response.status})`
         if (!options.silent) ElMessage.error(message)
-        if (response.status === 401 || response.status === 403) {
-            clearAuthentication()
-            setTimeout(() => location.reload(), 1000)
+        if (response.status === 401) {
+            handleAuthenticationFailure()
         }
         const error = /** @type {ApiError} */ (new Error(message))
         error.code = result.code
@@ -100,11 +101,23 @@ let fetch_ = async (url, method, body, options = {}) => {
         return result
     }
     if (!options.silent) ElMessage.error(message)
-    if (code === 401 || code === 403) {
-        clearAuthentication()
-        setTimeout(() => location.reload(), 1000)
+    if (code === 401) {
+        handleAuthenticationFailure()
     }
-    throw new Error(message)
+    const error = /** @type {ApiError} */ (new Error(message))
+    error.code = String(code)
+    error.status = code
+    error.problem = result
+    throw error
+}
+
+const handleAuthenticationFailure = () => {
+    clearAuthentication()
+    if (authenticationReloadTimer !== undefined) return
+    authenticationReloadTimer = setTimeout(() => {
+        authenticationReloadTimer = undefined
+        location.reload()
+    }, 1000)
 }
 
 export default {post, get, del, put}

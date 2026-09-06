@@ -1,8 +1,8 @@
 <template>
   <div class="subscription-page app-page-layout">
-    <AddView ref="addRef"/>
-    <CollectionView ref="collectionRef"/>
-    <ManageView ref="manageRef"/>
+    <component v-if="dialogs.add" :is="AddView" ref="addRef"/>
+    <component v-if="dialogs.collection" :is="CollectionView" ref="collectionRef"/>
+    <component v-if="dialogs.manage" :is="ManageView" ref="manageRef"/>
     <PageHeaderView title="订阅" :subtitle="`共 ${subscriptionTotal} 个订阅`"/>
     <div class="subscription-body app-page-content app-page-padding">
       <div class="subscription-toolbar">
@@ -43,10 +43,10 @@
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item @click="addRef?.show">
+                <el-dropdown-item @click="openDialog('add')">
                   添加订阅
                 </el-dropdown-item>
-                <el-dropdown-item @click="collectionRef?.show">
+                <el-dropdown-item @click="openDialog('collection')">
                   添加合集
                 </el-dropdown-item>
               </el-dropdown-menu>
@@ -54,12 +54,13 @@
           </el-dropdown>
           <PopconfirmView title="立即刷新全部订阅?" @confirm="refreshAni">
             <template #reference>
-              <el-button aria-label="刷新" :loading="refreshLoading" class="auto-button" icon="Refresh">
+              <el-button aria-label="刷新" :loading="refreshLoading" :disabled="refreshLoading"
+                         class="auto-button" icon="Refresh">
                 刷新
               </el-button>
             </template>
           </PopconfirmView>
-          <el-button aria-label="管理" @click="manageRef?.show" class="auto-button" icon="Fold">
+          <el-button aria-label="管理" @click="openDialog('manage')" class="auto-button" icon="Fold">
             管理
           </el-button>
         </div>
@@ -75,13 +76,10 @@
 </template>
 
 <script setup>
-import {onMounted, ref} from "vue";
+import {defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref} from "vue";
 import {ElMessage} from "element-plus";
 import {useLocalStorage} from "@vueuse/core";
 import SubscriptionListView from "@/view/home/SubscriptionListView.vue";
-import AddView from "@/view/home/AddView.vue";
-import CollectionView from "@/view/home/CollectionView.vue";
-import ManageView from "@/view/home/ManageView.vue";
 import PopconfirmView from "@/view/custom/PopconfirmView.vue";
 import PageHeaderView from "@/view/custom/PageHeaderView.vue";
 import {subscriptionViewMode} from "@/js/global.js";
@@ -112,6 +110,28 @@ const enableSelect = [
   }
 ]
 const filter = ref(() => true)
+const AddView = defineAsyncComponent(() => import("@/view/home/AddView.vue"))
+const CollectionView = defineAsyncComponent(() => import("@/view/home/CollectionView.vue"))
+const ManageView = defineAsyncComponent(() => import("@/view/home/ManageView.vue"))
+const dialogs = reactive({add: false, collection: false, manage: false})
+
+const dialogRefs = {add: addRef, collection: collectionRef, manage: manageRef}
+
+const openDialog = name => {
+  dialogs[name] = true
+  const startedAt = Date.now()
+  const showWhenReady = () => {
+    const show = dialogRefs[name]?.value?.show
+    if (show) {
+      show()
+      return
+    }
+    if (Date.now() - startedAt < 5_000) {
+      setTimeout(showWhenReady, 16)
+    }
+  }
+  void nextTick(showWhenReady)
+}
 
 const changeFilterList = () => {
   listRef.value?.changeFilterList(title.value)
@@ -135,23 +155,78 @@ const selectChange = () => {
 const listLoaded = data => {
   releaseDateList.value = data.releaseDateList || []
   subscriptionTotal.value = data.total || 0
+  if (data?.refresh?.running && !refreshLoading.value) {
+    startRefreshTracking()
+  }
 }
 
-const refreshAni = () => {
+let refreshTimer
+let refreshGeneration = 0
+const refreshStartedAt = ref(0)
+const MAX_REFRESH_WAIT = 120_000
+
+const stopRefreshPolling = () => {
+  refreshGeneration++
+  if (refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = undefined
+  }
+}
+
+const finishRefresh = (refresh, timedOut = false) => {
+  refreshLoading.value = false
+  if (timedOut) {
+    ElMessage.warning('刷新仍在后台运行，请稍后查看列表状态')
+  } else if (refresh?.failedCount > 0) {
+    ElMessage.warning(`刷新完成，但有 ${refresh.failedCount} 个订阅失败`)
+  }
+}
+
+const startRefreshTracking = () => {
+  if (refreshLoading.value) return
+  stopRefreshPolling()
   refreshLoading.value = true
-  http.refreshAll()
-      .then(res => {
-        ElMessage.success(res.message)
-        listRef.value?.getList()
-      })
-      .finally(() => {
-        refreshLoading.value = false
-      })
+  refreshStartedAt.value = Date.now()
+  const generation = refreshGeneration
+  refreshTimer = setTimeout(() => void pollRefresh(generation), 2000)
+}
+
+const pollRefresh = async generation => {
+  if (!refreshLoading.value || generation !== refreshGeneration) return
+  if (Date.now() - refreshStartedAt.value >= MAX_REFRESH_WAIT) {
+    finishRefresh(null, true)
+    return
+  }
+  const data = await listRef.value?.getList()
+  if (generation !== refreshGeneration) return
+  const refresh = data?.refresh
+  if (refresh && !refresh.running) {
+    finishRefresh(refresh)
+    return
+  }
+  refreshTimer = setTimeout(() => void pollRefresh(generation), 2000)
+}
+
+const refreshAni = async () => {
+  if (refreshLoading.value) return
+  stopRefreshPolling()
+  const generation = refreshGeneration
+  refreshLoading.value = true
+  refreshStartedAt.value = Date.now()
+  try {
+    const res = await http.refreshAll()
+    ElMessage.success(res.message)
+    await pollRefresh(generation)
+  } catch {
+    if (generation === refreshGeneration) refreshLoading.value = false
+  }
 }
 
 onMounted(() => {
   selectChange()
 })
+
+onBeforeUnmount(stopRefreshPolling)
 </script>
 
 <style scoped>

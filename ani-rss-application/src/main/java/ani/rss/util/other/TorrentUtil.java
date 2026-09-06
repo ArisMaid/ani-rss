@@ -53,7 +53,6 @@ public class TorrentUtil {
     }
 
     public static DownloaderResult<List<TorrentsInfo>> getTorrentsInfosResult() {
-        ThreadUtil.sleep(1000);
         DownloaderClient client = CLIENT;
         if (client == null) {
             return DownloaderResult.failed("DOWNLOADER_NOT_INITIALIZED", false);

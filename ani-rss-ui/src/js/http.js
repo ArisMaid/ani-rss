@@ -24,7 +24,7 @@ export let setConfig = (config) => api.put('api/v2/config', config);
  * 订阅列表
  * @returns {Promise<any>}
  */
-export let listAni = () => api.post('api/listAni')
+export let listAni = (options = {}) => api.post('api/listAni', '', options)
 
 /**
  * 添加订阅
@@ -95,49 +95,6 @@ export let webuiDelete = () => api.post('api/webui/delete')
 export let mikan = (text, season, options = {}) =>
     api.post(withQuery('api/mikan', {text}), season, options)
 
-// The Mikan picker itself is loaded lazily. Keep its default season response
-// in this shared module so the authenticated home screen can begin the safe
-// prefetch before the user opens the Add dialog, and so that dialog does not
-// issue another request for the same season.
-const DEFAULT_MIKAN_LIST_PRELOAD_TTL_MILLIS = 30_000
-let defaultMikanListPayload
-let defaultMikanListLoadedAt = 0
-let defaultMikanListRequest
-
-const hasFreshDefaultMikanList = () => defaultMikanListPayload
-    && Date.now() - defaultMikanListLoadedAt < DEFAULT_MIKAN_LIST_PRELOAD_TTL_MILLIS
-
-/**
- * Returns the payload of the default Mikan season list, reusing one in-flight
- * request across the home screen and lazily loaded picker. Callers must treat
- * the returned payload as immutable.
- */
-export let preloadDefaultMikanList = () => {
-    if (hasFreshDefaultMikanList()) {
-        return Promise.resolve(defaultMikanListPayload)
-    }
-    if (defaultMikanListRequest) {
-        return defaultMikanListRequest
-    }
-    const request = mikan('', {}, {silent: true})
-        .then(response => {
-            const payload = response?.data
-            if (payload && typeof payload === 'object') {
-                defaultMikanListPayload = payload
-                defaultMikanListLoadedAt = Date.now()
-                return payload
-            }
-            return null
-        })
-        .finally(() => {
-            if (defaultMikanListRequest === request) {
-                defaultMikanListRequest = undefined
-            }
-        })
-    defaultMikanListRequest = request
-    return request
-}
-
 /**
  * Loads public scores after the Mikan season list is rendered.
  * @param {string[]} mikanIds Mikan bangumi ids from the trusted list response
@@ -150,7 +107,7 @@ export let mikanScores = (mikanIds, options = {}) => api.post('api/mikanScores',
  * @param url 番剧url
  * @returns {Promise<any>}
  */
-export let mikanGroup = (url) => api.post(withQuery('api/mikanGroup', {url}))
+export let mikanGroup = (url, options = {}) => api.post(withQuery('api/mikanGroup', {url}), null, options)
 
 /**
  * 获取AniBT番剧的字幕组列表
@@ -265,7 +222,7 @@ export let testProxy = (url, config) => api.post('api/v2/config/proxy-test', {ur
  * 下载列表
  * @returns {Promise<any>}
  */
-export let torrentsInfos = () => api.post('api/torrentsInfos')
+export let torrentsInfos = (options = {}) => api.post('api/torrentsInfos', '', options)
 
 /**
  * 订单号校验
@@ -475,8 +432,8 @@ export let playList = (ani) => api.post('api/playList', ani)
  * @param filename 视频文件路径
  * @returns {Promise<any>}
  */
-export let getSubtitles = (filename) => {
-    return api.post(withQuery('api/getSubtitles', {filename: base64Encode(filename)}));
+export let getSubtitles = (filename, options = {}) => {
+    return api.post(withQuery('api/getSubtitles', {filename: base64Encode(filename)}), null, options);
 }
 
 /**

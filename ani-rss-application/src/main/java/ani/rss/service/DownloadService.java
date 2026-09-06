@@ -85,7 +85,14 @@ public class DownloadService {
         Boolean downloadNew = ani.getDownloadNew();
         List<Double> notDownload = ani.getNotDownload();
 
-        List<TorrentsInfo> torrentsInfos = TorrentUtil.getTorrentsInfos();
+        DownloaderResult<List<TorrentsInfo>> torrentsResult = TorrentUtil.getTorrentsInfosResult();
+        if (!torrentsResult.isSuccess()) {
+            log.warn("{} 跳过本轮：下载器任务快照失败 code:{}",
+                    title, torrentsResult.errorCode());
+            return;
+        }
+        List<TorrentsInfo> torrentsInfos = torrentsResult.value() == null
+                ? List.of() : torrentsResult.value();
 
         int currentDownloadCount = 0;
         List<Item> items = ItemsUtil.getItems(ani);
@@ -389,7 +396,13 @@ public class DownloadService {
 
         String downloadPath = getDownloadPath(ani);
 
-        List<TorrentsInfo> torrentsInfos = TorrentUtil.getTorrentsInfos();
+        DownloaderResult<List<TorrentsInfo>> torrentsResult = TorrentUtil.getTorrentsInfosResult();
+        if (!torrentsResult.isSuccess()) {
+            log.warn("备用 RSS 清理跳过：下载器任务快照失败 code:{}", torrentsResult.errorCode());
+            return;
+        }
+        List<TorrentsInfo> torrentsInfos = torrentsResult.value() == null
+                ? List.of() : torrentsResult.value();
 
         torrentsInfos.stream()
                 .filter(torrentsInfo -> {
@@ -768,7 +781,13 @@ public class DownloadService {
         String downloadPath = getDownloadPath(ani);
 
         if (downloadList) {
-            List<TorrentsInfo> torrentsInfos = TorrentUtil.getTorrentsInfos();
+            DownloaderResult<List<TorrentsInfo>> torrentsResult = TorrentUtil.getTorrentsInfosResult();
+            if (!torrentsResult.isSuccess()) {
+                log.warn("跳过 {}：无法确认下载器任务状态 code:{}", reName, torrentsResult.errorCode());
+                return true;
+            }
+            List<TorrentsInfo> torrentsInfos = torrentsResult.value() == null
+                    ? List.of() : torrentsResult.value();
             for (TorrentsInfo torrentsInfo : torrentsInfos) {
                 String name = torrentsInfo.getName();
                 if (!name.equalsIgnoreCase(reName)) {

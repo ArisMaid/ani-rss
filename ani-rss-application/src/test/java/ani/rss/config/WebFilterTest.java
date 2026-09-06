@@ -2,6 +2,7 @@ package ani.rss.config;
 
 import ani.rss.commons.GsonStatic;
 import ani.rss.entity.Config;
+import ani.rss.util.basic.LogUtil;
 import ani.rss.util.other.ConfigUtil;
 import com.google.gson.JsonObject;
 import org.junit.jupiter.api.Test;
@@ -43,6 +44,7 @@ class WebFilterTest {
             } else {
                 System.setProperty("CONFIG", originalConfigPath);
             }
+            LogUtil.loadLogback();
         }
     }
 }

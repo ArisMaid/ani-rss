@@ -10,10 +10,11 @@
 
 <script setup>
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import LoginView from "@/view/LoginView.vue";
-import MainLayoutView from "@/view/home/MainLayoutView.vue";
 import {authorization, init, initAuth} from "@/js/global.js";
-import {onMounted, reactive, ref} from "vue";
+import {defineAsyncComponent, onMounted, reactive, ref} from "vue";
+
+const LoginView = defineAsyncComponent(() => import('@/view/LoginView.vue'))
+const MainLayoutView = defineAsyncComponent(() => import('@/view/home/MainLayoutView.vue'))
 
 /**
  * 链接配置

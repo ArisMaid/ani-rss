@@ -29,6 +29,7 @@ import {csrfToken} from "@/js/global.js";
 
 const props = defineProps({
   url: String,
+  uploader: Function,
   extensions: {
     type: Array,
     default: () => []
@@ -58,6 +59,10 @@ let uploadFile = async (file) => {
   const extension = file.name.match(/\.([^.]+)$/)?.[1]?.toLowerCase()
   if (acceptedExtensions.value.length && !acceptedExtensions.value.includes(extension)) {
     return Promise.reject(new Error('文件格式错误'))
+  }
+
+  if (props.uploader) {
+    return await props.uploader(file)
   }
 
   const formData = new FormData();

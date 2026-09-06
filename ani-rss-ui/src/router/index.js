@@ -1,9 +1,4 @@
 import {createRouter, createWebHashHistory} from 'vue-router'
-import DashboardView from '@/view/home/DashboardView.vue'
-import SubscriptionView from '@/view/home/SubscriptionView.vue'
-import TorrentsInfosView from '@/view/home/TorrentsInfosView.vue'
-import LogsView from '@/view/home/LogsView.vue'
-import ConfigView from '@/view/home/ConfigView.vue'
 import {startupPage} from '@/js/global.js'
 
 const startupPaths = ['/home', '/subscriptions']
@@ -15,23 +10,23 @@ const routes = [
     },
     {
         path: '/home',
-        component: DashboardView
+        component: () => import('@/view/home/DashboardView.vue')
     },
     {
         path: '/subscriptions',
-        component: SubscriptionView
+        component: () => import('@/view/home/SubscriptionView.vue')
     },
     {
         path: '/downloads',
-        component: TorrentsInfosView
+        component: () => import('@/view/home/TorrentsInfosView.vue')
     },
     {
         path: '/logs',
-        component: LogsView
+        component: () => import('@/view/home/LogsView.vue')
     },
     {
         path: '/settings',
-        component: ConfigView
+        component: () => import('@/view/home/ConfigView.vue')
     }
 ]
 

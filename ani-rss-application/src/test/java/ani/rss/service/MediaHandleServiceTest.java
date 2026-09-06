@@ -4,6 +4,7 @@ import ani.rss.auth.AuthService;
 import ani.rss.controller.v2.MediaController;
 import ani.rss.entity.Config;
 import ani.rss.entity.Login;
+import ani.rss.util.basic.LogUtil;
 import ani.rss.util.other.ConfigUtil;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.AfterEach;
@@ -46,6 +47,7 @@ class MediaHandleServiceTest {
         ConfigUtil.sync(original);
         Files.deleteIfExists(tempDir.resolve("auth-state.v2.json"));
         System.clearProperty("CONFIG");
+        LogUtil.loadLogback();
     }
 
     @Test

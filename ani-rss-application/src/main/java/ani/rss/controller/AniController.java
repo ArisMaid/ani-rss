@@ -246,7 +246,10 @@ public class AniController extends BaseController {
         listAni.setWeekList(weekAniList);
 
         // 按拼音排序
-        List<Ani> aniList = AniUtil.ANI_LIST;
+        List<Ani> aniList = AniUtil.ANI_LIST.stream()
+                .filter(Objects::nonNull)
+                .map(ObjectUtil::clone)
+                .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
 
         List<String> releaseDateList = aniList.stream()
                 .map(Ani::getReleaseDate)
@@ -256,7 +259,8 @@ public class AniController extends BaseController {
                 .distinct()
                 .toList();
         listAni.setReleaseDateList(releaseDateList)
-                .setTotal(aniList.size());
+                .setTotal(aniList.size())
+                .setRefresh(RssTask.refreshStatus());
 
         aniList = CollUtil.sort(aniList, sortType.comparator);
 

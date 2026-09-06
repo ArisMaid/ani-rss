@@ -1,10 +1,10 @@
 <template>
   <div class="dashboard-page app-page-layout">
-    <EditAniView ref="editAniRef"/>
-    <PlayListView ref="playListRef"/>
-    <CoverView ref="coverRef"/>
-    <DelAniView ref="delAniRef"/>
-    <BgmRateView ref="bgmRateRef"/>
+    <component v-if="editOpen" :is="EditAniView" ref="editAniRef"/>
+    <component v-if="playListOpen" :is="PlayListView" ref="playListRef"/>
+    <component v-if="coverOpen" :is="CoverView" ref="coverRef"/>
+    <component v-if="delOpen" :is="DelAniView" ref="delAniRef"/>
+    <component v-if="rateOpen" :is="BgmRateView" ref="bgmRateRef"/>
     <PageHeaderView title="首页" :subtitle="`${todayLabel} · ${todayText}`">
       <template #actions>
         <el-button :loading="refreshLoading" icon="Refresh" @click="loadAll" class="auto-button">
@@ -90,11 +90,11 @@
                      class="today-item">
                   <AniCoverView
                       :item="ani"
-                      @edit="editAniRef?.show"
-                      @playlist="playListRef?.show"
-                      @cover="coverRef?.show"
-                      @del="delAniRef?.show"
-                      @rate="bgmRateRef?.show"/>
+                      @edit="item => openDialog('edit', item)"
+                      @playlist="item => openDialog('playlist', item)"
+                      @cover="item => openDialog('cover', item)"
+                      @del="item => openDialog('delete', item)"
+                      @rate="item => openDialog('rate', item)"/>
                 </div>
               </div>
             </div>
@@ -161,17 +161,18 @@
 </template>
 
 <script setup>
-import {computed, onActivated, onDeactivated, onMounted, onUnmounted, ref} from "vue";
+import {computed, defineAsyncComponent, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref} from "vue";
+import {ElMessage} from "element-plus";
 import {ArrowLeft, ArrowRight, CircleCheck, Download, List, Upload} from "@element-plus/icons-vue";
 import {formatDate, fromNow} from "@/js/format.js";
 import * as http from "@/js/http.js";
-import AniCoverView from "@/view/home/AniCoverView.vue";
-import EditAniView from "@/view/home/EditAniView.vue";
-import PlayListView from "@/view/play/PlayListView.vue";
-import CoverView from "@/view/home/CoverView.vue";
-import DelAniView from "@/view/home/DelAniView.vue";
-import BgmRateView from "@/view/home/BgmRateView.vue";
 import PageHeaderView from "@/view/custom/PageHeaderView.vue";
+
+const EditAniView = defineAsyncComponent(() => import('@/view/home/EditAniView.vue'))
+const PlayListView = defineAsyncComponent(() => import('@/view/play/PlayListView.vue'))
+const CoverView = defineAsyncComponent(() => import('@/view/home/CoverView.vue'))
+const DelAniView = defineAsyncComponent(() => import('@/view/home/DelAniView.vue'))
+const BgmRateView = defineAsyncComponent(() => import('@/view/home/BgmRateView.vue'))
 
 const weekLabels = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
 const downloadingStates = ['forcedDL', 'downloading', 'forcedMetaDL', 'metaDL', 'stalledDL', 'checkingDL', 'queuedDL', 'allocating', 'moving']
@@ -188,11 +189,20 @@ const delAniRef = ref()
 const coverRef = ref()
 const playListRef = ref()
 const bgmRateRef = ref()
+const editOpen = ref(false)
+const playListOpen = ref(false)
+const coverOpen = ref(false)
+const delOpen = ref(false)
+const rateOpen = ref(false)
 const config = ref({
   procrastinatingDay: 14
 })
 
 let timer
+let pollingActive = false
+let pollGeneration = 0
+let torrentsRequest
+let torrentsController
 
 const todayLabel = computed(() => weekLabels[new Date().getDay()])
 const flatAnis = computed(() => weekList.value.flatMap(week => week.items || []))
@@ -277,9 +287,26 @@ const loadConfig = async () => {
   config.value = res.data || config.value
 }
 
-const loadTorrents = async () => {
-  const res = await http.torrentsInfos()
-  torrentsInfos.value = res.data || []
+const loadTorrents = () => {
+  if (torrentsRequest) return torrentsRequest
+  const generation = pollGeneration
+  const controller = new AbortController()
+  torrentsController = controller
+  const request = http.torrentsInfos({signal: controller.signal})
+      .then(res => {
+        if (generation === pollGeneration) {
+          torrentsInfos.value = res.data || []
+        }
+        return res
+      })
+      .finally(() => {
+        if (torrentsRequest === request) {
+          torrentsRequest = undefined
+          torrentsController = undefined
+        }
+      })
+  torrentsRequest = request
+  return request
 }
 
 const loadAll = async () => {
@@ -290,27 +317,97 @@ const loadAll = async () => {
       loadConfig(),
       loadTorrents()
     ])
+  } catch (error) {
+    if (error?.code !== 'REQUEST_ABORTED') {
+      ElMessage.error(error?.message || '首页数据加载失败')
+    }
   } finally {
     refreshLoading.value = false
   }
 }
 
+const schedulePolling = () => {
+  if (!pollingActive || document.hidden || timer) return
+  timer = setTimeout(async () => {
+    timer = undefined
+    if (!pollingActive || document.hidden) return
+    try {
+      await loadTorrents()
+    } catch {
+      // Background polling is deliberately quiet; manual refresh still reports errors.
+    } finally {
+      schedulePolling()
+    }
+  }, 5000)
+}
+
 const startPolling = () => {
-  if (timer) {
-    return
-  }
-  timer = setInterval(loadTorrents, 5000)
+  pollingActive = true
+  pollGeneration++
+  void loadTorrents().catch(() => {}).finally(schedulePolling)
 }
 
 const stopPolling = () => {
-  clearInterval(timer)
+  pollingActive = false
+  pollGeneration++
+  clearTimeout(timer)
   timer = undefined
+  torrentsController?.abort()
 }
 
-onMounted(loadAll)
+const handleVisibilityChange = () => {
+  if (document.hidden) {
+    pollGeneration++
+    clearTimeout(timer)
+    timer = undefined
+    torrentsController?.abort()
+  } else if (pollingActive) {
+    pollGeneration++
+    void loadTorrents().catch(() => {}).finally(schedulePolling)
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  void loadAll()
+})
+
+const openDialog = async (name, payload) => {
+  const flags = {
+    edit: editOpen,
+    playlist: playListOpen,
+    cover: coverOpen,
+    delete: delOpen,
+    rate: rateOpen
+  }
+  const refs = {
+    edit: editAniRef,
+    playlist: playListRef,
+    cover: coverRef,
+    delete: delAniRef,
+    rate: bgmRateRef
+  }
+  flags[name].value = true
+  await nextTick()
+  const startedAt = Date.now()
+  const showWhenReady = () => {
+    const show = refs[name].value?.show
+    if (show) {
+      show(payload)
+      return
+    }
+    if (Date.now() - startedAt < 5_000) {
+      setTimeout(showWhenReady, 16)
+    }
+  }
+  showWhenReady()
+}
 onActivated(startPolling)
 onDeactivated(stopPolling)
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  stopPolling()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+})
 </script>
 
 <style scoped>

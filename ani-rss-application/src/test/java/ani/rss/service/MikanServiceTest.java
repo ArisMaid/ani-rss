@@ -18,8 +18,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -126,7 +124,7 @@ class MikanServiceTest {
     }
 
     @Test
-    void prefetchesOneAdjacentSeasonWithoutRecursing() throws Exception {
+    void doesNotPrefetchAdjacentSeasonUntilItIsRequested() {
         int year = 100_000 + (int) Math.floorMod(System.nanoTime(), 100_000L);
         Mikan.Season selected = new Mikan.Season()
                 .setYear(year)
@@ -144,31 +142,26 @@ class MikanServiceTest {
         CacheUtils.remove(adjacentCacheKey);
 
         AtomicInteger upstreamLoads = new AtomicInteger();
-        CountDownLatch adjacentLoaded = new CountDownLatch(1);
         PublicScoreService scores = new PublicScoreService(id -> null, url -> "");
         MikanService service = new MikanService(scores, (text, requestedSeason) -> {
             upstreamLoads.incrementAndGet();
             boolean isAdjacent = adjacent.getYear().equals(requestedSeason.getYear())
                     && adjacent.getSeason().equals(requestedSeason.getSeason());
             if (isAdjacent) {
-                adjacentLoaded.countDown();
-                // The background prefetch itself must not discover another
-                // neighbour and continue crawling the menu.
-                return mikanList("prefetched adjacent season", List.of(adjacent));
+                return mikanList("explicit adjacent season", List.of(adjacent));
             }
             return mikanList("foreground season", List.of(selected, adjacent));
         });
         try {
             Mikan foreground = service.list("", new Mikan.Season());
             assertEquals("foreground season", foreground.getWeeks().get(0).getItems().get(0).getTitle());
-            assertTrue(adjacentLoaded.await(1, TimeUnit.SECONDS));
+            assertEquals(1, upstreamLoads.get(), "a visible list must not fetch an adjacent season");
 
             Mikan cachedAdjacent = service.list("", adjacent);
-            assertEquals("prefetched adjacent season",
+            assertEquals("explicit adjacent season",
                     cachedAdjacent.getWeeks().get(0).getItems().get(0).getTitle());
-            assertEquals(2, upstreamLoads.get(), "the prefetch must not recursively crawl more seasons");
+            assertEquals(2, upstreamLoads.get());
         } finally {
-            service.stopStaleRefreshExecutor();
             scores.stopWarmupExecutors();
             CacheUtils.remove(defaultCacheKey);
             CacheUtils.remove(adjacentCacheKey);
@@ -176,7 +169,7 @@ class MikanServiceTest {
     }
 
     @Test
-    void readsCachedScoresAndStartsWarmupInOneSeasonPass() {
+    void readsCachedScoresWithoutEnqueuingColdWarmups() {
         String mikanId = String.valueOf(System.nanoTime());
         CountingScoreService scores = new CountingScoreService(mikanId);
         MikanService service = new MikanService(scores, (text, season) -> {
@@ -196,8 +189,7 @@ class MikanServiceTest {
             Mikan result = service.list("single-pass-" + mikanId, new Mikan.Season());
 
             assertEquals(1, scores.combinedLookupCalls.get());
-            assertEquals(MikanService.MAX_BACKGROUND_SCORE_WARMUPS_PER_LIST,
-                    scores.lastColdWarmupLimit.get());
+            assertEquals(0, scores.lastColdWarmupLimit.get());
             assertEquals(0, scores.legacyCachedLookupCalls.get());
             assertEquals(0, scores.legacyWarmupCalls.get());
             assertEquals(8.6, result.getWeeks().get(0).getItems().get(0).getScore());

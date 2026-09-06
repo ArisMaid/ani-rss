@@ -30,6 +30,7 @@ pnpm-lock.yaml
 /nbproject/private/
 /nbbuild/
 dist/
+.verify-dist/
 /nbdist/
 /.nb-gradle/
 build/

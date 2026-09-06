@@ -49,14 +49,6 @@ import java.util.stream.Collectors;
 public class MikanService {
     private static final int MIKAN_REQUEST_TIMEOUT_MILLIS = 10_000;
     private static final int MAX_SCORE_LOOKUP_IDS = 48;
-    /**
-     * A current Mikan season commonly contains around 80 cards.  Queue the
-     * whole normal season during the already-background score warmup so the
-     * cards opened after the first two score batches do not start cold.
-     * PublicScoreService still caps actual upstream concurrency at 12 mapping
-     * and 4 score requests.
-     */
-    static final int MAX_BACKGROUND_SCORE_WARMUPS_PER_LIST = 96;
     /** A seasonal schedule changes slowly enough to safely reuse it across a short service restart. */
     private static final long SEASON_LIST_CACHE_TTL = TimeUnit.MINUTES.toMillis(10);
     /**
@@ -67,12 +59,6 @@ public class MikanService {
     private static final long STALE_SEASON_LIST_MAX_AGE = TimeUnit.HOURS.toMillis(1);
     private static final long STALE_LIST_MEMORY_TTL = TimeUnit.SECONDS.toMillis(1);
     private static final int STALE_REFRESH_QUEUE_CAPACITY = 8;
-    /**
-     * Preload only one neighbouring season after a seasonal list response.
-     * This makes the common "previous season" hop fast without turning the
-     * picker into an unbounded crawler of the upstream season menu.
-     */
-    private static final int ADJACENT_SEASON_PREFETCH_QUEUE_CAPACITY = 1;
     private static final long SEARCH_LIST_CACHE_TTL = TimeUnit.SECONDS.toMillis(45);
     private static final String LIST_CACHE_PREFIX = "mikan:list:";
     private static final Pattern MIKAN_ID = Pattern.compile("\\d+");
@@ -86,7 +72,6 @@ public class MikanService {
     private MikanListCacheRepository persistentListCache;
     private final ConcurrentMap<String, Object> listLoadLocks = new ConcurrentHashMap<>();
     private final Set<String> staleListRefreshes = ConcurrentHashMap.newKeySet();
-    private final Set<String> adjacentSeasonPrefetches = ConcurrentHashMap.newKeySet();
     private final ExecutorService staleListRefreshExecutor = new ThreadPoolExecutor(
             1,
             1,
@@ -94,15 +79,6 @@ public class MikanService {
             TimeUnit.MILLISECONDS,
             new ArrayBlockingQueue<>(STALE_REFRESH_QUEUE_CAPACITY),
             newDaemonThreadFactory("mikan-list-refresh"),
-            new ThreadPoolExecutor.AbortPolicy()
-    );
-    private final ExecutorService adjacentSeasonPrefetchExecutor = new ThreadPoolExecutor(
-            1,
-            1,
-            0L,
-            TimeUnit.MILLISECONDS,
-            new ArrayBlockingQueue<>(ADJACENT_SEASON_PREFETCH_QUEUE_CAPACITY),
-            newDaemonThreadFactory("mikan-season-prefetch"),
             new ThreadPoolExecutor.AbortPolicy()
     );
     private final MikanListLoader listLoader;
@@ -158,8 +134,7 @@ public class MikanService {
         // rendering and again for warmup, multiplying SQLite work by the
         // number of cards in a season.
         PublicScoreService.MikanScoreLookup cachedScores =
-                publicScoreService.getCachedMikanScoreLookupAndWarm(
-                        mikanInfos, MAX_BACKGROUND_SCORE_WARMUPS_PER_LIST);
+                publicScoreService.getCachedMikanScoreLookupAndWarm(mikanInfos, 0);
         applyScores(
                 mikan,
                 cachedScores.scores(),
@@ -305,7 +280,6 @@ public class MikanService {
         String cacheKey = listCacheKey(normalizedText, season);
         Mikan cached = CacheUtils.get(cacheKey);
         if (cached != null) {
-            prefetchAdjacentSeasonAsync(normalizedText, season, cached);
             return copyMikan(cached);
         }
         CachedMikanList persisted = loadPersistentList(cacheKey, normalizedText);
@@ -313,7 +287,6 @@ public class MikanService {
             long remaining = Math.max(1, persisted.expiresAt() - System.currentTimeMillis());
             Mikan snapshot = copyMikan(persisted.list());
             CacheUtils.put(cacheKey, snapshot, remaining);
-            prefetchAdjacentSeasonAsync(normalizedText, season, snapshot);
             return copyMikan(snapshot);
         }
 
@@ -336,7 +309,6 @@ public class MikanService {
             synchronized (lock) {
                 Mikan cached = CacheUtils.get(cacheKey);
                 if (cached != null) {
-                    prefetchAdjacentSeasonAsync(text, season, cached);
                     return copyMikan(cached);
                 }
                 CachedMikanList persisted = loadPersistentList(cacheKey, text);
@@ -344,10 +316,9 @@ public class MikanService {
                     long remaining = Math.max(1, persisted.expiresAt() - System.currentTimeMillis());
                     Mikan snapshot = copyMikan(persisted.list());
                     CacheUtils.put(cacheKey, snapshot, remaining);
-                    prefetchAdjacentSeasonAsync(text, season, snapshot);
                     return copyMikan(snapshot);
                 }
-                return loadAndCacheList(cacheKey, text, season, true);
+                return loadAndCacheList(cacheKey, text, season);
             }
         } finally {
             listLoadLocks.remove(cacheKey, lock);
@@ -357,17 +328,13 @@ public class MikanService {
     private Mikan loadAndCacheList(
             String cacheKey,
             String text,
-            Mikan.Season season,
-            boolean prefetchAdjacentSeason
+            Mikan.Season season
     ) {
         Mikan loaded = listLoader.load(text, copySeason(season));
         Mikan snapshot = copyMikan(loaded);
         long ttl = listCacheTtl(text);
         CacheUtils.put(cacheKey, snapshot, ttl);
         persistSeasonList(cacheKey, text, snapshot, ttl);
-        if (prefetchAdjacentSeason) {
-            prefetchAdjacentSeasonAsync(text, season, snapshot);
-        }
         return copyMikan(snapshot);
     }
 
@@ -403,118 +370,11 @@ public class MikanService {
                     CacheUtils.put(cacheKey, copyMikan(fresh.list()), remaining);
                     return;
                 }
-                loadAndCacheList(cacheKey, text, season, true);
+                loadAndCacheList(cacheKey, text, season);
             }
         } finally {
             listLoadLocks.remove(cacheKey, lock);
         }
-    }
-
-    private void prefetchAdjacentSeasonAsync(String text, Mikan.Season requestedSeason, Mikan loaded) {
-        if (StrUtil.isNotBlank(text) || !backgroundWorkAllowed()) {
-            return;
-        }
-        Mikan.Season adjacentSeason = adjacentSeason(loaded, requestedSeason);
-        if (adjacentSeason == null) {
-            return;
-        }
-        String adjacentCacheKey = listCacheKey("", adjacentSeason);
-        if (!adjacentSeasonPrefetches.add(adjacentCacheKey)) {
-            return;
-        }
-        try {
-            adjacentSeasonPrefetchExecutor.execute(() -> {
-                try {
-                    if (backgroundWorkAllowed()) {
-                        prefetchSeason(adjacentCacheKey, adjacentSeason);
-                    }
-                } catch (RuntimeException e) {
-                    // This is strictly an optional latency optimization. Do
-                    // not surface an upstream failure from work the user did
-                    // not explicitly request.
-                    log.debug("Unable to prefetch adjacent Mikan season");
-                } finally {
-                    adjacentSeasonPrefetches.remove(adjacentCacheKey);
-                }
-            });
-        } catch (RejectedExecutionException e) {
-            adjacentSeasonPrefetches.remove(adjacentCacheKey);
-            log.debug("Mikan adjacent season prefetch queue is full");
-        }
-    }
-
-    private void prefetchSeason(String cacheKey, Mikan.Season season) {
-        Object lock = listLoadLocks.computeIfAbsent(cacheKey, ignored -> new Object());
-        try {
-            synchronized (lock) {
-                if (CacheUtils.get(cacheKey) != null) {
-                    return;
-                }
-                CachedMikanList persisted = loadPersistentList(cacheKey, "");
-                if (persisted != null) {
-                    long remaining = Math.max(1, persisted.expiresAt() - System.currentTimeMillis());
-                    CacheUtils.put(cacheKey, copyMikan(persisted.list()), remaining);
-                    return;
-                }
-                // Prefetches never schedule another prefetch. At most one
-                // neighbouring season follows a foreground list load.
-                loadAndCacheList(cacheKey, "", season, false);
-            }
-        } finally {
-            listLoadLocks.remove(cacheKey, lock);
-        }
-    }
-
-    private static Mikan.Season adjacentSeason(Mikan loaded, Mikan.Season requestedSeason) {
-        List<Mikan.Season> seasons = Optional.ofNullable(loaded)
-                .map(Mikan::getSeasons)
-                .orElseGet(List::of)
-                .stream()
-                .filter(MikanService::validSeason)
-                .toList();
-        if (seasons.size() < 2) {
-            return null;
-        }
-
-        int selected = -1;
-        if (validSeason(requestedSeason)) {
-            for (int index = 0; index < seasons.size(); index++) {
-                if (sameSeason(seasons.get(index), requestedSeason)) {
-                    selected = index;
-                    break;
-                }
-            }
-        }
-        if (selected < 0) {
-            for (int index = 0; index < seasons.size(); index++) {
-                if (Boolean.TRUE.equals(seasons.get(index).getSelect())) {
-                    selected = index;
-                    break;
-                }
-            }
-        }
-        if (selected < 0) {
-            return null;
-        }
-
-        // Mikan currently lists seasons newest-to-oldest, so the following
-        // option is the likely next user action. At the end, keep the same
-        // one-neighbour bound by warming the preceding option instead.
-        int adjacent = selected + 1 < seasons.size() ? selected + 1 : selected - 1;
-        return adjacent < 0 ? null : copySeason(seasons.get(adjacent));
-    }
-
-    private static boolean validSeason(Mikan.Season season) {
-        return season != null && season.getYear() != null && season.getYear() > 0
-                && StrUtil.isNotBlank(season.getSeason());
-    }
-
-    private static boolean sameSeason(Mikan.Season left, Mikan.Season right) {
-        if (!validSeason(left) || !validSeason(right)
-                || !Objects.equals(left.getYear(), right.getYear())) {
-            return false;
-        }
-        return left.getSeason().trim().equalsIgnoreCase(right.getSeason().trim());
     }
 
     private CachedMikanList loadPersistentList(String cacheKey, String text) {
@@ -596,7 +456,6 @@ public class MikanService {
     @PreDestroy
     void stopStaleRefreshExecutor() {
         staleListRefreshExecutor.shutdownNow();
-        adjacentSeasonPrefetchExecutor.shutdownNow();
     }
 
     static String listCacheKey(String text, Mikan.Season season) {

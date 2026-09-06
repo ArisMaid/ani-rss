@@ -12,6 +12,7 @@ import ani.rss.ownership.OwnershipService;
 import ani.rss.ownership.OwnershipState;
 import ani.rss.persistence.DatabaseManager;
 import ani.rss.service.DownloadService;
+import ani.rss.util.basic.LogUtil;
 import ani.rss.util.other.ConfigUtil;
 import ani.rss.util.other.ItemsUtil;
 import ani.rss.util.other.TorrentUtil;
@@ -103,6 +104,7 @@ class MissingEpisodeRecoveryServiceTest {
         DatabaseManager.close();
         ConfigUtil.sync(originalConfig);
         System.clearProperty("CONFIG");
+        LogUtil.loadLogback();
     }
 
     @Test

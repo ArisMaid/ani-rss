@@ -18,6 +18,18 @@ public class ListAni implements Serializable {
 
     private Integer total;
 
+    private Refresh refresh;
+
+    @Data
+    @Accessors(chain = true)
+    @AllArgsConstructor
+    @NoArgsConstructor
+    public static class Refresh implements Serializable {
+        private boolean running;
+        private int failedCount;
+        private long finishedAt;
+    }
+
     @Data
     @Accessors(chain = true)
     @AllArgsConstructor

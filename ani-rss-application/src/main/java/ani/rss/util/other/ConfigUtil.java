@@ -306,6 +306,7 @@ public class ConfigUtil {
 
     private static void syncLocked(Config config) {
         STORE.commit(config);
+        LogUtil.loadLogback();
         log.debug("保存成功 {}", STORE.path());
     }
 

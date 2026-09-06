@@ -5,6 +5,7 @@ import ani.rss.commons.GsonStatic;
 import ani.rss.entity.Config;
 import ani.rss.entity.Login;
 import ani.rss.persistence.DatabaseManager;
+import ani.rss.util.basic.LogUtil;
 import ani.rss.util.other.ConfigUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +43,7 @@ class BackupServiceTest {
         DatabaseManager.close();
         ConfigUtil.sync(original);
         System.clearProperty("CONFIG");
+        LogUtil.loadLogback();
     }
 
     @Test

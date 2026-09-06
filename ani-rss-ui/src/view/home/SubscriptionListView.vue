@@ -1,9 +1,9 @@
 <template>
-  <EditAniView ref="editAniRef"/>
-  <PlayListView ref="playListRef"/>
-  <CoverView ref="coverRef"/>
-  <DelAniView ref="delAniRef"/>
-  <BgmRateView ref="bgmRateRef"/>
+  <component v-if="dialogs.edit" :is="EditAniView" ref="editAniRef"/>
+  <component v-if="dialogs.playlist" :is="PlayListView" ref="playListRef"/>
+  <component v-if="dialogs.cover" :is="CoverView" ref="coverRef"/>
+  <component v-if="dialogs.delete" :is="DelAniView" ref="delAniRef"/>
+  <component v-if="dialogs.rate" :is="BgmRateView" ref="bgmRateRef"/>
   <div class="list-container" v-loading="loading">
     <el-scrollbar class="hide-scrollbar">
       <div class="list-content">
@@ -17,11 +17,11 @@
                 <component
                     :is="viewComponent"
                     :item="item"
-                    @edit="editAniRef?.show"
-                    @playlist="playListRef?.show"
-                    @cover="coverRef?.show"
-                    @del="delAniRef?.show"
-                    @rate="bgmRateRef?.show"
+                    @edit="openDialog('edit', $event)"
+                    @playlist="openDialog('playlist', $event)"
+                    @cover="openDialog('cover', $event)"
+                    @del="openDialog('delete', $event)"
+                    @rate="openDialog('rate', $event)"
                 />
               </div>
             </div>
@@ -33,11 +33,11 @@
               <component
                   :is="viewComponent"
                   :item="item"
-                  @edit="editAniRef?.show"
-                  @playlist="playListRef?.show"
-                  @cover="coverRef?.show"
-                  @del="delAniRef?.show"
-                  @rate="bgmRateRef?.show"
+                  @edit="openDialog('edit', $event)"
+                  @playlist="openDialog('playlist', $event)"
+                  @cover="openDialog('cover', $event)"
+                  @del="openDialog('delete', $event)"
+                  @rate="openDialog('rate', $event)"
               />
             </div>
           </div>
@@ -49,12 +49,7 @@
 </template>
 
 <script setup>
-import {computed, onMounted, ref} from "vue";
-import EditAniView from "./EditAniView.vue";
-import PlayListView from "@/view/play/PlayListView.vue";
-import CoverView from "./CoverView.vue";
-import DelAniView from "./DelAniView.vue";
-import BgmRateView from "./BgmRateView.vue";
+import {computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref} from "vue";
 import {fromNow} from "@/js/format.js";
 import {listAni} from "@/js/http.js";
 import AniCardView from "@/view/home/AniCardView.vue";
@@ -71,11 +66,24 @@ const props = defineProps({
 })
 const emit = defineEmits(['loaded'])
 
+const EditAniView = defineAsyncComponent(() => import("./EditAniView.vue"))
+const PlayListView = defineAsyncComponent(() => import("@/view/play/PlayListView.vue"))
+const CoverView = defineAsyncComponent(() => import("./CoverView.vue"))
+const DelAniView = defineAsyncComponent(() => import("./DelAniView.vue"))
+const BgmRateView = defineAsyncComponent(() => import("./BgmRateView.vue"))
+
 const editAniRef = ref()
 const delAniRef = ref()
 const coverRef = ref()
 const playListRef = ref()
 const bgmRateRef = ref()
+const dialogs = reactive({
+  edit: false,
+  playlist: false,
+  cover: false,
+  delete: false,
+  rate: false
+})
 
 const weekList = ref([])
 const filterList = ref([])
@@ -88,6 +96,30 @@ const gridClass = computed(() => [
   'grid-container',
   props.viewMode === 'cover' ? 'cover-grid-container' : 'card-grid-container'
 ])
+
+const dialogRefs = {
+  edit: editAniRef,
+  playlist: playListRef,
+  cover: coverRef,
+  delete: delAniRef,
+  rate: bgmRateRef
+}
+
+const openDialog = (name, payload) => {
+  dialogs[name] = true
+  const startedAt = Date.now()
+  const showWhenReady = () => {
+    const show = dialogRefs[name]?.value?.show
+    if (show) {
+      show(payload)
+      return
+    }
+    if (Date.now() - startedAt < 5_000) {
+      setTimeout(showWhenReady, 16)
+    }
+  }
+  void nextTick(showWhenReady)
+}
 
 const changeFilterList = (text = '') => {
   let tempList = weekList.value;
@@ -125,29 +157,51 @@ const changeFilterList = (text = '') => {
       .sort((a, b) => a.sort - b.sort)
 }
 
+let listAbortController
+let listGeneration = 0
+
 const getList = () => {
+  listAbortController?.abort()
+  const controller = new AbortController()
+  listAbortController = controller
+  const generation = ++listGeneration
   loading.value = true
 
-  listAni()
+  return listAni({signal: controller.signal})
       .then(res => {
+        if (generation !== listGeneration) return null
         let data = res.data
         weekList.value = data.weekList
         releaseDateList.value = data.releaseDateList
         emit('loaded', {
           releaseDateList: releaseDateList.value,
-          total: weekList.value.reduce((total, week) => total + week.items.length, 0)
+          total: weekList.value.reduce((total, week) => total + week.items.length, 0),
+          refresh: data.refresh
         })
 
         changeFilterList(props.title)
+        return data
+      })
+      .catch(error => {
+        if (error?.code !== 'REQUEST_ABORTED') {
+          return null
+        }
+        return null
       })
       .finally(() => {
-        loading.value = false
+        if (generation === listGeneration) loading.value = false
       })
 }
 
 onMounted(() => {
   window.$reLoadList = getList
-  getList()
+  void getList()
+})
+
+onBeforeUnmount(() => {
+  listGeneration++
+  listAbortController?.abort()
+  if (window.$reLoadList === getList) delete window.$reLoadList
 })
 
 defineExpose({

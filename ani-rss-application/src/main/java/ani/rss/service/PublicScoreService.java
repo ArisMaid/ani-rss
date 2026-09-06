@@ -61,13 +61,7 @@ public class PublicScoreService {
     private static final int MIKAN_MAPPING_SCAN_BUFFER_BYTES = 4 * 1024;
     static final long BGM_BATCH_TIMEOUT_MILLIS = 12_000;
     static final long MIKAN_MAPPING_BATCH_TIMEOUT_MILLIS = 12_000;
-    static final int MAX_CONCURRENT_REQUESTS = 16;
-    /**
-     * Mikan detail pages now stop after their small header. Keep four slots
-     * reserved so completed mappings can turn into visible scores immediately
-     * instead of waiting behind the remaining seasonal detail pages.
-     */
-    private static final int MAX_MAPPING_WARMUP_WORKERS = MAX_CONCURRENT_REQUESTS - 4;
+    static final int MAX_CONCURRENT_REQUESTS = 4;
     private static final int MAX_SCORE_WARMUP_WORKERS = 4;
     private static final long WARMUP_QUEUE_TIMEOUT_MILLIS = 12_000;
     private static final long WARMUP_FAILURE_RETRY_DELAY_MILLIS = 500;
@@ -103,14 +97,12 @@ public class PublicScoreService {
     /** Coalesces repeated cold Bangumi score lookups across score batches. */
     private final ConcurrentMap<String, CompletableFuture<Double>> bgmScoreFlights = new ConcurrentHashMap<>();
     /**
-     * Detail mappings and score requests use distinct bounded queues.  This is
-     * intentional: a slow seasonal Mikan batch must leave room for the cheap
-     * Bangumi request that follows a mapping which has just completed.
+     * Mapping and score work share one bounded budget. A mapping completion
+     * queues its score lookup without waiting on the same pool, so cold lists
+     * cannot create an unbounded second queue.
      */
-    private final ExecutorService mappingWarmupExecutor = newWarmupExecutor(
-            MAX_MAPPING_WARMUP_WORKERS, "public-score-mapping");
-    private final ExecutorService scoreWarmupExecutor = newWarmupExecutor(
-            MAX_SCORE_WARMUP_WORKERS, "public-score-rating");
+    private final ExecutorService warmupExecutor = newWarmupExecutor(
+            MAX_SCORE_WARMUP_WORKERS, "public-score");
     /**
      * SQLite uses a single serialized connection.  Keep cache persistence off
      * the latency-critical mapping and score workers, otherwise every newly
@@ -803,9 +795,8 @@ public class PublicScoreService {
 
     /**
      * Starts one Mikan detail lookup and queues its Bangumi rating as soon as
-     * the mapping completes.  The two work queues reserve score capacity, so
-     * a long list of detail pages cannot force completed entries to wait for
-     * every remaining mapping request.
+     * the mapping completes. Mapping and rating work share one bounded pool;
+     * a long list cannot create an unbounded second queue.
      */
     private void warmMikanMappingAndScore(String mikanUrl, boolean mappingAlreadyRead) {
         if (StrUtil.isBlank(mikanUrl)) {
@@ -828,7 +819,7 @@ public class PublicScoreService {
                 flightKey,
                 () -> loadAndCacheMikanMapping(mikanUrl, mikanBgmIdResolver::load),
                 mikanMappingFlights,
-                mappingWarmupExecutor
+                warmupExecutor
         ).thenAccept(value -> {
             String bgmId = extractBgmSubjectId(value);
             if (StrUtil.isNotBlank(bgmId)) {
@@ -864,7 +855,7 @@ public class PublicScoreService {
                         .filter(score -> score > 0)
                         .orElse(0.0)),
                 bgmScoreFlights,
-                scoreWarmupExecutor
+                warmupExecutor
         );
     }
 
@@ -951,7 +942,15 @@ public class PublicScoreService {
     }
 
     private static ExecutorService newWarmupExecutor(int threads, String namePrefix) {
-        return Executors.newFixedThreadPool(threads, newDaemonThreadFactory(namePrefix));
+        return new ThreadPoolExecutor(
+                threads,
+                threads,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(96),
+                newDaemonThreadFactory(namePrefix),
+                new ThreadPoolExecutor.AbortPolicy()
+        );
     }
 
     private static ExecutorService newPersistenceExecutor() {
@@ -977,8 +976,7 @@ public class PublicScoreService {
 
     @PreDestroy
     void stopWarmupExecutors() {
-        mappingWarmupExecutor.shutdownNow();
-        scoreWarmupExecutor.shutdownNow();
+        warmupExecutor.shutdownNow();
         cachePersistenceExecutor.shutdownNow();
     }
 

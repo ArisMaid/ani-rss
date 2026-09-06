@@ -4,6 +4,7 @@ import ani.rss.auth.AuthService;
 import ani.rss.auth.AuthenticationFailureException;
 import ani.rss.entity.Config;
 import ani.rss.entity.Login;
+import ani.rss.util.basic.LogUtil;
 import ani.rss.util.other.ConfigUtil;
 import com.sun.net.httpserver.HttpServer;
 import jakarta.servlet.http.Cookie;
@@ -54,6 +55,7 @@ class ImageCacheServiceTest {
         ConfigUtil.sync(original);
         System.clearProperty(PRIVATE_ALLOWLIST);
         System.clearProperty("CONFIG");
+        LogUtil.loadLogback();
     }
 
     @Test
@@ -151,6 +153,73 @@ class ImageCacheServiceTest {
             }
             assertEquals(1, requests.get());
         } finally {
+            executor.shutdownNow();
+            executor.awaitTermination(5, TimeUnit.SECONDS);
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void publicImageCacheIsSharedAcrossSessionsAndRestarts() throws Exception {
+        byte[] image = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        AtomicInteger requests = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/image", exchange -> {
+            requests.incrementAndGet();
+            try {
+                Thread.sleep(100);
+                exchange.getResponseHeaders().add("Content-Type", "image/png");
+                exchange.sendResponseHeaders(200, image.length);
+                exchange.getResponseBody().write(image);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                exchange.close();
+            }
+        });
+        server.start();
+        var executor = Executors.newFixedThreadPool(6);
+        ImageCacheService service = new ImageCacheService();
+        try {
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/image";
+            MockHttpServletResponse firstLogin = login();
+            MockHttpServletResponse secondLogin = login();
+            CountDownLatch ready = new CountDownLatch(6);
+            CountDownLatch start = new CountDownLatch(1);
+            List<java.util.concurrent.Future<ImageCacheService.PublicImage>> futures =
+                    java.util.stream.IntStream.range(0, 6)
+                            .mapToObj(index -> executor.submit(() -> {
+                                ready.countDown();
+                                start.await();
+                                MockHttpServletResponse login = index % 2 == 0 ? firstLogin : secondLogin;
+                                return service.publicImage(url, authenticated(login, "GET"));
+                            }))
+                            .toList();
+            assertTrue(ready.await(5, TimeUnit.SECONDS));
+            start.countDown();
+            ImageCacheService.PublicImage expected = futures.get(0).get(10, TimeUnit.SECONDS);
+            for (var future : futures) {
+                ImageCacheService.PublicImage actual = future.get(10, TimeUnit.SECONDS);
+                assertEquals(expected.path(), actual.path());
+                assertEquals(expected.etag(), actual.etag());
+            }
+            assertEquals(1, requests.get());
+
+            ImageCacheService restarted = new ImageCacheService();
+            try {
+                ImageCacheService.PublicImage persisted = restarted.publicImage(
+                        url, authenticated(secondLogin, "GET"));
+                assertEquals(expected.path(), persisted.path());
+                assertEquals(1, requests.get());
+            } finally {
+                restarted.closeImageClients();
+            }
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> service.publicImage(url + "?token=private", authenticated(firstLogin, "GET")));
+        } finally {
+            service.closeImageClients();
             executor.shutdownNow();
             executor.awaitTermination(5, TimeUnit.SECONDS);
             server.stop(0);

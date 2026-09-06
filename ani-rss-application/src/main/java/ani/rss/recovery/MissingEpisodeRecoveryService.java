@@ -592,6 +592,7 @@ public class MissingEpisodeRecoveryService {
         }
         try {
             DownloaderResult<Void> result = client.recover(task);
+            TorrentUtil.markSnapshotDirty();
             if (result.isSuccess()) {
                 repository.markSubmitted(record.subscriptionId(), record.infoHash(),
                         System.currentTimeMillis() + INITIAL_BACKOFF.toMillis());
@@ -600,6 +601,7 @@ public class MissingEpisodeRecoveryService {
             }
             if ("Aria2".equalsIgnoreCase(client.configurationSnapshot().getDownloadToolType())) {
                 DownloaderResult<Void> removed = client.delete(task, false);
+                TorrentUtil.markSnapshotDirty();
                 if (removed.isSuccess()) {
                     inFlight.remove(key);
                     requeue(record, ani, item, submissionBudget);

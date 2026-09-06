@@ -40,4 +40,69 @@ describe('mikan-loader', () => {
     expect(calls).toEqual([['1', '2'], ['1', '2']])
     expect(pending).toEqual([])
   })
+
+  it('gives every 48-id batch an initial attempt before retrying a slow batch', async () => {
+    const calls = []
+    let time = 0
+    const pending = await enrichScores({
+      items: Array.from({length: 96}, (_, index) => ({
+        url: `https://mikan.example/Home/Bangumi/${index + 1}`
+      })),
+      fetchScores: async ids => {
+        calls.push(ids)
+        return {data: {scores: {}, retryableMikanIds: ids}}
+      },
+      maxDuration: 1000,
+      now: () => time,
+      sleep: async milliseconds => { time += milliseconds }
+    })
+    expect(calls.length).toBeGreaterThanOrEqual(2)
+    expect(calls[0]).toHaveLength(48)
+    expect(calls[1]).toHaveLength(48)
+    expect(pending).toHaveLength(96)
+  })
+
+  it('returns at the deadline even when an upstream promise ignores abort', async () => {
+    let release
+    const hanging = new Promise(resolve => { release = resolve })
+    let settled = false
+    const work = enrichScores({
+      items: [{url: 'https://mikan.example/Home/Bangumi/1'}],
+      fetchScores: () => hanging,
+      maxDuration: 20
+    }).finally(() => { settled = true })
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(settled).toBe(true)
+    release({data: {scores: {}, retryableMikanIds: []}})
+    await work
+  })
+
+  it('starts later batches before an earlier hanging batch reaches the deadline', async () => {
+    const calls = []
+    let releaseFirst
+    const firstBatch = new Promise(resolve => { releaseFirst = resolve })
+    const work = enrichScores({
+      items: Array.from({length: 96}, (_, index) => ({
+        url: `https://mikan.example/Home/Bangumi/${index + 1}`
+      })),
+      fetchScores: async ids => {
+        calls.push(ids)
+        if (calls.length === 1) return firstBatch
+        return {
+          data: {
+            scores: Object.fromEntries(ids.map(id => [id, {mikanId: id, score: 7}])),
+            retryableMikanIds: []
+          }
+        }
+      },
+      maxDuration: 30
+    })
+
+    const pending = await work
+    expect(calls).toHaveLength(2)
+    expect(calls[0]).toHaveLength(48)
+    expect(calls[1]).toHaveLength(48)
+    expect(pending).toHaveLength(48)
+    releaseFirst({data: {scores: {}, retryableMikanIds: []}})
+  })
 })

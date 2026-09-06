@@ -27,3 +27,16 @@
 2. 先运行安全、恢复、下载器失败和认证合同测试。
 3. 再运行前端孤立构建、bundle 门禁和 Mikan/播放器交互检查。
 4. 最后更新版本、`UPDATE.md`、本文件与发布工作流。
+
+## 3.2.28.60 验收映射
+
+本版本的关键实现与证据如下；“未验证”表示没有把隔离 stub 或单元测试冒充真实环境。
+
+| 能力 | 当前入口 | 证据 |
+| --- | --- | --- |
+| Mikan 列表与评分 | `MikanService`、`mikanScores`、`MikanView.vue` | `MikanServiceTest`、`MikanListPersistentCacheTest`、`PublicScoreServiceTest`、前端 6 个 loader 测试 |
+| AnimeGarden 非阻塞补载 | `animeGardenList`、`animeGardenEnrichment`、`AnimeGardenView.vue` | Java 编译、前端生产构建；真实 AnimeGarden/评分源未连接 |
+| 图片公共缓存 | `GET /api/v2/images?url=...`、`ImageCacheService` | `ImageCacheServiceTest` 6 项，覆盖认证、单飞、跨会话、manifest 重启、失败冷却 |
+| 下载器快照与失败状态 | `TorrentUtil.SnapshotCycle`、`RssTask`、`DownloadService` | 全量后端回归 289 tests，0 failures，0 errors，4 skipped |
+| 恢复/媒体/认证合同 | v2 restore/media、Cookie + CSRF、401/403 | 全量后端回归；真实浏览器、Range、外部播放器仍未连接 |
+| 首屏与发布门禁 | manifest bundle checker、tag workflow | 首入口 JS gzip 105,196 B；多架构镜像需 tag workflow 实际成功后才算已发布 |

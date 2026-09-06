@@ -1,0 +1,11 @@
+{
+  "baselineCommit": "562454f287645531e09bb2ada65afd31dbfa4091",
+  "targetReduction": 0.25,
+  "entries": {
+    "index.html": {
+      "baselineJsGzipBytes": 431801,
+      "maxJsGzipBytes": 323850,
+      "baselineCssGzipBytes": 79254
+    }
+  }
+}

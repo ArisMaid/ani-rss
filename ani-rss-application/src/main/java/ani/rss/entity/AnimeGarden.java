@@ -7,6 +7,7 @@ import lombok.experimental.Accessors;
 import java.io.Serializable;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 @Data
 @Accessors(chain = true)
@@ -45,6 +46,22 @@ public class AnimeGarden implements Serializable {
         private Double score;
         @Schema(description = "封面")
         private String cover;
+    }
+
+    @Data
+    @Accessors(chain = true)
+    @Schema(description = "AnimeGarden 补载结果")
+    public static class Enrichment implements Serializable {
+        private String cover;
+        private Double score;
+    }
+
+    @Data
+    @Accessors(chain = true)
+    @Schema(description = "AnimeGarden 补载响应")
+    public static class EnrichmentResponse implements Serializable {
+        private Map<String, Enrichment> subjects;
+        private List<String> retryableSubjectIds;
     }
 
     @Data

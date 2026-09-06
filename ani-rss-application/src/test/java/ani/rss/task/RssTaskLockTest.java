@@ -65,4 +65,18 @@ class RssTaskLockTest {
         assertTrue(queue.submit(List.of("one"), scheduled::add, ignored -> { }));
         assertEquals(1, scheduled.size());
     }
+
+    @Test
+    void exposesWorkerFailuresAfterTheQueueDrains() {
+        SubscriptionDownloadQueue queue = new SubscriptionDownloadQueue();
+        List<Runnable> scheduled = new ArrayList<>();
+
+        assertTrue(queue.submit(List.of("one", "two"), scheduled::add, ignored -> 2));
+        scheduled.remove(0).run();
+
+        SubscriptionDownloadQueue.Status status = queue.snapshot();
+        assertFalse(status.running());
+        assertEquals(2, status.failedCount());
+        assertTrue(status.finishedAt() > 0);
+    }
 }

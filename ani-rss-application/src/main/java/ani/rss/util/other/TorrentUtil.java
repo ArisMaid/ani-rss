@@ -27,6 +27,7 @@ import org.eclipse.bittorrent.TorrentFile;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 管理下载器的调用与种子存取
@@ -34,6 +35,8 @@ import java.util.List;
 @Slf4j
 public class TorrentUtil {
     private static final Object CLIENT_LOCK = new Object();
+    private static final long SNAPSHOT_MAX_AGE_NANOS = TimeUnit.SECONDS.toNanos(5);
+    private static final ThreadLocal<SnapshotCycle> SNAPSHOT_CYCLE = new ThreadLocal<>();
     private static volatile DownloaderClient CLIENT;
 
     public static DownloaderClient client() {
@@ -47,9 +50,31 @@ public class TorrentUtil {
      */
     public static List<TorrentsInfo> getTorrentsInfos() {
         DownloaderResult<List<TorrentsInfo>> result = getTorrentsInfosResult();
-        return result.isSuccess() && result.value() != null
-                ? new ArrayList<>(result.value())
-                : new ArrayList<>();
+        if (!result.isSuccess()) {
+            throw new IllegalStateException("downloader task snapshot failed: " + result.errorCode());
+        }
+        return result.value() == null ? new ArrayList<>() : new ArrayList<>(result.value());
+    }
+
+    /**
+     * Opens a short-lived RSS cycle snapshot. The snapshot is intentionally
+     * thread-local and never survives the cycle, so a failed read cannot be
+     * mistaken for an empty downloader state and a new cycle observes new
+     * remote tasks.
+     */
+    public static SnapshotCycle openSnapshotCycle() {
+        SnapshotCycle previous = SNAPSHOT_CYCLE.get();
+        SnapshotCycle current = new SnapshotCycle(previous);
+        SNAPSHOT_CYCLE.set(current);
+        return current;
+    }
+
+    /** Marks the current cycle stale after a remote task mutation. */
+    public static void markSnapshotDirty() {
+        SnapshotCycle current = SNAPSHOT_CYCLE.get();
+        if (current != null) {
+            current.dirty = true;
+        }
     }
 
     public static DownloaderResult<List<TorrentsInfo>> getTorrentsInfosResult() {
@@ -57,6 +82,15 @@ public class TorrentUtil {
         if (client == null) {
             return DownloaderResult.failed("DOWNLOADER_NOT_INITIALIZED", false);
         }
+
+        SnapshotCycle cycle = SNAPSHOT_CYCLE.get();
+        if (cycle != null) {
+            List<TorrentsInfo> cached = cycle.cached(client, System.nanoTime());
+            if (cached != null) {
+                return DownloaderResult.success(copyTasks(cached));
+            }
+        }
+
         DownloaderResult<List<TorrentsInfo>> result = client.torrents();
         if (!result.isSuccess()) {
             return result;
@@ -67,7 +101,10 @@ public class TorrentUtil {
         // and observe the downloader snapshot in one batch so unverified
         // candidates never enter the operational stream.
         tasks = ownershipService().observeOwnedTasks(downloaderType, tasks);
-        return DownloaderResult.success(new ArrayList<>(tasks));
+        if (cycle != null) {
+            cycle.store(client, tasks, System.nanoTime());
+        }
+        return DownloaderResult.success(copyTasks(tasks));
     }
 
     /**
@@ -265,6 +302,7 @@ public class TorrentUtil {
             quarantineOperation = quarantineService().quarantineOwnership(ownership.ownershipId());
         }
         Boolean b = activeClient.delete(torrentsInfo, false).isSuccess();
+        markSnapshotDirty();
         if (!b) {
             if (quarantineOperation != null) {
                 quarantineService().restore(quarantineOperation);
@@ -313,6 +351,7 @@ public class TorrentUtil {
 
         ThreadUtil.sleep(1000);
         Boolean renamed = activeClient.rename(torrentsInfo).isSuccess();
+        markSnapshotDirty();
         if (renamed) {
             addTags(torrentsInfo, TorrentsTagEnum.RENAME.getValue());
             ownershipService().captureFiles(ownership.ownershipId(), torrentsInfo);
@@ -341,7 +380,9 @@ public class TorrentUtil {
         boolean b = false;
         try {
             b = activeClient.addTags(torrentsInfo, tags).isSuccess();
+            markSnapshotDirty();
         } catch (Exception e) {
+            markSnapshotDirty();
             log.error(e.getMessage(), e);
         }
         return b;
@@ -366,8 +407,83 @@ public class TorrentUtil {
         String downloaderType = activeClient.configurationSnapshot().getDownloadToolType();
         ownershipService.requireOwned(downloaderType, torrentsInfo);
         log.info("修改保存位置 {} ==> {}", torrentsInfo.getName(), path);
-        if (!activeClient.setSavePath(torrentsInfo, path).isSuccess()) {
+        boolean updated = activeClient.setSavePath(torrentsInfo, path).isSuccess();
+        markSnapshotDirty();
+        if (!updated) {
             throw new IllegalStateException("downloader rejected the save-path change");
+        }
+    }
+
+    private static List<TorrentsInfo> copyTasks(List<TorrentsInfo> tasks) {
+        List<TorrentsInfo> copies = new ArrayList<>();
+        if (tasks == null) {
+            return copies;
+        }
+        for (TorrentsInfo task : tasks) {
+            if (task != null) {
+                copies.add(copyTask(task));
+            }
+        }
+        return copies;
+    }
+
+    private static TorrentsInfo copyTask(TorrentsInfo task) {
+        return new TorrentsInfo()
+                .setId(task.getId())
+                .setHash(task.getHash())
+                .setName(task.getName())
+                .setState(task.getState())
+                .setCategory(task.getCategory())
+                .setTagList(task.getTagList() == null ? null : new ArrayList<>(task.getTagList()))
+                .setCompleted(task.getCompleted())
+                .setSize(task.getSize())
+                .setProgress(task.getProgress())
+                .setFormatSize(task.getFormatSize())
+                .setSavePath(task.getSavePath())
+                .setFilesSupplier(task.getFilesSupplier());
+    }
+
+    /** A five-second, per-RSS-worker downloader snapshot. */
+    public static final class SnapshotCycle implements AutoCloseable {
+        private final SnapshotCycle previous;
+        private DownloaderClient client;
+        private List<TorrentsInfo> tasks;
+        private long readAtNanos;
+        private boolean dirty;
+        private boolean closed;
+
+        private SnapshotCycle(SnapshotCycle previous) {
+            this.previous = previous;
+        }
+
+        private List<TorrentsInfo> cached(DownloaderClient activeClient, long nowNanos) {
+            if (tasks == null || dirty || client != activeClient ||
+                    nowNanos - readAtNanos > SNAPSHOT_MAX_AGE_NANOS) {
+                return null;
+            }
+            return tasks;
+        }
+
+        private void store(DownloaderClient activeClient, List<TorrentsInfo> observedTasks, long nowNanos) {
+            client = activeClient;
+            tasks = List.copyOf(observedTasks == null ? List.of() : observedTasks);
+            readAtNanos = nowNanos;
+            dirty = false;
+        }
+
+        @Override
+        public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            if (SNAPSHOT_CYCLE.get() == this) {
+                if (previous == null) {
+                    SNAPSHOT_CYCLE.remove();
+                } else {
+                    SNAPSHOT_CYCLE.set(previous);
+                }
+            }
         }
     }
 

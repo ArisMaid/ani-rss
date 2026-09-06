@@ -1,6 +1,7 @@
 package ani.rss.completion;
 
 import ani.rss.commons.FileUtils;
+import ani.rss.download.DownloaderResult;
 import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
 import ani.rss.entity.torrent.TorrentsInfo;
@@ -116,7 +117,12 @@ public class CompletionMigrationService {
             }
             ownershipService.validateSubscriptionMove(ani.getId(), target.newRoot());
 
-            List<TorrentsInfo> ownedTasks = TorrentUtil.getTorrentsInfos().stream()
+            DownloaderResult<List<TorrentsInfo>> torrentsResult = TorrentUtil.getTorrentsInfosResult();
+            if (!torrentsResult.isSuccess()) {
+                throw new IllegalStateException("downloader task snapshot failed: " + torrentsResult.errorCode());
+            }
+            List<TorrentsInfo> ownedTasks = (torrentsResult.value() == null ? List.<TorrentsInfo>of()
+                    : torrentsResult.value()).stream()
                     .filter(task -> ownershipService.belongsTo(task, ani.getId()))
                     .toList();
             for (TorrentsInfo task : ownedTasks) {

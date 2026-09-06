@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -35,8 +36,13 @@ public class AnimeGardenService {
     @Resource
     private PublicScoreService publicScoreService;
 
+    /** IDs from the most recently rendered subjects list; enrichment cannot
+     * turn this endpoint into an arbitrary Bangumi lookup proxy. */
+    private final Set<String> loadedSubjectIds = ConcurrentHashMap.newKeySet();
+
     public List<AnimeGarden.Week> list(String bgmUrl) {
         List<AnimeGarden.Week> weekList = new ArrayList<>();
+        loadedSubjectIds.clear();
 
         if (StrUtil.isNotBlank(bgmUrl)) {
             AnimeGarden.Week week = new AnimeGarden.Week();
@@ -53,6 +59,9 @@ public class AnimeGardenService {
                     .orElse(0.0);
 
             AnimeGarden.Subject subject = new AnimeGarden.Subject();
+            if (bgmId != null && bgmId.chars().allMatch(Character::isDigit)) {
+                loadedSubjectIds.add(bgmId);
+            }
             subject.setName(name)
                     .setId(bgmId)
                     .setCover(cover)
@@ -63,8 +72,6 @@ public class AnimeGardenService {
                     .setSubjects(List.of(subject));
             return weekList;
         }
-
-        JsonObject bgmCover = cacheService.getBgmCover();
 
         List<String> bgmIdList = AniUtil.ANI_LIST
                 .stream()
@@ -89,39 +96,30 @@ public class AnimeGardenService {
             return weekList;
         }
 
-        Map<String, Double> resolvedBgmScores;
-        try {
-            resolvedBgmScores = publicScoreService.getBgmScores(
-                    subjectList.stream()
-                            .map(AnimeGarden.Subject::getId)
-                            .filter(StrUtil::isNotBlank)
-                            .toList()
-            );
-        } catch (RuntimeException e) {
-            // Scores are optional; AnimeGarden itself must remain usable if an upstream score source is down.
-            resolvedBgmScores = Map.of();
-        }
-        final Map<String, Double> bgmScores = resolvedBgmScores;
+        loadedSubjectIds.addAll(subjectList.stream()
+                .map(AnimeGarden.Subject::getId)
+                .filter(StrUtil::isNotBlank)
+                .filter(id -> id.chars().allMatch(Character::isDigit))
+                .toList());
+        JsonObject bgmCover = cacheService.getBgmCoverSnapshot();
+        Set<String> subscribedBgmIds = new HashSet<>(bgmIdList);
 
+        // Subjects are the required list payload.  Cover and score are
+        // optional enrichment and must not serialize the first response on
+        // either public upstream.
         subjectList = subjectList.stream()
                 .peek(subject -> {
                     String id = subject.getId();
-
-                    Double score = bgmScores.getOrDefault(id, 0.0);
-
                     String cover = Optional.ofNullable(bgmCover.get(id))
                             .map(it -> GsonStatic.fromJson(it, BgmInfo.Images.class))
                             .map(BgmInfo.Images::getSmall)
                             .orElse("");
-
-                    boolean exists = bgmIdList.contains(subject.getId());
-
+                    Double score = Optional.ofNullable(subject.getScore()).orElse(0.0);
                     subject
                             .setScore(score)
                             .setCover(cover)
-                            .setExists(exists);
+                            .setExists(subscribedBgmIds.contains(id));
                 })
-                .sorted(Comparator.comparingDouble(AnimeGarden.Subject::getScore).reversed())
                 .toList();
 
         List<String> weeks = List.of("星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六");
@@ -153,6 +151,40 @@ public class AnimeGardenService {
                 ).toList();
 
         return weekList;
+    }
+
+    public AnimeGarden.EnrichmentResponse enrich(Collection<String> subjectIds) {
+        LinkedHashSet<String> ids = Optional.ofNullable(subjectIds)
+                .orElseGet(List::of)
+                .stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(id -> !id.isBlank() && id.chars().allMatch(Character::isDigit))
+                .filter(loadedSubjectIds::contains)
+                .distinct()
+                .limit(48)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+
+        JsonObject coverIndex = cacheService.getBgmCoverForEnrichment();
+        PublicScoreService.BgmScoreLookup scoreLookup = publicScoreService.getCachedBgmScoresAndWarm(ids);
+        Map<String, AnimeGarden.Enrichment> subjects = new LinkedHashMap<>();
+        LinkedHashSet<String> retryable = new LinkedHashSet<>(scoreLookup.retryableSubjectIds());
+        boolean coverIndexPending = coverIndex.isEmpty();
+        for (String id : ids) {
+            String cover = Optional.ofNullable(coverIndex.get(id))
+                    .map(it -> GsonStatic.fromJson(it, BgmInfo.Images.class))
+                    .map(BgmInfo.Images::getSmall)
+                    .orElse("");
+            if (coverIndexPending) {
+                retryable.add(id);
+            }
+            subjects.put(id, new AnimeGarden.Enrichment()
+                    .setCover(cover)
+                    .setScore(scoreLookup.scores().get(id)));
+        }
+        return new AnimeGarden.EnrichmentResponse()
+                .setSubjects(subjects)
+                .setRetryableSubjectIds(new ArrayList<>(retryable));
     }
 
     public List<AnimeGarden.Group> group(String bgmId) {

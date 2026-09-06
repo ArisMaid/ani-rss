@@ -34,7 +34,7 @@
       </el-button>
     </div>
   </el-dialog>
-  <el-dialog v-model="dialogVisible" center title="AnimeGarden">
+  <el-dialog v-model="dialogVisible" center title="AnimeGarden" @closed="close">
     <el-checkbox-group v-model="rssList">
       <div class="content-wrapper">
         <div class="search-section">
@@ -134,12 +134,13 @@
 </template>
 
 <script setup>
-import {ref} from "vue";
+import {onBeforeUnmount, onMounted, ref, watch} from "vue";
 import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy} from "@element-plus/icons-vue";
 import * as http from "@/js/http.js";
 import SafeImageView from "@/view/custom/SafeImageView.vue";
 import {fromNow} from "@/js/format.js";
+import {enrichSubjects} from "@/js/mikan-loader.js";
 
 // 批量添加订阅
 let rssList = ref([]);
@@ -148,11 +149,19 @@ let groupLoading = ref(false)
 let activeName = ref("")
 let dialogVisible = ref(false)
 let loading = ref(false)
+let listGeneration = 0
+let listController
+let enrichmentController
+let groupController
+let groupGeneration = 0
+let enrichmentKey = ''
 let data = ref({
   'items': []
 })
 
 let show = (bgmUrl = '') => {
+  closeRequests()
+  listGeneration++
   dialogVisible.value = true
   data.value = {
     'items': []
@@ -162,9 +171,13 @@ let show = (bgmUrl = '') => {
 }
 
 let list = async (bgmUrl = '') => {
+  const generation = listGeneration
+  const controller = new AbortController()
+  listController = controller
   loading.value = true
-  return http.animeGardenList(bgmUrl)
+  return http.animeGardenList(bgmUrl, {signal: controller.signal})
       .then(res => {
+        if (generation !== listGeneration || controller.signal.aborted) return
         let items = res.data;
 
         if (!items || items.length < 1) {
@@ -175,30 +188,129 @@ let list = async (bgmUrl = '') => {
         if (items.length) {
           activeName.value = items[0].weekLabel
         }
+        void startEnrichment(generation)
+      })
+      .catch(error => {
+        if (error?.code !== 'REQUEST_ABORTED' && generation === listGeneration) {
+          ElMessage.error(error?.message || 'AnimeGarden 列表加载失败')
+        }
       })
       .finally(() => {
-        loading.value = false
+        if (generation === listGeneration) loading.value = false
+        if (listController === controller) listController = undefined
       });
 }
+
+const updateSubjects = subjects => {
+  for (const week of data.value.items || []) {
+    for (const subject of week.subjects || []) {
+      const enrichment = subjects?.[String(subject.id)]
+      if (!enrichment) continue
+      if (enrichment.cover) subject.cover = enrichment.cover
+      const score = Number(enrichment.score)
+      if (Number.isFinite(score)) subject.score = score
+    }
+  }
+}
+
+const startEnrichment = async (generation = listGeneration) => {
+  if (!dialogVisible.value || generation !== listGeneration) return
+  const week = data.value.items?.find(item => item.weekLabel === activeName.value)
+  const ids = (week?.subjects || []).map(subject => String(subject.id)).filter(Boolean)
+  if (!ids.length) return
+  const key = `${generation}:${activeName.value}`
+  if (enrichmentKey === key) return
+  enrichmentKey = key
+  enrichmentController?.abort()
+  const controller = new AbortController()
+  enrichmentController = controller
+  try {
+    await enrichSubjects({
+      ids,
+      fetchSubjects: (subjectIds, options) => http.animeGardenEnrichment(subjectIds, options),
+      onUpdate: payload => {
+        if (generation !== listGeneration || controller.signal.aborted) return
+        updateSubjects(payload.subjects)
+      },
+      signal: controller.signal
+    })
+  } catch (error) {
+    if (error?.code !== 'REQUEST_ABORTED' && error?.name !== 'AbortError'
+        && generation === listGeneration && !controller.signal.aborted) {
+      ElMessage.warning('封面或评分暂时不可用，可重新切换星期重试')
+    }
+  } finally {
+    if (enrichmentController === controller) enrichmentController = undefined
+  }
+}
+
+const closeRequests = () => {
+  listController?.abort()
+  enrichmentController?.abort()
+  groupController?.abort()
+  groupGeneration++
+  listController = undefined
+  enrichmentController = undefined
+  groupController = undefined
+  enrichmentKey = ''
+}
+
+const close = () => {
+  listGeneration++
+  closeRequests()
+}
+
+watch(activeName, () => startEnrichment())
+
+const handleVisibilityChange = () => {
+  if (document.hidden) {
+    listGeneration++
+    closeRequests()
+  } else if (dialogVisible.value) {
+    void startEnrichment()
+  }
+}
+
+onMounted(() => document.addEventListener('visibilitychange', handleVisibilityChange))
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  close()
+})
 
 let selectName = ref('')
 let groups = ref({})
 
 let collapseChange = (v) => {
   if (!v) {
+    groupGeneration++
+    groupController?.abort()
+    groupController = undefined
+    groupLoading.value = false
     return
   }
   selectName.value = v
   if (groups.value[v]) {
     return;
   }
+  groupController?.abort()
+  const generation = ++groupGeneration
+  const controller = new AbortController()
+  groupController = controller
   groupLoading.value = true
-  http.animeGardenGroup(v)
+  http.animeGardenGroup(v, {signal: controller.signal})
       .then(res => {
+        if (generation !== groupGeneration || controller.signal.aborted) return
         groups.value[v] = res.data
       })
+      .catch(error => {
+        if (error?.code !== 'REQUEST_ABORTED' && error?.name !== 'AbortError'
+            && generation === groupGeneration && !controller.signal.aborted) {
+          ElMessage.warning('字幕组资源暂时不可用，请重新展开重试')
+        }
+      })
       .finally(() => {
-        groupLoading.value = false
+        if (generation === groupGeneration) groupLoading.value = false
+        if (groupController === controller) groupController = undefined
       })
 }
 

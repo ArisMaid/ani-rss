@@ -5,6 +5,7 @@ import ani.rss.commons.ExceptionUtils;
 import ani.rss.commons.FileUtils;
 import ani.rss.commons.PinyinUtils;
 import ani.rss.comparator.WeekComparator;
+import ani.rss.download.DownloaderResult;
 import ani.rss.entity.*;
 import ani.rss.entity.dto.IdDTO;
 import ani.rss.entity.dto.ImportAniDataDTO;
@@ -144,7 +145,13 @@ public class AniController extends BaseController {
             ThreadUtil.execute(() -> {
                 String downloadPath = downloadService.getDownloadPath(get);
                 String newDownloadPath = downloadService.getDownloadPath(ani);
-                List<TorrentsInfo> torrentsInfos = TorrentUtil.getTorrentsInfos();
+                DownloaderResult<List<TorrentsInfo>> torrentsResult = TorrentUtil.getTorrentsInfosResult();
+                if (!torrentsResult.isSuccess()) {
+                    log.warn("跳过订阅移动：下载器任务快照失败 code:{}", torrentsResult.errorCode());
+                    return;
+                }
+                List<TorrentsInfo> torrentsInfos = torrentsResult.value() == null
+                        ? List.of() : torrentsResult.value();
                 if (downloadPath.equals(newDownloadPath)) {
                     // 位置未发生改变
                     return;

@@ -197,7 +197,18 @@ const pollRefresh = async generation => {
     finishRefresh(null, true)
     return
   }
-  const data = await listRef.value?.getList()
+  let data
+  try {
+    data = await listRef.value?.getList()
+  } catch (error) {
+    if (generation !== refreshGeneration || !refreshLoading.value) return
+    if (Date.now() - refreshStartedAt.value >= MAX_REFRESH_WAIT) {
+      finishRefresh(null, true)
+    } else {
+      refreshTimer = setTimeout(() => void pollRefresh(generation), 2000)
+    }
+    return
+  }
   if (generation !== refreshGeneration) return
   const refresh = data?.refresh
   if (refresh && !refresh.running) {

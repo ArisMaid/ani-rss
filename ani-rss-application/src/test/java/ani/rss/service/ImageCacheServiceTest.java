@@ -4,6 +4,7 @@ import ani.rss.auth.AuthService;
 import ani.rss.auth.AuthenticationFailureException;
 import ani.rss.entity.Config;
 import ani.rss.entity.Login;
+import ani.rss.exception.UpstreamServiceException;
 import ani.rss.util.basic.LogUtil;
 import ani.rss.util.other.ConfigUtil;
 import com.sun.net.httpserver.HttpServer;
@@ -222,6 +223,42 @@ class ImageCacheServiceTest {
             service.closeImageClients();
             executor.shutdownNow();
             executor.awaitTermination(5, TimeUnit.SECONDS);
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void cachesShortUpstreamFailureAndAdvertisesRetryWindow() throws Exception {
+        byte[] image = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        AtomicInteger requests = new AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/image", exchange -> {
+            int attempt = requests.incrementAndGet();
+            if (attempt == 1) {
+                exchange.sendResponseHeaders(503, 0);
+                exchange.close();
+                return;
+            }
+            exchange.getResponseHeaders().add("Content-Type", "image/png");
+            exchange.sendResponseHeaders(200, image.length);
+            exchange.getResponseBody().write(image);
+            exchange.close();
+        });
+        server.start();
+        ImageCacheService service = new ImageCacheService();
+        try {
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/image";
+            MockHttpServletResponse login = login();
+            MockHttpServletRequest request = authenticated(login, "GET");
+            assertThrows(UpstreamServiceException.class,
+                    () -> service.publicImage(url, request));
+            UpstreamServiceException cached = assertThrows(UpstreamServiceException.class,
+                    () -> service.publicImage(url, request));
+            assertTrue(cached.retryAfterSeconds() > 0);
+            assertEquals(1, requests.get());
+        } finally {
+            service.closeImageClients();
             server.stop(0);
         }
     }

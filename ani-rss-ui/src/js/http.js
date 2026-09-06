@@ -120,14 +120,19 @@ export let aniBTGroup = (url) => api.post(withQuery('api/aniBTGroup', {bgmId: ur
  * 获取AnimeGarden番剧列表
  * @returns {Promise<any>}
  */
-export let animeGardenList = (bgmUrl) => api.post(withQuery('api/animeGardenList', {bgmUrl}))
+export let animeGardenList = (bgmUrl, options = {}) =>
+    api.post(withQuery('api/animeGardenList', {bgmUrl}), '', options)
+
+export let animeGardenEnrichment = (subjectIds, options = {}) =>
+    api.post('api/animeGardenEnrichment', subjectIds, options)
 
 /**
  * 获取AnimeGarden番剧的字幕组列表
  * @param bgmId 番剧ID
  * @returns {Promise<any>}
  */
-export let animeGardenGroup = (bgmId) => api.post(withQuery('api/animeGardenGroup', {bgmId}))
+export let animeGardenGroup = (bgmId, options = {}) =>
+    api.post(withQuery('api/animeGardenGroup', {bgmId}), null, options)
 
 /**
  * 刷新全部订阅

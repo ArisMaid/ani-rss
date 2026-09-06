@@ -35,7 +35,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
@@ -64,7 +63,7 @@ public class PublicScoreService {
     static final int MAX_CONCURRENT_REQUESTS = 4;
     private static final int MAX_SCORE_WARMUP_WORKERS = 4;
     private static final long WARMUP_QUEUE_TIMEOUT_MILLIS = 12_000;
-    private static final long WARMUP_FAILURE_RETRY_DELAY_MILLIS = 500;
+    private static final long WARMUP_FAILURE_RETRY_DELAY_MILLIS = 30_000;
     /** Durable score cache writes are optional and must never occupy a mapping worker. */
     private static final int PERSISTENCE_QUEUE_CAPACITY = 256;
     static final int MAX_SCORE_LOOKUPS_PER_BATCH = 64;
@@ -139,6 +138,25 @@ public class PublicScoreService {
      */
     public Map<String, Double> getBgmScores(Collection<String> subjectIds) {
         return getBgmScoreLookup(subjectIds, deadlineAfter(BGM_BATCH_TIMEOUT_MILLIS)).scores();
+    }
+
+    /**
+     * Reads only already-computed Bangumi scores and schedules missing ids in
+     * the bounded warmup pool.  Optional enrichment callers must use this
+     * entry point so their list response never waits on the score upstream.
+     */
+    public BgmScoreLookup getCachedBgmScoresAndWarm(Collection<String> subjectIds) {
+        LinkedHashSet<String> ids = normalizedIds(subjectIds);
+        Map<String, Double> scores = cachedBgmScores(ids);
+        Set<String> retryable = new LinkedHashSet<>();
+        for (String subjectId : ids) {
+            if (scores.containsKey(subjectId)) {
+                continue;
+            }
+            retryable.add(subjectId);
+            warmBgmScore(subjectId, true);
+        }
+        return new BgmScoreLookup(scores, retryable);
     }
 
     private BgmScoreLookup getBgmScoreLookup(Collection<String> subjectIds, long deadlineNanos) {
@@ -356,7 +374,7 @@ public class PublicScoreService {
             String mikanId = entry.getKey();
             String bgmId = entry.getValue();
             result.put(mikanId, new MikanBgm(mikanId, bgmId, scores.getOrDefault(bgmId, 0.0)));
-            if (scoreLookup.retryableBgmIds().contains(bgmId)) {
+            if (scoreLookup.retryableSubjectIds().contains(bgmId)) {
                 retryableMikanIds.add(mikanId);
             }
         }
@@ -882,13 +900,17 @@ public class PublicScoreService {
         if (shared != null) {
             return shared;
         }
+        // Start the deadline before enqueueing.  A task waiting behind the
+        // bounded queue must not receive a fresh timeout after it finally
+        // reaches a worker.
+        long deadlineNanos = deadlineAfter(WARMUP_QUEUE_TIMEOUT_MILLIS);
         try {
             executor.execute(() -> {
                 try {
                     if (!backgroundWorkAllowed()) {
                         throw new IllegalStateException("public score warmup is disabled during maintenance");
                     }
-                    V value = callUpstream(loader, deadlineAfter(WARMUP_QUEUE_TIMEOUT_MILLIS));
+                    V value = callUpstream(loader, deadlineNanos);
                     if (!backgroundWorkAllowed()) {
                         throw new IllegalStateException("public score warmup is disabled during maintenance");
                     }
@@ -988,36 +1010,48 @@ public class PublicScoreService {
             return List.of();
         }
 
-        long remainingNanos = deadlineNanos - System.nanoTime();
-        if (remainingNanos <= 0) {
-            return List.of();
-        }
-        long timeoutMillis = Math.max(1, TimeUnit.NANOSECONDS.toMillis(remainingNanos));
-
-        ExecutorService executor = Executors.newFixedThreadPool(Math.min(MAX_CONCURRENT_REQUESTS, tasks.size()));
+        List<Future<LookupResult<K, V>>> futures = new ArrayList<>();
         try {
-            List<Future<LookupResult<K, V>>> futures = executor.invokeAll(
-                    tasks,
-                    timeoutMillis,
-                    TimeUnit.MILLISECONDS
-            );
+            for (Callable<LookupResult<K, V>> task : tasks) {
+                try {
+                    // Keep synchronous compatibility callers on the same
+                    // bounded pool as background enrichment. A per-request
+                    // executor would bypass the global four-worker budget.
+                    futures.add(warmupExecutor.submit(task));
+                } catch (RejectedExecutionException e) {
+                    // The caller will retain unsubmitted keys as retryable.
+                    break;
+                }
+            }
             List<LookupResult<K, V>> results = new ArrayList<>();
             for (Future<LookupResult<K, V>> future : futures) {
+                long remainingNanos = deadlineNanos - System.nanoTime();
+                if (remainingNanos <= 0) {
+                    future.cancel(true);
+                    break;
+                }
                 if (future.isCancelled()) {
                     continue;
                 }
                 try {
-                    results.add(future.get());
+                    results.add(future.get(remainingNanos, TimeUnit.NANOSECONDS));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (TimeoutException e) {
+                    future.cancel(true);
+                    break;
                 } catch (Exception ignored) {
                     // A score is optional; one malformed or unreachable subject must not break a list.
                 }
             }
             return results;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return List.of();
         } finally {
-            executor.shutdownNow();
+            for (Future<LookupResult<K, V>> future : futures) {
+                if (!future.isDone()) {
+                    future.cancel(true);
+                }
+            }
         }
     }
 
@@ -1139,14 +1173,19 @@ public class PublicScoreService {
         Double load(String value) throws Exception;
     }
 
+    public record BgmScoreLookup(Map<String, Double> scores, Set<String> retryableSubjectIds) {
+        public BgmScoreLookup {
+            scores = scores == null ? Map.of() : Map.copyOf(scores);
+            retryableSubjectIds = retryableSubjectIds == null
+                    ? Set.of() : Set.copyOf(retryableSubjectIds);
+        }
+    }
+
     public record MikanScoreLookup(Map<String, MikanBgm> scores, Set<String> retryableMikanIds) {
         public MikanScoreLookup {
             scores = Map.copyOf(scores);
             retryableMikanIds = Set.copyOf(retryableMikanIds);
         }
-    }
-
-    private record BgmScoreLookup(Map<String, Double> scores, Set<String> retryableBgmIds) {
     }
 
     private record MikanBgmResolution(Map<String, String> bgmIds, Set<String> retryableMikanIds) {

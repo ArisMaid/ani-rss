@@ -1,6 +1,7 @@
 package ani.rss.task;
 
 import ani.rss.commons.ExceptionUtils;
+import ani.rss.download.DownloaderResult;
 import ani.rss.entity.Config;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.service.DownloadService;
@@ -33,7 +34,12 @@ public class RenameTask implements BaseTask {
             return;
         }
         try {
-            List<TorrentsInfo> torrentsInfos = TorrentUtil.getTorrentsInfos();
+            DownloaderResult<List<TorrentsInfo>> result = TorrentUtil.getTorrentsInfosResult();
+            if (!result.isSuccess()) {
+                log.warn("跳过重命名：下载器任务快照失败 code:{}", result.errorCode());
+                return;
+            }
+            List<TorrentsInfo> torrentsInfos = result.value() == null ? List.of() : result.value();
             for (TorrentsInfo torrentsInfo : torrentsInfos) {
                 if (!loop.get()) {
                     return;

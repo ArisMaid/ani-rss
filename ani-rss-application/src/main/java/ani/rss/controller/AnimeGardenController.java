@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -34,5 +35,13 @@ public class AnimeGardenController {
     @PostMapping("/animeGardenGroup")
     public Result<List<AnimeGarden.Group>> animeGardenGroup(@RequestParam("bgmId") String bgmId) {
         return Result.success(animeGardenService.group(bgmId));
+    }
+
+    @Auth
+    @Operation(summary = "补充 AnimeGarden 封面和公开评分")
+    @PostMapping("/animeGardenEnrichment")
+    public Result<AnimeGarden.EnrichmentResponse> animeGardenEnrichment(
+            @RequestBody List<String> subjectIds) {
+        return Result.success(animeGardenService.enrich(subjectIds));
     }
 }

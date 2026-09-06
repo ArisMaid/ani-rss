@@ -14,10 +14,15 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -156,6 +161,63 @@ class MikanListPersistentCacheTest {
         } finally {
             service.stopStaleRefreshExecutor();
             scores.stopWarmupExecutors();
+        }
+    }
+
+    @Test
+    void coalescesConcurrentFailedLoadsAndRemovesTheFlightForALaterRetry() throws Exception {
+        Mikan.Season season = new Mikan.Season()
+                .setYear(2041)
+                .setSeason("winter")
+                .setSeasonLabel("2041 winter");
+        String cacheKey = MikanService.listCacheKey("concurrent-failure", season);
+        CacheUtils.remove(cacheKey);
+
+        AtomicInteger upstreamLoads = new AtomicInteger();
+        CountDownLatch firstLoadStarted = new CountDownLatch(1);
+        CountDownLatch secondCallerStarted = new CountDownLatch(1);
+        CountDownLatch releaseFirstLoad = new CountDownLatch(1);
+        PublicScoreService scores = new PublicScoreService(id -> null, url -> "");
+        MikanService service = new MikanService(scores, (text, requestedSeason) -> {
+            if (upstreamLoads.incrementAndGet() == 1) {
+                firstLoadStarted.countDown();
+                try {
+                    if (!releaseFirstLoad.await(1, TimeUnit.SECONDS)) {
+                        throw new AssertionError("first Mikan load was not released");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+                throw new IllegalStateException("temporary Mikan outage");
+            }
+            return snapshot("recovered after failure");
+        });
+        ExecutorService callers = Executors.newFixedThreadPool(2);
+        try {
+            Future<Mikan> first = callers.submit(() -> service.list("concurrent-failure", season));
+            assertTrue(firstLoadStarted.await(1, TimeUnit.SECONDS));
+            Future<Mikan> second = callers.submit(() -> {
+                secondCallerStarted.countDown();
+                return service.list("concurrent-failure", season);
+            });
+            assertTrue(secondCallerStarted.await(1, TimeUnit.SECONDS));
+            Thread.sleep(50);
+            releaseFirstLoad.countDown();
+
+            assertThrows(ExecutionException.class, first::get);
+            assertThrows(ExecutionException.class, second::get);
+            assertEquals(1, upstreamLoads.get(), "concurrent waiters must share one failed producer");
+
+            assertEquals("recovered after failure", service.list("concurrent-failure", season)
+                    .getWeeks().get(0).getItems().get(0).getTitle());
+            assertEquals(2, upstreamLoads.get(), "a later request must be allowed to retry");
+        } finally {
+            releaseFirstLoad.countDown();
+            callers.shutdownNow();
+            service.stopStaleRefreshExecutor();
+            scores.stopWarmupExecutors();
+            CacheUtils.remove(cacheKey);
         }
     }
 

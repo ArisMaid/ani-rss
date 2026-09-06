@@ -32,8 +32,10 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -41,6 +43,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -70,7 +73,8 @@ public class MikanService {
     /** Nullable only in isolated unit tests that deliberately avoid SQLite I/O. */
     @Resource
     private MikanListCacheRepository persistentListCache;
-    private final ConcurrentMap<String, Object> listLoadLocks = new ConcurrentHashMap<>();
+    /** One in-flight producer per list key; failures must complete and remove it. */
+    private final ConcurrentMap<String, CompletableFuture<Mikan>> listLoadFlights = new ConcurrentHashMap<>();
     private final Set<String> staleListRefreshes = ConcurrentHashMap.newKeySet();
     private final ExecutorService staleListRefreshExecutor = new ThreadPoolExecutor(
             1,
@@ -304,9 +308,7 @@ public class MikanService {
     }
 
     private Mikan loadListSynchronously(String cacheKey, String text, Mikan.Season season) {
-        Object lock = listLoadLocks.computeIfAbsent(cacheKey, ignored -> new Object());
-        try {
-            synchronized (lock) {
+        return loadListSingleFlight(cacheKey, () -> {
                 Mikan cached = CacheUtils.get(cacheKey);
                 if (cached != null) {
                     return copyMikan(cached);
@@ -319,10 +321,7 @@ public class MikanService {
                     return copyMikan(snapshot);
                 }
                 return loadAndCacheList(cacheKey, text, season);
-            }
-        } finally {
-            listLoadLocks.remove(cacheKey, lock);
-        }
+            });
     }
 
     private Mikan loadAndCacheList(
@@ -361,19 +360,46 @@ public class MikanService {
     }
 
     private void refreshStaleSeasonList(String cacheKey, String text, Mikan.Season season) {
-        Object lock = listLoadLocks.computeIfAbsent(cacheKey, ignored -> new Object());
-        try {
-            synchronized (lock) {
+        loadListSingleFlight(cacheKey, () -> {
                 CachedMikanList fresh = loadPersistentList(cacheKey, text);
                 if (fresh != null) {
                     long remaining = Math.max(1, fresh.expiresAt() - System.currentTimeMillis());
                     CacheUtils.put(cacheKey, copyMikan(fresh.list()), remaining);
-                    return;
+                    return copyMikan(fresh.list());
                 }
-                loadAndCacheList(cacheKey, text, season);
+                return loadAndCacheList(cacheKey, text, season);
+            });
+    }
+
+    /**
+     * Coalesces both foreground misses and stale refreshes. A failed producer
+     * completes the shared future exceptionally before removing it, so waiters
+     * observe the same failure instead of racing into duplicate upstream calls.
+     */
+    private Mikan loadListSingleFlight(String cacheKey, Supplier<Mikan> producer) {
+        CompletableFuture<Mikan> created = new CompletableFuture<>();
+        CompletableFuture<Mikan> shared = listLoadFlights.putIfAbsent(cacheKey, created);
+        if (shared == null) {
+            shared = created;
+            try {
+                created.complete(producer.get());
+            } catch (Throwable error) {
+                created.completeExceptionally(error);
+            } finally {
+                listLoadFlights.remove(cacheKey, created);
             }
-        } finally {
-            listLoadLocks.remove(cacheKey, lock);
+        }
+        try {
+            return copyMikan(shared.join());
+        } catch (CompletionException error) {
+            Throwable cause = error.getCause();
+            if (cause instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (cause instanceof Error fatal) {
+                throw fatal;
+            }
+            throw new IllegalStateException("Mikan list load failed", cause);
         }
     }
 

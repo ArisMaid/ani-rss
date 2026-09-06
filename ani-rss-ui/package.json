@@ -8,6 +8,7 @@
     "build": "vite build",
     "build:verify": "vite build --outDir .verify-dist --emptyOutDir false",
     "check:bundle": "node scripts/check-bundle.mjs",
+    "measure:baseline": "node scripts/t0-fixtures.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "preview": "vite preview"

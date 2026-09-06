@@ -7,6 +7,7 @@ import ani.rss.exception.ResultException;
 import ani.rss.exception.ApiProblemException;
 import ani.rss.exception.UpstreamServiceException;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -35,8 +36,16 @@ public class CustomExceptionHandler {
         return detail;
     }
 
-    @ExceptionHandler(UpstreamServiceException.class)
     public Object upstreamFailure(UpstreamServiceException e, HttpServletRequest request) {
+        return upstreamFailure(e, request, null);
+    }
+
+    @ExceptionHandler(UpstreamServiceException.class)
+    public Object upstreamFailure(UpstreamServiceException e, HttpServletRequest request,
+                                  HttpServletResponse response) {
+        if (response != null && e.retryAfterSeconds() > 0) {
+            response.setHeader("Retry-After", Long.toString(e.retryAfterSeconds()));
+        }
         if (isV2(request)) {
             return problem(HttpStatus.BAD_GATEWAY, "UPSTREAM_FAILURE", e.getMessage());
         }

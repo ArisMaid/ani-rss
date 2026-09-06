@@ -6,6 +6,7 @@ import ani.rss.download.DownloaderResult;
 import ani.rss.download.qBittorrent;
 import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.enums.TorrentsTagEnum;
+import ani.rss.util.other.TorrentUtil;
 import cn.hutool.core.util.StrUtil;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import lombok.extern.slf4j.Slf4j;
@@ -63,6 +64,7 @@ public class QbittorrentDeletedTaskReassignmentService {
 
         if (!hasTag(candidate, ownership.subscriptionId())) {
             DownloaderResult<Void> tagged = client.addTags(candidate, ownership.subscriptionId());
+            TorrentUtil.markSnapshotDirty();
             if (!tagged.isSuccess()) {
                 log.warn("无法接回重订阅遗留 qB 任务 code:{}", tagged.errorCode());
                 return false;

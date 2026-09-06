@@ -288,7 +288,13 @@ const loadConfig = async () => {
 }
 
 const loadTorrents = () => {
-  if (torrentsRequest) return torrentsRequest
+  if (torrentsRequest && !torrentsController?.signal.aborted) return torrentsRequest
+  if (torrentsRequest) {
+    // A hidden-tab cancellation must not poison the next visible refresh with
+    // the already-rejected Promise. Its finally block is guarded by identity.
+    torrentsRequest = undefined
+    torrentsController = undefined
+  }
   const generation = pollGeneration
   const controller = new AbortController()
   torrentsController = controller
@@ -353,6 +359,8 @@ const stopPolling = () => {
   clearTimeout(timer)
   timer = undefined
   torrentsController?.abort()
+  torrentsRequest = undefined
+  torrentsController = undefined
 }
 
 const handleVisibilityChange = () => {
@@ -361,6 +369,8 @@ const handleVisibilityChange = () => {
     clearTimeout(timer)
     timer = undefined
     torrentsController?.abort()
+    torrentsRequest = undefined
+    torrentsController = undefined
   } else if (pollingActive) {
     pollGeneration++
     void loadTorrents().catch(() => {}).finally(schedulePolling)

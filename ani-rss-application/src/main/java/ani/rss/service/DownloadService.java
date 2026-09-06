@@ -69,9 +69,9 @@ public class DownloadService {
      * @param ani 订阅
      */
     @Synchronized("LOCK")
-    public void downloadAni(Ani ani) {
+    public boolean downloadAni(Ani ani) {
         if (!isCurrentRuntimeSubscription(ani)) {
-            return;
+            return false;
         }
         Config config = ConfigUtil.CONFIG;
         Boolean delete = config.getDelete();
@@ -89,7 +89,7 @@ public class DownloadService {
         if (!torrentsResult.isSuccess()) {
             log.warn("{} 跳过本轮：下载器任务快照失败 code:{}",
                     title, torrentsResult.errorCode());
-            return;
+            return false;
         }
         List<TorrentsInfo> torrentsInfos = torrentsResult.value() == null
                 ? List.of() : torrentsResult.value();
@@ -165,7 +165,7 @@ public class DownloadService {
             }
 
             if (!isCurrentRuntimeSubscription(ani)) {
-                return;
+                return false;
             }
 
             // Recovery consumes only candidates that passed the normal RSS
@@ -300,7 +300,7 @@ public class DownloadService {
             }
 
             if (!isCurrentRuntimeSubscription(ani)) {
-                return;
+                return false;
             }
             deleteStandbyRss(ani, item);
 
@@ -335,11 +335,11 @@ public class DownloadService {
         }
 
         if (!autoDisabled) {
-            return;
+            return true;
         }
         Integer totalEpisodeNumber = ani.getTotalEpisodeNumber();
         if (totalEpisodeNumber < 1) {
-            return;
+            return true;
         }
         if (currentDownloadCount >= totalEpisodeNumber) {
             log.info("{} 第 {} 季 共 {} 集 已全部下载完成, 自动停止订阅", title, season, totalEpisodeNumber);
@@ -350,6 +350,7 @@ public class DownloadService {
             // every owned file has been moved and revalidated.
             AniUtil.completed(ani);
         }
+        return true;
     }
 
     private boolean isCurrentRuntimeSubscription(Ani ani) {
@@ -492,6 +493,7 @@ public class DownloadService {
         DownloadOwnership ownership = ownershipService.registerPending(
                 downloaderType, ani, submittedItem, savePath);
         if (reassignmentService != null && reassignmentService.reattach(activeClient, ownership)) {
+            TorrentUtil.markSnapshotDirty();
             return true;
         }
 
@@ -499,6 +501,7 @@ public class DownloadService {
         String lastRemoteTaskId = null;
         for (int i = 1; i <= downloadRetry; i++) {
             DownloaderResult<Void> result = activeClient.download(ani, submittedItem, savePath, torrentFile);
+            TorrentUtil.markSnapshotDirty();
             if (StrUtil.isNotBlank(result.remoteTaskId())) {
                 lastRemoteTaskId = result.remoteTaskId();
             }

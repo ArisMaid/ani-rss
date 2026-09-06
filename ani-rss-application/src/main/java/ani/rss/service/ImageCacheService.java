@@ -36,6 +36,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 @Service
@@ -46,6 +47,7 @@ public class ImageCacheService {
     private static final int LOCK_STRIPES = 256;
     private static final int PUBLIC_MAX_ENTRIES = 5_000;
     private static final long PUBLIC_MAX_BYTES = 256L * 1024 * 1024;
+    private static final long PUBLIC_FAILURE_TTL_MILLIS = Duration.ofSeconds(30).toMillis();
     private static final int PUBLIC_QUEUE_CAPACITY = 48;
     private static final int PUBLIC_WORKERS = 6;
     private static final long PUBLIC_WAIT_TIMEOUT_MILLIS = 12_000;
@@ -56,6 +58,7 @@ public class ImageCacheService {
     private final Object[] sourceLocks = createLocks();
     private final Map<String, PublicEntry> publicEntries = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<PublicEntry>> publicFlights = new ConcurrentHashMap<>();
+    private final Map<String, FailureEntry> publicFailures = new ConcurrentHashMap<>();
     private final Object publicManifestLock = new Object();
     private final ExecutorService publicExecutor = new ThreadPoolExecutor(
             PUBLIC_WORKERS,
@@ -66,16 +69,22 @@ public class ImageCacheService {
             daemonFactory("ani-rss-image"),
             new ThreadPoolExecutor.AbortPolicy()
     );
+    private final ScheduledExecutorService maintenanceExecutor =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+                    daemonFactory("ani-rss-image-maintenance"));
     private volatile boolean publicManifestLoaded;
 
     @PostConstruct
     void loadPublicManifestOnStartup() {
         loadPublicManifest();
+        maintenanceExecutor.scheduleWithFixedDelay(this::maintainPublicCache,
+                10, 10, TimeUnit.MINUTES);
     }
 
     @PreDestroy
     void closeImageClients() {
         publicExecutor.shutdownNow();
+        maintenanceExecutor.shutdownNow();
         SafeImageFetcher.closeCachedClients();
     }
 
@@ -91,13 +100,22 @@ public class ImageCacheService {
         String canonical = canonicalPublicUrl(url);
         loadPublicManifest();
         String key = SecureUtil.sha256(canonical);
+        FailureEntry failure = publicFailures.get(key);
+        if (failure != null) {
+            long remaining = failure.retryAt() - System.currentTimeMillis();
+            if (remaining > 0) {
+                throw new UpstreamServiceException("image source is temporarily unavailable; retry later",
+                        failure.cause(), Math.max(1, (remaining + 999) / 1000));
+            }
+            publicFailures.remove(key, failure);
+        }
         PublicEntry cached = publicEntries.get(key);
         if (isUsable(cached)) {
             return new PublicImage(cached.path(), cached.contentType(), cached.etag(),
                     cached.expiresAt(), cached.length());
         }
         if (cached != null) {
-            publicEntries.remove(key, cached);
+            removePublicEntry(cached);
         }
 
         CompletableFuture<PublicEntry> created = new CompletableFuture<>();
@@ -109,7 +127,7 @@ public class ImageCacheService {
             } catch (RejectedExecutionException e) {
                 publicFlights.remove(key, created);
                 created.completeExceptionally(new UpstreamServiceException(
-                        "image cache is busy; retry later", e));
+                        "image cache is busy; retry later", e, 5));
                 shared = created;
             }
         }
@@ -163,12 +181,19 @@ public class ImageCacheService {
                     now + PUBLIC_TTL,
                     bytes.length);
             publicEntries.put(key, entry);
+            publicFailures.remove(key);
             trimPublicEntries();
             persistPublicManifest();
             future.complete(entry);
         } catch (Exception e) {
-            future.completeExceptionally(e instanceof RuntimeException
-                    ? e : new IllegalStateException("cache public image failed", e));
+            RuntimeException failure = e instanceof UpstreamServiceException upstream
+                    && upstream.retryAfterSeconds() > 0
+                    ? upstream
+                    : new UpstreamServiceException(
+                    "image fetch failed", e, PUBLIC_FAILURE_TTL_MILLIS / 1000);
+            publicFailures.put(key, new FailureEntry(
+                    System.currentTimeMillis() + PUBLIC_FAILURE_TTL_MILLIS, failure));
+            future.completeExceptionally(failure);
         } finally {
             publicFlights.remove(key, future);
         }
@@ -305,12 +330,8 @@ public class ImageCacheService {
     private void trimPublicEntries() {
         long now = System.currentTimeMillis();
         for (PublicEntry entry : List.copyOf(publicEntries.values())) {
-            if (entry.expiresAt() > now || !publicEntries.remove(entry.key(), entry)) continue;
-            try {
-                Files.deleteIfExists(entry.path());
-            } catch (IOException ignored) {
-                // The manifest no longer references the entry; a later pass can retry it.
-            }
+            if (entry.expiresAt() > now) continue;
+            removePublicEntry(entry);
         }
         long total = publicEntries.values().stream().mapToLong(PublicEntry::length).sum();
         if (publicEntries.size() <= PUBLIC_MAX_ENTRIES && total <= PUBLIC_MAX_BYTES) return;
@@ -319,14 +340,31 @@ public class ImageCacheService {
                 .toList();
         for (PublicEntry entry : oldest) {
             if (publicEntries.size() <= PUBLIC_MAX_ENTRIES && total <= PUBLIC_MAX_BYTES) break;
-            if (!publicEntries.remove(entry.key(), entry)) continue;
-            total -= entry.length();
-            try {
-                Files.deleteIfExists(entry.path());
-            } catch (IOException ignored) {
-                // The manifest no longer references the entry; a later explicit
-                // maintenance pass can report the path for manual cleanup.
-            }
+            if (removePublicEntry(entry)) total -= entry.length();
+        }
+    }
+
+    private boolean removePublicEntry(PublicEntry entry) {
+        try {
+            Files.deleteIfExists(entry.path());
+            return publicEntries.remove(entry.key(), entry);
+        } catch (IOException e) {
+            // Keep the manifest entry until the next maintenance pass so a
+            // transient filesystem failure cannot orphan a tracked file.
+            org.slf4j.LoggerFactory.getLogger(ImageCacheService.class)
+                    .warn("public image cleanup deferred for {}: {}", entry.path(), e.getMessage());
+            return false;
+        }
+    }
+
+    private void maintainPublicCache() {
+        try {
+            loadPublicManifest();
+            trimPublicEntries();
+            persistPublicManifest();
+        } catch (RuntimeException e) {
+            org.slf4j.LoggerFactory.getLogger(ImageCacheService.class)
+                    .warn("public image maintenance failed: {}", e.getMessage());
         }
     }
 
@@ -513,5 +551,8 @@ public class ImageCacheService {
 
     private record PublicManifestEntry(String key, String url, String contentType,
                                        String etag, long fetchedAt, long expiresAt, long length) {
+    }
+
+    private record FailureEntry(long retryAt, Throwable cause) {
     }
 }

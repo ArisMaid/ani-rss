@@ -214,6 +214,7 @@ let searchAni = ani => {
 let text = ref('')
 
 let searchLoading = ref(false)
+let searchGeneration = 0
 let listGeneration = 0
 let listController
 let scoreController
@@ -224,9 +225,10 @@ let search = () => {
     ElMessage.error("搜索最少需要两个字符")
     return
   }
+  const generation = ++searchGeneration
   searchLoading.value = true
   list(text.value).finally(() => {
-    searchLoading.value = false
+    if (generation === searchGeneration) searchLoading.value = false
   })
 }
 
@@ -241,6 +243,9 @@ let cancelListRequests = () => {
 
 let startScores = async (generation = listGeneration) => {
   if (!showScore.value || !dialogVisible.value || generation !== listGeneration) return
+  const startKey = `${generation}:${activeName.value}`
+  if (scoreStartKey === startKey) return
+  scoreStartKey = startKey
   const week = data.value.weeks.find(item => item.weekLabel === activeName.value)
   const items = week?.items || []
   if (!items.length) return
@@ -258,7 +263,8 @@ let startScores = async (generation = listGeneration) => {
       signal: controller.signal
     })
   } catch (error) {
-    if (error?.name !== 'AbortError' && generation === listGeneration) {
+    if (error?.name !== 'AbortError' && error?.code !== 'REQUEST_ABORTED'
+        && !controller.signal.aborted && generation === listGeneration) {
       ElMessage.warning('评分暂时不可用，可重新切换星期重试')
     }
   } finally {
@@ -293,7 +299,7 @@ let list = async (text, body) => {
             seasonSelect.value = season['seasonLabel']
           }
         }
-    void startScores(generation)
+        void startScores(generation)
   } catch (error) {
     if (error?.code !== 'REQUEST_ABORTED' && generation === listGeneration) {
       ElMessage.error(error?.message || 'Mikan 列表加载失败')
@@ -302,6 +308,7 @@ let list = async (text, body) => {
     if (generation === listGeneration) {
       loading.value = false
     }
+    if (listController === controller) listController = undefined
   }
 }
 
@@ -319,6 +326,8 @@ let collapseChange = (v) => {
   if (!v) {
     groupGeneration++
     groupController?.abort()
+    groupController = undefined
+    groupLoading.value = false
     return
   }
   selectName.value = v
@@ -342,22 +351,48 @@ let collapseChange = (v) => {
       })
       .finally(() => {
         if (generation === groupGeneration) groupLoading.value = false
+        if (groupController === controller) groupController = undefined
       })
 }
 
 let close = () => {
   listGeneration++
   cancelListRequests()
+  scoreStartKey = ''
   dialogVisible.value = false
 }
 
-watch(activeName, () => startScores())
+let scoreStartKey = ''
+watch(activeName, () => {
+  scoreStartKey = ''
+  startScores()
+})
 watch(showScore, value => {
-  if (value) startScores()
-  else scoreController?.abort()
+  if (value) {
+    scoreStartKey = ''
+    startScores()
+  } else {
+    scoreStartKey = ''
+    scoreController?.abort()
+  }
 })
 
-onBeforeUnmount(close)
+const handleVisibilityChange = () => {
+  if (document.hidden) {
+    listGeneration++
+    cancelListRequests()
+    scoreStartKey = ''
+  } else if (dialogVisible.value && showScore.value) {
+    startScores()
+  }
+}
+
+onMounted(() => document.addEventListener('visibilitychange', handleVisibilityChange))
+
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  close()
+})
 
 
 let matchDialogVisible = ref(false)

@@ -27,6 +27,13 @@ const dirty = statusLines.some(line => !line.startsWith('??'))
 const untrackedFiles = statusLines.filter(line => line.startsWith('??')).map(line => line.slice(3))
 const requests = []
 const completed = new Map()
+const pollingMetrics = {
+  active: 0,
+  maxInFlight: 0,
+  totalRequests: 0,
+  trace: []
+}
+let activeScenario = ''
 
 // The capture command is intentionally attached after navigation so it can be
 // reused for already-open sessions. This tiny fixture-only probe preserves
@@ -122,6 +129,7 @@ const fixtureItem = {
 }
 
 const apiResponse = (mode, method, relativePath, url) => {
+  const scenario = url.searchParams.get('w7Scenario') || activeScenario
   if (relativePath === 'api/v2/auth/csrf' && method === 'GET') {
     return mode === 'auth'
       ? {status: 200, body: {csrfToken: 'w7-csrf-token'}}
@@ -147,6 +155,22 @@ const apiResponse = (mode, method, relativePath, url) => {
     return {status: 200, body: {...configData, login: {...configData.login}}}
   }
   if (relativePath === 'api/torrentsInfos' && method === 'POST') {
+    if (scenario === 'slow-polling') {
+      const requestNumber = ++pollingMetrics.totalRequests
+      return {
+        status: 200,
+        body: [{
+          name: `N08 慢轮询任务 ${requestNumber}`,
+          state: 'downloading',
+          progress: Math.min(99, requestNumber * 17),
+          completed: requestNumber,
+          size: 1024,
+          tagList: ['N08']
+        }],
+        delayMs: 8_000,
+        pollingRequestNumber: requestNumber
+      }
+    }
     return {status: 200, body: []}
   }
   if (relativePath === 'api/playList' && method === 'POST') {
@@ -245,6 +269,7 @@ const writeReport = () => {
     raw: {
       requests,
       httpErrorRequests: requests.filter(request => request.status >= 400),
+      polling: pollingMetrics,
       completedAt: new Date().toISOString()
     },
     limitations: [
@@ -264,10 +289,14 @@ const server = createServer(async (request, response) => {
   let bytes = 0
   let contentEncoding = 'identity'
   let mode = parseModePath(requestUrl.pathname)?.mode || null
+  let pollingRecord
   try {
     if (requestUrl.pathname === '/__w7/health') {
       status = 200
       bytes = sendJson(response, 200, {status: 'ok'})
+    } else if (requestUrl.pathname === '/__w7/state' && request.method === 'GET') {
+      status = 200
+      bytes = sendJson(response, 200, {polling: pollingMetrics})
     } else if (requestUrl.pathname === '/__w7/complete' && request.method === 'POST') {
       const chunks = []
       for await (const chunk of request) chunks.push(chunk)
@@ -293,12 +322,26 @@ const server = createServer(async (request, response) => {
         status = 404
         bytes = send(response, 404, 'Not found')
       } else if (parsed.relativePath.startsWith('api/')) {
+        const requestedScenario = requestUrl.searchParams.get('w7Scenario')
+        if (requestedScenario) activeScenario = requestedScenario
         const result = apiResponse(parsed.mode, request.method || 'GET', parsed.relativePath, requestUrl)
         if (!result) {
           status = 404
           bytes = sendJson(response, 404, {code: 'NOT_FOUND', message: 'fixture endpoint not found'})
         } else {
           status = result.status
+          if (result.pollingRequestNumber) {
+            pollingRecord = {
+              requestNumber: result.pollingRequestNumber,
+              startedAtMs: Number(performance.now().toFixed(3))
+            }
+            pollingMetrics.active++
+            pollingMetrics.maxInFlight = Math.max(pollingMetrics.maxInFlight, pollingMetrics.active)
+            pollingMetrics.trace.push(pollingRecord)
+          }
+          if (result.delayMs) {
+            await new Promise(resolve => setTimeout(resolve, result.delayMs))
+          }
           if (Buffer.isBuffer(result.body)) {
             bytes = send(response, result.status, result.body, {
               'Content-Type': 'video/mp4',
@@ -309,6 +352,8 @@ const server = createServer(async (request, response) => {
           }
         }
       } else {
+        const requestedScenario = requestUrl.searchParams.get('w7Scenario')
+        if (requestedScenario) activeScenario = requestedScenario
         const served = serveStatic(request, response, parsed.relativePath)
         status = served.status
         bytes = served.bytes
@@ -319,6 +364,12 @@ const server = createServer(async (request, response) => {
     status = 500
     bytes = sendJson(response, 500, {code: 'FIXTURE_ERROR', message: String(error?.message || error)})
   } finally {
+    if (pollingRecord) {
+      pollingRecord.endedAtMs = Number(performance.now().toFixed(3))
+      pollingRecord.durationMs = Number((pollingRecord.endedAtMs - pollingRecord.startedAtMs).toFixed(3))
+      pollingRecord.status = status
+      pollingMetrics.active--
+    }
     requests.push({
       method: request.method || 'GET',
       path: requestUrl.pathname,

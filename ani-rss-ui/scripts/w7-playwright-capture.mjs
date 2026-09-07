@@ -26,6 +26,9 @@ async page => {
     if (currentScenario === 'settings') {
       return Boolean(document.querySelector('.config-page'))
     }
+    if (currentScenario === 'slow-polling') {
+      return Boolean(document.querySelector('.dashboard-page'))
+    }
     return false
   }, readyScenario)
   if (readyScenario === 'player') {
@@ -43,11 +46,52 @@ async page => {
   }
   await page.waitForTimeout(500)
 
-  const data = await page.evaluate(({scenario, pageErrors, consoleErrors}) => {
+  let interactionEvidence = {}
+  if (scenario === 'slow-polling') {
+    const startedAt = Date.now()
+    await page.waitForTimeout(2_000)
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', {configurable: true, value: true})
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await page.waitForTimeout(7_000)
+    const hiddenState = await page.evaluate(() => fetch('/__w7/state').then(response => response.json()))
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', {configurable: true, value: false})
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    await page.waitForTimeout(1_000)
+    const refreshButton = page.locator('.dashboard-page button').filter({hasText: '刷新'}).first()
+    await refreshButton.click()
+    await page.waitForTimeout(8_200)
+    const elapsedBeforeDwell = Date.now() - startedAt
+    if (elapsedBeforeDwell < 30_000) {
+      await page.waitForTimeout(30_000 - elapsedBeforeDwell)
+    }
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'hidden', {configurable: true, value: true})
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+    let pollingState = await page.evaluate(() => fetch('/__w7/state').then(response => response.json()))
+    if (pollingState.polling?.active) {
+      await page.waitForTimeout(9_000)
+      pollingState = await page.evaluate(() => fetch('/__w7/state').then(response => response.json()))
+    }
+    interactionEvidence = {
+      pageDwellMs: Date.now() - startedAt,
+      hiddenState,
+      polling: pollingState.polling,
+      manualRefreshClicked: true,
+      visibleRecoveryObserved: Boolean(await page.locator('text=N08 慢轮询任务').count())
+    }
+  }
+
+  const data = await page.evaluate(({scenario, pageErrors, consoleErrors, interactionEvidence}) => {
     const probe = window.__w7Probe || {}
     const unique = values => [...new Set(values.filter(Boolean))]
     return {
     scenario,
+    ...interactionEvidence,
     cacheMode: /-(?:cold|hot)$/.test(scenario) ? scenario.endsWith('-cold') ? 'cold' : 'hot' : 'dynamic',
     url: location.href,
     readyMarker: scenario.startsWith('login') ? '#login-page'
@@ -75,7 +119,7 @@ async page => {
         decodedBodySize: entry.decodedBodySize
       }))
     }
-  }, {scenario, pageErrors, consoleErrors})
+  }, {scenario, pageErrors, consoleErrors, interactionEvidence})
 
   await page.evaluate(async value => {
     const response = await fetch('/__w7/complete', {
@@ -94,6 +138,11 @@ async page => {
     pageErrors: data.pageErrors,
     consoleErrors: data.consoleErrors,
     chunk404s: data.chunk404s,
-    mediaErrors: data.mediaErrors
+    mediaErrors: data.mediaErrors,
+    pageDwellMs: data.pageDwellMs,
+    polling: data.polling,
+    hiddenState: data.hiddenState,
+    manualRefreshClicked: data.manualRefreshClicked,
+    visibleRecoveryObserved: data.visibleRecoveryObserved
   }
 }

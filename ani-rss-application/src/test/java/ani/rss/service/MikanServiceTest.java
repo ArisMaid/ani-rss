@@ -1,10 +1,12 @@
 package ani.rss.service;
 
 import ani.rss.commons.CacheUtils;
+import ani.rss.commons.GsonStatic;
 import ani.rss.entity.Config;
 import ani.rss.entity.Mikan;
 import ani.rss.entity.MikanBgm;
 import ani.rss.entity.MikanInfo;
+import ani.rss.entity.dto.MikanScoreResponse;
 import ani.rss.exception.UpstreamServiceException;
 import ani.rss.util.other.ConfigUtil;
 import cn.hutool.core.bean.BeanUtil;
@@ -21,6 +23,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -61,6 +64,27 @@ class MikanServiceTest {
         List<MikanInfo> summerItems = summer.getWeeks().get(0).getItems();
         assertEquals(9.1, summerItems.get(0).getScore());
         assertNull(summerItems.get(1).getScore());
+    }
+
+    @Test
+    void scoresEndpointKeepsCompletedNoScoreEntriesSerializable() {
+        String mikanId = String.valueOf(System.nanoTime());
+        String bgmId = String.valueOf(Math.abs(System.nanoTime()));
+        PublicScoreService scores = new PublicScoreService(
+                id -> new ani.rss.entity.BgmInfo().setId(id),
+                url -> bgmId);
+        MikanService service = new MikanService(scores, (text, season) -> new Mikan());
+        try {
+            scores.getMikanScores(List.of(new MikanInfo()
+                    .setUrl("https://mikanani.me/Home/Bangumi/" + mikanId)));
+
+            MikanScoreResponse response = service.scores(List.of(mikanId));
+
+            assertNull(response.getScores().get(mikanId).getScore());
+            assertDoesNotThrow(() -> GsonStatic.toJson(response));
+        } finally {
+            scores.stopWarmupExecutors();
+        }
     }
 
     @Test

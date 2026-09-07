@@ -149,14 +149,15 @@ public class PublicScoreService {
      */
     public BgmScoreLookup getCachedBgmScoresAndWarm(Collection<String> subjectIds) {
         LinkedHashSet<String> ids = normalizedIds(subjectIds);
-        Map<String, Double> cached = cachedBgmScores(ids);
+        CachedBgmScores cached = cachedBgmScores(ids);
         Map<String, Double> scores = new LinkedHashMap<>();
         Set<String> retryable = new LinkedHashSet<>();
         for (String subjectId : ids) {
-            if (cached.containsKey(subjectId)) {
-                if (isVisibleScore(cached.get(subjectId))) {
-                    scores.put(subjectId, cached.get(subjectId));
-                }
+            if (cached.values().containsKey(subjectId)) {
+                scores.put(subjectId, cached.values().get(subjectId));
+                continue;
+            }
+            if (cached.completedWithoutScore().contains(subjectId)) {
                 continue;
             }
             retryable.add(subjectId);
@@ -170,16 +171,16 @@ public class PublicScoreService {
         Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, String> missing = new LinkedHashMap<>();
         Set<String> retryableBgmIds = new LinkedHashSet<>();
-        Map<String, Double> cachedScores = cachedBgmScores(ids);
+        CachedBgmScores cachedScores = cachedBgmScores(ids);
 
         for (String subjectId : ids) {
-            if (cachedScores.containsKey(subjectId)) {
-                Double score = cachedScores.get(subjectId);
-                if (isVisibleScore(score)) {
-                    scores.put(subjectId, score);
-                }
-            } else {
+            if (cachedScores.values().containsKey(subjectId)) {
+                scores.put(subjectId, cachedScores.values().get(subjectId));
+            } else if (!cachedScores.completedWithoutScore().contains(subjectId)) {
                 missing.put(subjectId, subjectId);
+            } else {
+                // A completed no-score response is terminal for its short
+                // negative-cache window and must not be retried as a miss.
             }
         }
 
@@ -309,12 +310,18 @@ public class PublicScoreService {
             // is not an upstream outage worth polling again.
         }
 
-        Map<String, Double> cachedScores = cachedBgmScores(knownBgmIds.values());
+        CachedBgmScores cachedScores = cachedBgmScores(knownBgmIds.values());
         for (Map.Entry<String, String> entry : knownBgmIds.entrySet()) {
             String mikanId = entry.getKey();
             String bgmId = entry.getValue();
-            if (cachedScores.containsKey(bgmId)) {
-                scores.put(mikanId, new MikanBgm(mikanId, bgmId, cachedScores.get(bgmId)));
+            if (cachedScores.values().containsKey(bgmId)) {
+                scores.put(mikanId, new MikanBgm(mikanId, bgmId, cachedScores.values().get(bgmId)));
+                continue;
+            }
+            if (cachedScores.completedWithoutScore().contains(bgmId)) {
+                // Keep the known mapping and subscription marker visible while
+                // expressing the terminal no-score result as JSON null.
+                scores.put(mikanId, new MikanBgm(mikanId, bgmId, null));
                 continue;
             }
             retryableMikanIds.add(mikanId);
@@ -434,12 +441,14 @@ public class PublicScoreService {
             }
         }
 
-        Map<String, Double> cachedScores = cachedBgmScores(knownBgmIds.values());
+        CachedBgmScores cachedScores = cachedBgmScores(knownBgmIds.values());
         for (Map.Entry<String, String> entry : knownBgmIds.entrySet()) {
             String bgmId = entry.getValue();
-            if (cachedScores.containsKey(bgmId)) {
+            if (cachedScores.values().containsKey(bgmId)) {
                 result.put(entry.getKey(), new MikanBgm(
-                        entry.getKey(), bgmId, cachedScores.get(bgmId)));
+                        entry.getKey(), bgmId, cachedScores.values().get(bgmId)));
+            } else if (cachedScores.completedWithoutScore().contains(bgmId)) {
+                result.put(entry.getKey(), new MikanBgm(entry.getKey(), bgmId, null));
             }
         }
         return result;
@@ -702,9 +711,10 @@ public class PublicScoreService {
     }
 
     /** See {@link #cachedMikanMappings(Map)} for why this is batch-oriented. */
-    private Map<String, Double> cachedBgmScores(Collection<String> bgmIds) {
+    private CachedBgmScores cachedBgmScores(Collection<String> bgmIds) {
         LinkedHashSet<String> ids = normalizedIds(bgmIds);
         Map<String, Double> result = new LinkedHashMap<>();
+        Set<String> completedWithoutScore = new LinkedHashSet<>();
         LinkedHashSet<String> missing = new LinkedHashSet<>();
         for (String bgmId : ids) {
             Object cached = CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId);
@@ -712,16 +722,13 @@ public class PublicScoreService {
                     && number.doubleValue() >= 0) {
                 result.put(bgmId, number.doubleValue());
             } else if (cached == NO_SCORE_MARKER) {
-                // Keep the key present internally so a terminal no-score
-                // response is not mistaken for a cold lookup.  It is removed
-                // from public response maps by the caller.
-                result.put(bgmId, Double.NaN);
+                completedWithoutScore.add(bgmId);
             } else {
                 missing.add(bgmId);
             }
         }
         if (missing.isEmpty() || persistentCache == null || !backgroundWorkAllowed()) {
-            return result;
+            return new CachedBgmScores(result, completedWithoutScore);
         }
 
         try {
@@ -737,13 +744,15 @@ public class PublicScoreService {
                 if (remaining <= 0) {
                     continue;
                 }
-                CacheUtils.put(BGM_SCORE_CACHE_PREFIX + entry.getKey(), score.score(), remaining);
-                result.put(entry.getKey(), score.score());
+                if (isVisibleScore(score.score())) {
+                    CacheUtils.put(BGM_SCORE_CACHE_PREFIX + entry.getKey(), score.score(), remaining);
+                    result.put(entry.getKey(), score.score());
+                }
             }
         } catch (RuntimeException e) {
             log.debug("Unable to read durable Bangumi score cache");
         }
-        return result;
+        return new CachedBgmScores(result, completedWithoutScore);
     }
 
     private String cachedMikanMapping(String mikanId, String mikanUrl) {
@@ -778,14 +787,14 @@ public class PublicScoreService {
         }
     }
 
-    private Double cachedBgmScore(String bgmId) {
+    private Object cachedBgmScore(String bgmId) {
         if (StrUtil.isBlank(bgmId)) {
             return null;
         }
         String cacheKey = BGM_SCORE_CACHE_PREFIX + bgmId;
         Object cached = CacheUtils.get(cacheKey);
         if (cached == NO_SCORE_MARKER) {
-            return Double.NaN;
+            return NO_SCORE_MARKER;
         }
         if (cached instanceof Number number) {
             double value = number.doubleValue();
@@ -916,7 +925,7 @@ public class PublicScoreService {
                 : cachedBgmScore(bgmId);
         if (cached == NO_SCORE_MARKER
                 || cached instanceof Number number
-                && (Double.isNaN(number.doubleValue()) || isVisibleScore(number.doubleValue()))) {
+                && isVisibleScore(number.doubleValue())) {
             return;
         }
         String flightKey = BGM_SCORE_CACHE_PREFIX + "flight:" + bgmId;
@@ -1252,6 +1261,17 @@ public class PublicScoreService {
     }
 
     private record MikanBgmResolution(Map<String, String> bgmIds, Set<String> retryableMikanIds) {
+    }
+
+    private record CachedBgmScores(
+            Map<String, Double> values,
+            Set<String> completedWithoutScore
+    ) {
+        private CachedBgmScores {
+            values = values == null ? Map.of() : Map.copyOf(values);
+            completedWithoutScore = completedWithoutScore == null
+                    ? Set.of() : Set.copyOf(completedWithoutScore);
+        }
     }
 
     private record LookupResult<K, V>(K key, V value, boolean completed) {

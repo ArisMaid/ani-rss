@@ -1,8 +1,10 @@
 package ani.rss.service;
 
+import ani.rss.commons.GsonStatic;
 import ani.rss.entity.BgmInfo;
 import ani.rss.entity.MikanBgm;
 import ani.rss.entity.MikanInfo;
+import ani.rss.entity.dto.MikanScoreResponse;
 import ani.rss.persistence.PublicScoreCacheRepository;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
@@ -26,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -51,6 +54,30 @@ class PublicScoreServiceTest {
         assertEquals(8.6, first.get(subjectId));
         assertEquals(8.6, second.get(subjectId));
         assertEquals(1, requests.get(), "a public result should be cached locally");
+    }
+
+    @Test
+    void noScoreCacheEntryKeepsMikanResponseJsonSerializable() {
+        String mikanId = uniqueNumericId();
+        String bgmId = uniqueNumericId();
+        PublicScoreService service = new PublicScoreService(
+                id -> new BgmInfo().setId(id),
+                url -> bgmId
+        );
+
+        service.getBgmScores(List.of(bgmId));
+        PublicScoreService.MikanScoreLookup lookup = service.getCachedMikanScoreLookupAndWarm(List.of(
+                new MikanInfo()
+                        .setUrl("https://mikanani.me/Home/Bangumi/" + mikanId)
+                        .setBgmUrl("https://bgm.tv/subject/" + bgmId)
+        ));
+
+        assertTrue(lookup.retryableMikanIds().isEmpty());
+        assertTrue(lookup.scores().containsKey(mikanId));
+        assertNull(lookup.scores().get(mikanId).getScore());
+        assertDoesNotThrow(() -> GsonStatic.toJson(new MikanScoreResponse()
+                .setScores(lookup.scores())
+                .setRetryableMikanIds(lookup.retryableMikanIds())));
     }
 
     @Test

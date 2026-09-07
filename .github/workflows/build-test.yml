@@ -34,6 +34,11 @@ jobs:
         working-directory: ani-rss-ui
         run: |
           pnpm install --frozen-lockfile
-          pnpm test
-          pnpm build:verify
-          pnpm check:bundle
+          pnpm test -- --run
+          W7_DIST_DIR="$RUNNER_TEMP/ani-rss-w7-dist-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export W7_DIST_DIR
+          pnpm exec vite build --outDir "$W7_DIST_DIR" --emptyOutDir false
+          BUNDLE_OUTPUT_DIR="$W7_DIST_DIR" pnpm check:bundle
+          W7_DIST_DIR="$W7_DIST_DIR" \
+            W7_REPORT_PATH="$RUNNER_TEMP/ani-rss-w7-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json" \
+            bash scripts/w7-browser-smoke.sh

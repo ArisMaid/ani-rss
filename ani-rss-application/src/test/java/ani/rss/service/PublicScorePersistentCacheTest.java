@@ -6,26 +6,36 @@ import ani.rss.persistence.PublicScoreCacheRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.TimeUnit;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PublicScorePersistentCacheTest {
-    @TempDir
     Path tempDir;
+    private String originalConfigPath;
 
     private PublicScoreCacheRepository repository;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws IOException {
+        originalConfigPath = System.getProperty("CONFIG");
+        tempDir = Path.of("target", "fork-score-cache-" + UUID.randomUUID())
+                .toAbsolutePath().normalize();
+        Files.createDirectories(tempDir.resolve("config"));
         System.setProperty("CONFIG", tempDir.resolve("config").toString());
         DatabaseManager.close();
         repository = new PublicScoreCacheRepository();
@@ -34,7 +44,11 @@ class PublicScorePersistentCacheTest {
     @AfterEach
     void tearDown() {
         DatabaseManager.close();
-        System.clearProperty("CONFIG");
+        if (originalConfigPath == null) {
+            System.clearProperty("CONFIG");
+        } else {
+            System.setProperty("CONFIG", originalConfigPath);
+        }
     }
 
     @Test
@@ -114,6 +128,65 @@ class PublicScorePersistentCacheTest {
         }
     }
 
+    @Test
+    void expiresASevenHourOldScoreEvenWhenItsStoredExpiryIsStillInTheFuture() {
+        String bgmId = String.valueOf(System.nanoTime());
+        repository.saveBgmScore(bgmId, 8.4, System.currentTimeMillis() + TimeUnit.DAYS.toMillis(2));
+        DatabaseManager.withConnection(connection -> {
+            try (var statement = connection.prepareStatement(
+                    "UPDATE public_bgm_score_cache SET updated_at = ?, expires_at = ? WHERE bgm_id = ?")) {
+                statement.setLong(1, System.currentTimeMillis() - TimeUnit.HOURS.toMillis(7));
+                statement.setLong(2, System.currentTimeMillis() + TimeUnit.HOURS.toMillis(2));
+                statement.setString(3, bgmId);
+                statement.executeUpdate();
+            }
+            return null;
+        });
+
+        assertTrue(repository.findBgmScore(bgmId, System.currentTimeMillis()).isEmpty());
+
+        AtomicInteger upstreamCalls = new AtomicInteger();
+        PublicScoreService service = new PublicScoreService(
+                id -> {
+                    upstreamCalls.incrementAndGet();
+                    return new ani.rss.entity.BgmInfo()
+                            .setRating(new ani.rss.entity.BgmInfo.Rating().setScore(9.1));
+                },
+                url -> "",
+                repository
+        );
+        try {
+            assertEquals(9.1, service.getBgmScores(List.of(bgmId)).get(bgmId));
+            assertEquals(1, upstreamCalls.get(), "a restart must not renew an old durable score");
+        } finally {
+            service.stopWarmupExecutors();
+        }
+    }
+
+    @Test
+    void delayedDurableWriterUsesTheObservedExpiryInsteadOfRenewingAtWriteTime() throws Exception {
+        DelayedScoreRepository delayed = new DelayedScoreRepository();
+        String bgmId = String.valueOf(System.nanoTime());
+        PublicScoreService service = new PublicScoreService(
+                id -> new ani.rss.entity.BgmInfo()
+                        .setRating(new ani.rss.entity.BgmInfo.Rating().setScore(8.8)),
+                url -> "",
+                delayed
+        );
+        try {
+            service.getCachedBgmScoresAndWarm(List.of(bgmId));
+            assertTrue(delayed.saveStarted.await(2, TimeUnit.SECONDS));
+            Thread.sleep(100);
+            delayed.release.countDown();
+            assertTrue(delayed.saved.await(2, TimeUnit.SECONDS));
+            assertEquals(TimeUnit.HOURS.toMillis(6),
+                    delayed.expiresAt.get() - delayed.observedAt.get());
+        } finally {
+            delayed.release.countDown();
+            service.stopWarmupExecutors();
+        }
+    }
+
     private static final class CountingRepository extends PublicScoreCacheRepository {
         private final AtomicInteger singleMappingReads = new AtomicInteger();
         private final AtomicInteger singleScoreReads = new AtomicInteger();
@@ -142,6 +215,33 @@ class PublicScorePersistentCacheTest {
         public Map<String, BgmScore> findBgmScores(Collection<String> bgmIds, long now) {
             scoreBatchReads.incrementAndGet();
             return super.findBgmScores(bgmIds, now);
+        }
+    }
+
+    private static final class DelayedScoreRepository extends PublicScoreCacheRepository {
+        private final CountDownLatch saveStarted = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+        private final CountDownLatch saved = new CountDownLatch(1);
+        private final AtomicLong observedAt = new AtomicLong();
+        private final AtomicLong expiresAt = new AtomicLong();
+
+        @Override
+        public Map<String, BgmScore> findBgmScores(Collection<String> bgmIds, long now) {
+            return Map.of();
+        }
+
+        @Override
+        public void saveBgmScore(String bgmId, double score, long expiresAt, long observedAt) {
+            this.observedAt.set(observedAt);
+            this.expiresAt.set(expiresAt);
+            saveStarted.countDown();
+            try {
+                release.await(2, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                saved.countDown();
+            }
         }
     }
 }

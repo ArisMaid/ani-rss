@@ -9,6 +9,35 @@ import compression from 'vite-plugin-compression'
 let serverHost = process.env['SERVER_HOST'];
 
 let dirname = import.meta.dirname;
+const isVitest = process.env.VITEST === 'true' || process.env.NODE_ENV === 'test'
+
+const normalizeModuleId = moduleId => {
+    const normalized = moduleId.replaceAll('\\', '/')
+    const projectRoot = path.resolve(dirname).replaceAll('\\', '/')
+    if (normalized.startsWith(`${projectRoot}/`)) {
+        return normalized.slice(projectRoot.length + 1)
+    }
+    return normalized
+}
+
+const bundleModuleMap = () => ({
+    name: 'bundle-module-map',
+    apply: 'build',
+    generateBundle(_options, bundle) {
+        const chunks = {}
+        for (const [fileName, output] of Object.entries(bundle)) {
+            if (output.type !== 'chunk') continue
+            chunks[fileName] = {
+                modules: Object.keys(output.modules).map(normalizeModuleId).sort()
+            }
+        }
+        this.emitFile({
+            type: 'asset',
+            fileName: '.vite/module-chunks.json',
+            source: JSON.stringify({schemaVersion: 1, chunks}, null, 2) + '\n'
+        })
+    }
+})
 
 export default defineConfig({
     base: './',
@@ -24,11 +53,12 @@ export default defineConfig({
     },
     plugins: [
         vue(),
-        AutoImport({
+        bundleModuleMap(),
+        !isVitest && AutoImport({
             imports: ['vue'],
             resolvers: [ElementPlusResolver()]
         }),
-        Components({
+        !isVitest && Components({
             resolvers: [ElementPlusResolver({
                 importStyle: 'css',
             })]
@@ -45,7 +75,7 @@ export default defineConfig({
             // 压缩后文件的扩展名
             ext: '.gz'
         }),
-    ],
+    ].filter(Boolean),
     resolve: {
         alias: {
             '@': path.resolve(dirname, './src/')

@@ -18,6 +18,7 @@ import java.util.List;
 @Slf4j
 @RestController
 public class AnimeGardenController {
+    private static final long MAX_ENRICHMENT_BODY_BYTES = 16 * 1024;
 
     @Resource
     private AnimeGardenService animeGardenService;
@@ -41,7 +42,14 @@ public class AnimeGardenController {
     @Operation(summary = "补充 AnimeGarden 封面和公开评分")
     @PostMapping("/animeGardenEnrichment")
     public Result<AnimeGarden.EnrichmentResponse> animeGardenEnrichment(
-            @RequestBody List<String> subjectIds) {
+            @RequestBody List<String> subjectIds,
+            HttpServletRequest request) {
+        if (request.getContentLengthLong() > MAX_ENRICHMENT_BODY_BYTES) {
+            throw new IllegalArgumentException("AnimeGarden subject 请求体过大");
+        }
+        if (subjectIds == null || subjectIds.size() > 48) {
+            throw new IllegalArgumentException("一次最多补载 48 个 AnimeGarden subject");
+        }
         return Result.success(animeGardenService.enrich(subjectIds));
     }
 }

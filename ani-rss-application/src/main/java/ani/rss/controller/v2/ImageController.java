@@ -42,24 +42,27 @@ public class ImageController {
     public void publicImage(@RequestParam("url") String url,
                             HttpServletRequest request,
                             HttpServletResponse response) {
-        ImageCacheService.PublicImage image = cache.publicImage(url, request);
-        String ifNoneMatch = request.getHeader("If-None-Match");
-        response.setHeader("ETag", image.etag());
-        response.setHeader("Cache-Control", "private, max-age=3600");
-        response.setHeader("Vary", "Cookie");
-        response.setHeader("X-Content-Type-Options", "nosniff");
-        if (ifNoneMatch != null && matchesIfNoneMatch(ifNoneMatch, image.etag())) {
-            response.setStatus(HttpServletResponse.SC_NOT_MODIFIED);
-            return;
-        }
-        try {
+        try (ImageCacheService.PublicImageHandle handle = cache.openPublicImage(url, request)) {
+            ImageCacheService.PublicImage image = handle.image();
+            String ifNoneMatch = request.getHeader("If-None-Match");
+            response.setHeader("ETag", image.etag());
+            response.setHeader("Cache-Control", "private, max-age=3600");
+            response.setHeader("Vary", "Cookie");
+            response.setHeader("X-Content-Type-Options", "nosniff");
+            if (ifNoneMatch != null && matchesIfNoneMatch(ifNoneMatch, image.etag())) {
+                response.setStatus(HttpServletResponse.SC_NOT_MODIFIED);
+                return;
+            }
             response.setContentType(image.contentType());
             response.setContentLengthLong(image.length());
-            try (InputStream input = Files.newInputStream(
-                    image.path(), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
-                 OutputStream output = response.getOutputStream()) {
-                input.transferTo(output);
+            try (OutputStream output = response.getOutputStream()) {
+                handle.inputStream().transferTo(output);
             }
+        } catch (RuntimeException e) {
+            // Preserve authentication and upstream status mapping. Only the
+            // checked stream failure is converted to the controller's generic
+            // streaming error.
+            throw e;
         } catch (Exception e) {
             throw new IllegalStateException("stream public image failed", e);
         }

@@ -1,11 +1,38 @@
 {
-  "baselineCommit": "562454f287645531e09bb2ada65afd31dbfa4091",
-  "targetReduction": 0.25,
-  "entries": {
-    "index.html": {
-      "baselineJsGzipBytes": 431801,
-      "maxJsGzipBytes": 323850,
-      "baselineCssGzipBytes": 79254
+  "schemaVersion": 2,
+  "baselineCommit": "02990a97dcb993040ade2c121b94ebd9eefe2f3e",
+  "baselineVersion": "3.2.28.61",
+  "historicalBaselineCommit": "562454f287645531e09bb2ada65afd31dbfa4091",
+  "historicalTargetReduction": 0.25,
+  "budgetChange": {
+    "reason": "The R01/R02 lifecycle repair changes async route module hash references in the shared entry chunk. The measured latest-fork comparison is limited to home JS +1, home CSS +1, and subscriptions JS +1 gzip byte; static entry and login remain unchanged. No player, Markdown, or backup module enters these closures.",
+    "measuredOn": "2026-09-07",
+    "baselineBuild": "D:/Github/AI/Codex/anirss-w7-baseline-20260907/ani-rss-ui/w7-dist-20260907-baseline",
+    "candidateBuild": "ani-rss-ui/w7-dist-20260907-c"
+  },
+  "staticEntryClosure": {
+    "baselineJsGzipBytes": 105199,
+    "maxJsGzipBytes": 105199,
+    "baselineCssGzipBytes": 48953,
+    "maxCssGzipBytes": 48953
+  },
+  "scenarios": {
+    "login": {
+      "baselineJsGzipBytes": 201956,
+      "maxJsGzipBytes": 201956,
+      "baselineCssGzipBytes": 63229
+    },
+    "home": {
+      "baselineJsGzipBytes": 192173,
+      "maxJsGzipBytes": 192174,
+      "baselineCssGzipBytes": 61821,
+      "maxCssGzipBytes": 61822
+    },
+    "subscriptions": {
+      "baselineJsGzipBytes": 185254,
+      "maxJsGzipBytes": 185255,
+      "baselineCssGzipBytes": 63645,
+      "maxCssGzipBytes": 63645
     }
   }
 }

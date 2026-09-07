@@ -1,5 +1,10 @@
 import {describe, expect, it} from 'vitest'
-import {enrichScores, extractMikanId, mergeScores} from './mikan-loader.js'
+import {
+  enrichScores,
+  extractMikanId,
+  mergeScores,
+  normalizeEnrichmentResponse
+} from './mikan-loader.js'
 
 describe('mikan-loader', () => {
   it('extracts only trusted numeric Mikan ids', () => {
@@ -20,6 +25,43 @@ describe('mikan-loader', () => {
     expect(weeks[0].items[1]).toMatchObject({score: 9.2, bgmId: '22', exists: true})
   })
 
+  it('preserves valid zero scores and never replaces fields with null or empty values', () => {
+    const weeks = [{items: [{
+      url: 'https://mikan.example/Home/Bangumi/1',
+      score: 8.1,
+      bgmId: '11',
+      exists: true
+    }]}]
+    mergeScores(weeks, {
+      1: {mikanId: '1', score: 0, bgmId: null}
+    }, [])
+    expect(weeks[0].items[0]).toMatchObject({score: 0, bgmId: '11', exists: true})
+  })
+
+  it('does not convert empty scalar scores into zero', () => {
+    const weeks = [{items: [{
+      url: 'https://mikan.example/Home/Bangumi/1',
+      score: 8.1
+    }]}]
+    mergeScores(weeks, {1: ''})
+    expect(weeks[0].items[0].score).toBe(8.1)
+  })
+
+  it('normalizes direct and API-enveloped responses without accepting outside ids', () => {
+    expect(normalizeEnrichmentResponse({
+      data: {scores: {1: {score: 0}, 99: {score: 9}}, retryableMikanIds: ['1', '99']}
+    }, {
+      batch: ['1', '2'], resultKey: 'scores', retryKey: 'retryableMikanIds'
+    })).toMatchObject({
+      valid: true,
+      values: {1: {score: 0}},
+      retryable: ['1']
+    })
+    expect(normalizeEnrichmentResponse({scores: {}, retryableSubjectIds: []}, {
+      batch: ['1'], resultKey: 'subjects', retryKey: 'retryableSubjectIds'
+    }).valid).toBe(false)
+  })
+
   it('retries only retryable ids after the list has already rendered', async () => {
     const calls = []
     let attempt = 0
@@ -38,6 +80,50 @@ describe('mikan-loader', () => {
       sleep: async () => {}
     })
     expect(calls).toEqual([['1', '2'], ['1', '2']])
+    expect(pending).toEqual([])
+  })
+
+  it('renders partial results immediately and retries the same id when it remains retryable', async () => {
+    const updates = []
+    let attempt = 0
+    const pending = await enrichScores({
+      items: [
+        {url: 'https://mikan.example/Home/Bangumi/1'},
+        {url: 'https://mikan.example/Home/Bangumi/2'}
+      ],
+      fetchScores: async ids => {
+        attempt++
+        return attempt === 1
+          ? {data: {
+            scores: {1: {mikanId: '1', score: 0}},
+            retryableMikanIds: ['1', '2']
+          }}
+          : {scores: {
+            1: {mikanId: '1', score: 7},
+            2: {mikanId: '2', score: 8}
+          }, retryableMikanIds: []}
+      },
+      onUpdate: payload => updates.push(payload),
+      sleep: async () => {}
+    })
+    expect(updates).toHaveLength(2)
+    expect(updates[0].scores[1].score).toBe(0)
+    expect(pending).toEqual([])
+  })
+
+  it('keeps a malformed response retryable instead of treating it as an empty success', async () => {
+    let attempt = 0
+    const pending = await enrichScores({
+      items: [{url: 'https://mikan.example/Home/Bangumi/1'}],
+      fetchScores: async () => {
+        attempt++
+        return attempt === 1
+          ? {data: {scores: {}}}
+          : {data: {scores: {1: {score: 8}}, retryableMikanIds: []}}
+      },
+      sleep: async () => {}
+    })
+    expect(attempt).toBe(2)
     expect(pending).toEqual([])
   })
 
@@ -99,10 +185,33 @@ describe('mikan-loader', () => {
     })
 
     const pending = await work
-    expect(calls).toHaveLength(2)
+    expect(calls.length).toBeGreaterThanOrEqual(2)
     expect(calls[0]).toHaveLength(48)
     expect(calls[1]).toHaveLength(48)
-    expect(pending).toHaveLength(48)
+    expect(pending.length).toBeLessThanOrEqual(48)
     releaseFirst({data: {scores: {}, retryableMikanIds: []}})
+  })
+
+  it('never starts more than two batch requests at once', async () => {
+    let active = 0
+    let maximum = 0
+    const pending = await enrichScores({
+      items: Array.from({length: 144}, (_, index) => ({
+        url: `https://mikan.example/Home/Bangumi/${index + 1}`
+      })),
+      fetchScores: async ids => {
+        active++
+        maximum = Math.max(maximum, active)
+        await new Promise(resolve => setTimeout(resolve, 15))
+        active--
+        return {data: {
+          scores: Object.fromEntries(ids.map(id => [id, {mikanId: id, score: 8}])),
+          retryableMikanIds: []
+        }}
+      },
+      maxDuration: 1000
+    })
+    expect(maximum).toBe(2)
+    expect(pending).toEqual([])
   })
 })

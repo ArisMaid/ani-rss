@@ -27,6 +27,7 @@ import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PublicScoreServiceTest {
@@ -76,7 +77,7 @@ class PublicScoreServiceTest {
     }
 
     @Test
-    void transientScoreFailuresDegradeToZeroButAreRetried() {
+    void transientScoreFailuresRemainMissingButAreRetried() {
         String subjectId = uniqueNumericId();
         AtomicInteger requests = new AtomicInteger();
         PublicScoreService service = new PublicScoreService(
@@ -92,9 +93,9 @@ class PublicScoreServiceTest {
         Map<String, Double> scores = service.getBgmScores(List.of(subjectId));
         Map<String, Double> second = service.getBgmScores(List.of(subjectId));
 
-        assertEquals(0.0, scores.get(subjectId));
+        assertNull(scores.get(subjectId));
         assertEquals(8.4, second.get(subjectId));
-        assertFalse(scores.isEmpty());
+        assertTrue(scores.isEmpty(), "a failed lookup must not be emitted as a score");
         assertEquals(2, requests.get(), "transient failures must not poison the public score cache");
     }
 
@@ -143,7 +144,7 @@ class PublicScoreServiceTest {
 
         PublicScoreService.MikanScoreLookup first = service.getMikanScoreLookup(List.of(entry));
 
-        assertEquals(0.0, first.scores().get(mikanId).getScore());
+        assertFalse(first.scores().containsKey(mikanId));
         assertTrue(first.retryableMikanIds().contains(mikanId));
 
         PublicScoreService.MikanScoreLookup recovered = service.getMikanScoreLookup(List.of(entry));
@@ -256,7 +257,7 @@ class PublicScoreServiceTest {
         Map<String, Double> first = service.getBgmScores(subjectIds);
 
         assertEquals(PublicScoreService.MAX_SCORE_LOOKUPS_PER_BATCH, requests.get());
-        assertEquals(0.0, first.get(subjectIds.get(subjectIds.size() - 1)));
+        assertFalse(first.containsKey(subjectIds.get(subjectIds.size() - 1)));
 
         Map<String, Double> second = service.getBgmScores(subjectIds);
 
@@ -507,6 +508,11 @@ class PublicScoreServiceTest {
         public void saveBgmScore(String bgmId, double score, long expiresAt) {
             // No-op: only the mapping persistence is deliberately slow here.
         }
+
+        @Override
+        public void saveBgmScore(String bgmId, double score, long expiresAt, long observedAt) {
+            // No-op: only the mapping persistence is deliberately slow here.
+        }
     }
 
     private static final class BatchReadCountingRepository extends PublicScoreCacheRepository {
@@ -552,6 +558,11 @@ class PublicScoreServiceTest {
 
         @Override
         public void saveBgmScore(String bgmId, double score, long expiresAt) {
+            // No-op: this test only checks read coalescing.
+        }
+
+        @Override
+        public void saveBgmScore(String bgmId, double score, long expiresAt, long observedAt) {
             // No-op: this test only checks read coalescing.
         }
     }

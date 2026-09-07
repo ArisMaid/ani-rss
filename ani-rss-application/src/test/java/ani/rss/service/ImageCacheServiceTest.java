@@ -12,14 +12,20 @@ import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 import java.net.InetSocketAddress;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -32,12 +38,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ImageCacheServiceTest {
     private static final String PRIVATE_ALLOWLIST = "ANI_RSS_IMAGE_PRIVATE_ALLOWLIST";
-    @TempDir
-    Path tempDir;
+    /** Retained on purpose: JUnit TempDir cleanup would recursively delete fixture data. */
+    private Path tempDir;
+    private String originalConfigPath;
     private Config original;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws IOException {
+        originalConfigPath = System.getProperty("CONFIG");
+        tempDir = Path.of("target", "fork-image-cache-" + UUID.randomUUID())
+                .toAbsolutePath().normalize();
+        Files.createDirectories(tempDir);
         original = ConfigUtil.snapshot();
         System.setProperty("CONFIG", tempDir.toString());
         Config config = ConfigUtil.copy(original)
@@ -55,7 +66,11 @@ class ImageCacheServiceTest {
         AuthService.invalidateSessions();
         ConfigUtil.sync(original);
         System.clearProperty(PRIVATE_ALLOWLIST);
-        System.clearProperty("CONFIG");
+        if (originalConfigPath == null) {
+            System.clearProperty("CONFIG");
+        } else {
+            System.setProperty("CONFIG", originalConfigPath);
+        }
         LogUtil.loadLogback();
     }
 
@@ -261,6 +276,122 @@ class ImageCacheServiceTest {
             service.closeImageClients();
             server.stop(0);
         }
+    }
+
+    @Test
+    void publicReadLeaseDefersEvictionUntilTheResponseCloses() throws Exception {
+        byte[] image = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/image", exchange -> {
+            exchange.getResponseHeaders().add("Content-Type", "image/png");
+            exchange.sendResponseHeaders(200, image.length);
+            exchange.getResponseBody().write(image);
+            exchange.close();
+        });
+        server.start();
+        ImageCacheService service = new ImageCacheService();
+        ImageCacheService.PublicImageHandle handle = null;
+        try {
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/image";
+            handle = service.openPublicImage(url, authenticated(login(), "GET"));
+            Object entry = publicEntries(service).values().iterator().next();
+            Method remove = ImageCacheService.class.getDeclaredMethod("removePublicEntry", entry.getClass());
+            remove.setAccessible(true);
+
+            assertEquals(false, remove.invoke(service, entry));
+            assertTrue(java.nio.file.Files.exists(handle.image().path()));
+
+            handle.close();
+            handle = null;
+            assertEquals(true, remove.invoke(service, entry));
+            assertTrue(java.nio.file.Files.notExists(handlePath(entry)));
+        } finally {
+            if (handle != null) handle.close();
+            service.closeImageClients();
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void staleCleanupCannotDeleteAReplacementPublishedForTheSameKey() throws Exception {
+        byte[] image = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/image", exchange -> {
+            exchange.getResponseHeaders().add("Content-Type", "image/png");
+            exchange.sendResponseHeaders(200, image.length);
+            exchange.getResponseBody().write(image);
+            exchange.close();
+        });
+        server.start();
+        ImageCacheService service = new ImageCacheService();
+        try {
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/image";
+            service.publicImage(url, authenticated(login(), "GET"));
+            Object oldEntry = publicEntries(service).values().iterator().next();
+            String key = cn.hutool.crypto.SecureUtil.sha256(url);
+            Method load = ImageCacheService.class.getDeclaredMethod(
+                    "loadPublicImage", String.class, String.class, CompletableFuture.class);
+            load.setAccessible(true);
+            CompletableFuture<Object> replacement = new CompletableFuture<>();
+            load.invoke(service, url, key, replacement);
+            replacement.get(5, TimeUnit.SECONDS);
+
+            Method remove = ImageCacheService.class.getDeclaredMethod("removePublicEntry", oldEntry.getClass());
+            remove.setAccessible(true);
+            assertEquals(false, remove.invoke(service, oldEntry));
+            Object current = publicEntries(service).get(key);
+            assertTrue(current != oldEntry);
+            assertTrue(java.nio.file.Files.exists(handlePath(current)));
+        } finally {
+            service.closeImageClients();
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void publicFailureRecordsExpireAndStayBounded() throws Exception {
+        ImageCacheService service = new ImageCacheService();
+        try {
+            Map<String, Object> failures = publicFailures(service);
+            Class<?> failureType = Class.forName(
+                    "ani.rss.service.ImageCacheService$FailureEntry");
+            var constructor = failureType.getDeclaredConstructor(long.class, String.class);
+            constructor.setAccessible(true);
+            long now = System.currentTimeMillis();
+            failures.put("expired", constructor.newInstance(now - 1, "fetch"));
+            for (int index = 0; index < 5_001; index++) {
+                failures.put("key-" + index, constructor.newInstance(now + 60_000L + index, "fetch"));
+            }
+            Method trim = ImageCacheService.class.getDeclaredMethod("trimPublicFailures");
+            trim.setAccessible(true);
+            trim.invoke(service);
+            assertTrue(failures.size() <= 5_000);
+            assertTrue(!failures.containsKey("expired"));
+        } finally {
+            service.closeImageClients();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> publicEntries(ImageCacheService service) throws Exception {
+        Field field = ImageCacheService.class.getDeclaredField("publicEntries");
+        field.setAccessible(true);
+        return (Map<String, Object>) field.get(service);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> publicFailures(ImageCacheService service) throws Exception {
+        Field field = ImageCacheService.class.getDeclaredField("publicFailures");
+        field.setAccessible(true);
+        return (Map<String, Object>) field.get(service);
+    }
+
+    private static Path handlePath(Object entry) throws Exception {
+        Method path = entry.getClass().getDeclaredMethod("path");
+        path.setAccessible(true);
+        return (Path) path.invoke(entry);
     }
 
     private static MockHttpServletResponse login() {

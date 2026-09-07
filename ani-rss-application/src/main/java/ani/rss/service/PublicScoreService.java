@@ -71,8 +71,10 @@ public class PublicScoreService {
     private static final long SCORE_CACHE_TTL = TimeUnit.HOURS.toMillis(6);
     private static final long NEGATIVE_CACHE_TTL = TimeUnit.MINUTES.toMillis(10);
     private static final long PERSISTENT_MAPPING_CACHE_TTL = TimeUnit.DAYS.toMillis(14);
-    private static final long PERSISTENT_SCORE_CACHE_TTL = TimeUnit.HOURS.toMillis(12);
+    private static final long PERSISTENT_SCORE_CACHE_TTL = SCORE_CACHE_TTL;
     private static final String BGM_SCORE_CACHE_PREFIX = "public-score:bgm:";
+    /** Internal negative-cache marker; never crosses an API response boundary. */
+    private static final Object NO_SCORE_MARKER = new Object();
     private static final String MIKAN_BGM_CACHE_PREFIX = "public-score:mikan:";
     private static final String BGM_SUBJECT_API = "https://api.bgm.tv/v0/subjects/";
     private static final String BGM_SUBJECT_CACHE = "https://cache.wushuo.top/bgm/subjects/";
@@ -132,9 +134,9 @@ public class PublicScoreService {
     }
 
     /**
-     * Returns a score for every valid requested subject id. Failed lookups are
-     * represented by 0.0 in this response, but are deliberately not cached so
-     * a transient upstream outage does not hide a score for ten minutes.
+     * Returns completed scores for valid requested subject ids. A failed or
+     * not-yet-rated subject is omitted and never represented as a successful
+     * zero-valued score.
      */
     public Map<String, Double> getBgmScores(Collection<String> subjectIds) {
         return getBgmScoreLookup(subjectIds, deadlineAfter(BGM_BATCH_TIMEOUT_MILLIS)).scores();
@@ -147,10 +149,14 @@ public class PublicScoreService {
      */
     public BgmScoreLookup getCachedBgmScoresAndWarm(Collection<String> subjectIds) {
         LinkedHashSet<String> ids = normalizedIds(subjectIds);
-        Map<String, Double> scores = cachedBgmScores(ids);
+        Map<String, Double> cached = cachedBgmScores(ids);
+        Map<String, Double> scores = new LinkedHashMap<>();
         Set<String> retryable = new LinkedHashSet<>();
         for (String subjectId : ids) {
-            if (scores.containsKey(subjectId)) {
+            if (cached.containsKey(subjectId)) {
+                if (isVisibleScore(cached.get(subjectId))) {
+                    scores.put(subjectId, cached.get(subjectId));
+                }
                 continue;
             }
             retryable.add(subjectId);
@@ -168,7 +174,10 @@ public class PublicScoreService {
 
         for (String subjectId : ids) {
             if (cachedScores.containsKey(subjectId)) {
-                scores.put(subjectId, cachedScores.get(subjectId));
+                Double score = cachedScores.get(subjectId);
+                if (isVisibleScore(score)) {
+                    scores.put(subjectId, score);
+                }
             } else {
                 missing.put(subjectId, subjectId);
             }
@@ -178,22 +187,28 @@ public class PublicScoreService {
         Set<String> completed = new LinkedHashSet<>();
         for (LookupResult<String, Double> result : resolveScoreBounded(attempted, subjectId -> {
             BgmInfo info = bgmInfoLoader.load(subjectId);
-            return Optional.ofNullable(info)
-                    .map(BgmInfo::getRating)
-                    .map(BgmInfo.Rating::getScore)
-                    .filter(score -> score > 0)
-                    .orElse(0.0);
+            return publicScore(info);
         }, deadlineNanos)) {
             completed.add(result.key());
             if (!result.completed()) {
                 retryableBgmIds.add(result.key());
                 continue;
             }
-            double score = Optional.ofNullable(result.value()).filter(value -> value > 0).orElse(0.0);
+            Double score = result.value();
+            if (!isVisibleScore(score)) {
+                // A successful response with no usable rating is terminal for
+                // the short negative-cache window, but it is not a score of 0.
+                CacheUtils.put(
+                        BGM_SCORE_CACHE_PREFIX + result.key(),
+                        NO_SCORE_MARKER,
+                        NEGATIVE_CACHE_TTL
+                );
+                continue;
+            }
             CacheUtils.put(
                     BGM_SCORE_CACHE_PREFIX + result.key(),
                     score,
-                    score > 0 ? SCORE_CACHE_TTL : NEGATIVE_CACHE_TTL
+                    SCORE_CACHE_TTL
             );
             scores.put(result.key(), score);
         }
@@ -204,9 +219,6 @@ public class PublicScoreService {
                 // reached. It was never a completed zero-score lookup.
                 retryableBgmIds.add(subjectId);
             }
-        }
-        for (String subjectId : ids) {
-            scores.putIfAbsent(subjectId, 0.0);
         }
         // Callers are normally capped below this limit, but preserve the
         // distinction if this service is used directly with a larger set.
@@ -373,7 +385,10 @@ public class PublicScoreService {
         for (Map.Entry<String, String> entry : knownBgmIds.entrySet()) {
             String mikanId = entry.getKey();
             String bgmId = entry.getValue();
-            result.put(mikanId, new MikanBgm(mikanId, bgmId, scores.getOrDefault(bgmId, 0.0)));
+            Double score = scores.get(bgmId);
+            if (score != null) {
+                result.put(mikanId, new MikanBgm(mikanId, bgmId, score));
+            }
             if (scoreLookup.retryableSubjectIds().contains(bgmId)) {
                 retryableMikanIds.add(mikanId);
             }
@@ -597,24 +612,37 @@ public class PublicScoreService {
     private String loadAndCacheMikanMapping(String mikanUrl, StringLoader loader) throws Exception {
         String value = loader.load(mikanUrl);
         String bgmId = extractBgmSubjectId(value);
+        long observedAt = System.currentTimeMillis();
+        long ttlMillis = StrUtil.isNotBlank(bgmId) ? PERSISTENT_MAPPING_CACHE_TTL : NEGATIVE_CACHE_TTL;
         CacheUtils.put(
                 MIKAN_BGM_CACHE_PREFIX + SecureUtil.sha256(mikanUrl),
                 bgmId,
-                StrUtil.isNotBlank(bgmId) ? SCORE_CACHE_TTL : NEGATIVE_CACHE_TTL
+                Math.max(1, observedAt + ttlMillis - System.currentTimeMillis())
         );
-        persistMikanMapping(extractMikanId(mikanUrl), bgmId,
-                StrUtil.isNotBlank(bgmId) ? PERSISTENT_MAPPING_CACHE_TTL : NEGATIVE_CACHE_TTL);
+        // Carry the absolute expiry across the asynchronous writer.  A busy
+        // SQLite writer must not renew a mapping's 14-day lifetime when it
+        // eventually obtains the connection.
+        persistMikanMapping(extractMikanId(mikanUrl), bgmId, observedAt + ttlMillis);
         return value;
     }
 
     private Double loadAndCacheBgmScore(String subjectId, ScoreLoader loader) throws Exception {
-        double score = Optional.ofNullable(loader.load(subjectId)).filter(value -> value > 0).orElse(0.0);
+        Double score = loader.load(subjectId);
+        if (!isVisibleScore(score)) {
+            score = null;
+        }
+        long observedAt = System.currentTimeMillis();
+        long ttlMillis = score == null ? NEGATIVE_CACHE_TTL : PERSISTENT_SCORE_CACHE_TTL;
+        long expiresAt = observedAt + ttlMillis;
+        long memoryTtl = expiresAt - System.currentTimeMillis();
         CacheUtils.put(
                 BGM_SCORE_CACHE_PREFIX + subjectId,
-                score,
-                score > 0 ? SCORE_CACHE_TTL : NEGATIVE_CACHE_TTL
+                score == null ? NO_SCORE_MARKER : score,
+                Math.max(1, memoryTtl)
         );
-        persistBgmScore(subjectId, score, score > 0 ? PERSISTENT_SCORE_CACHE_TTL : NEGATIVE_CACHE_TTL);
+        if (score != null && isVisibleScore(score)) {
+            persistBgmScore(subjectId, score, expiresAt, observedAt);
+        }
         return score;
     }
 
@@ -679,9 +707,15 @@ public class PublicScoreService {
         Map<String, Double> result = new LinkedHashMap<>();
         LinkedHashSet<String> missing = new LinkedHashSet<>();
         for (String bgmId : ids) {
-            Double cached = CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId);
-            if (cached != null) {
-                result.put(bgmId, cached);
+            Object cached = CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId);
+            if (cached instanceof Number number && Double.isFinite(number.doubleValue())
+                    && number.doubleValue() >= 0) {
+                result.put(bgmId, number.doubleValue());
+            } else if (cached == NO_SCORE_MARKER) {
+                // Keep the key present internally so a terminal no-score
+                // response is not mistaken for a cold lookup.  It is removed
+                // from public response maps by the caller.
+                result.put(bgmId, Double.NaN);
             } else {
                 missing.add(bgmId);
             }
@@ -699,7 +733,7 @@ public class PublicScoreService {
                 if (score == null) {
                     continue;
                 }
-                long remaining = score.expiresAt() - now;
+                long remaining = persistentScoreRemaining(score, now);
                 if (remaining <= 0) {
                     continue;
                 }
@@ -749,9 +783,16 @@ public class PublicScoreService {
             return null;
         }
         String cacheKey = BGM_SCORE_CACHE_PREFIX + bgmId;
-        Double cached = CacheUtils.get(cacheKey);
-        if (cached != null || persistentCache == null || !backgroundWorkAllowed()) {
-            return cached;
+        Object cached = CacheUtils.get(cacheKey);
+        if (cached == NO_SCORE_MARKER) {
+            return Double.NaN;
+        }
+        if (cached instanceof Number number) {
+            double value = number.doubleValue();
+            return isVisibleScore(value) ? value : null;
+        }
+        if (persistentCache == null || !backgroundWorkAllowed()) {
+            return null;
         }
         try {
             long now = System.currentTimeMillis();
@@ -760,7 +801,7 @@ public class PublicScoreService {
                 return null;
             }
             PublicScoreCacheRepository.BgmScore score = persisted.get();
-            long remaining = score.expiresAt() - now;
+            long remaining = persistentScoreRemaining(score, now);
             if (remaining <= 0) {
                 return null;
             }
@@ -772,20 +813,29 @@ public class PublicScoreService {
         }
     }
 
-    private void persistMikanMapping(String mikanId, String bgmId, long ttlMillis) {
-        if (persistentCache == null || StrUtil.isBlank(mikanId) || ttlMillis <= 0 || !backgroundWorkAllowed()) {
+    private void persistMikanMapping(String mikanId, String bgmId, long expiresAt) {
+        if (persistentCache == null || StrUtil.isBlank(mikanId)
+                || expiresAt <= System.currentTimeMillis() || !backgroundWorkAllowed()) {
             return;
         }
         scheduleCachePersistence("Mikan score mapping", () ->
-                persistentCache.saveMikanMapping(mikanId, bgmId, System.currentTimeMillis() + ttlMillis));
+                persistentCache.saveMikanMapping(mikanId, bgmId, expiresAt));
     }
 
-    private void persistBgmScore(String bgmId, double score, long ttlMillis) {
-        if (persistentCache == null || StrUtil.isBlank(bgmId) || ttlMillis <= 0 || !backgroundWorkAllowed()) {
+    private void persistBgmScore(String bgmId, double score, long expiresAt, long observedAt) {
+        if (persistentCache == null || StrUtil.isBlank(bgmId) || expiresAt <= observedAt
+                || !backgroundWorkAllowed()) {
             return;
         }
         scheduleCachePersistence("Bangumi score", () ->
-                persistentCache.saveBgmScore(bgmId, score, System.currentTimeMillis() + ttlMillis));
+                persistentCache.saveBgmScore(bgmId, score, expiresAt, observedAt));
+    }
+
+    private static long persistentScoreRemaining(
+            PublicScoreCacheRepository.BgmScore score, long now) {
+        long remaining = score.expiresAt() - now;
+        if (score.updatedAt() <= 0) return -1;
+        return Math.min(remaining, score.updatedAt() + SCORE_CACHE_TTL - now);
     }
 
     private void scheduleCachePersistence(String description, Runnable operation) {
@@ -843,6 +893,9 @@ public class PublicScoreService {
             if (StrUtil.isNotBlank(bgmId)) {
                 warmBgmScore(bgmId);
             }
+        }).exceptionally(error -> {
+            log.debug("Mikan public score warmup failed: {}", error.getClass().getSimpleName());
+            return null;
         });
     }
 
@@ -858,20 +911,18 @@ public class PublicScoreService {
         if (StrUtil.isBlank(bgmId)) {
             return;
         }
-        Double cached = scoreAlreadyRead
+        Object cached = scoreAlreadyRead
                 ? CacheUtils.get(BGM_SCORE_CACHE_PREFIX + bgmId)
                 : cachedBgmScore(bgmId);
-        if (cached != null) {
+        if (cached == NO_SCORE_MARKER
+                || cached instanceof Number number
+                && (Double.isNaN(number.doubleValue()) || isVisibleScore(number.doubleValue()))) {
             return;
         }
         String flightKey = BGM_SCORE_CACHE_PREFIX + "flight:" + bgmId;
         startWarmupSingleFlight(
                 flightKey,
-                () -> loadAndCacheBgmScore(bgmId, subjectId -> Optional.ofNullable(bgmInfoLoader.load(subjectId))
-                        .map(BgmInfo::getRating)
-                        .map(BgmInfo.Rating::getScore)
-                        .filter(score -> score > 0)
-                        .orElse(0.0)),
+                () -> loadAndCacheBgmScore(bgmId, subjectId -> publicScore(bgmInfoLoader.load(subjectId))),
                 bgmScoreFlights,
                 warmupExecutor
         );
@@ -1053,6 +1104,18 @@ public class PublicScoreService {
                 }
             }
         }
+    }
+
+    private static Double publicScore(BgmInfo info) {
+        if (info == null || info.getRating() == null) {
+            return null;
+        }
+        Double score = info.getRating().getScore();
+        return isVisibleScore(score) ? score : null;
+    }
+
+    private static boolean isVisibleScore(Double score) {
+        return score != null && Double.isFinite(score) && score >= 0;
     }
 
     private static long deadlineAfter(long timeoutMillis) {

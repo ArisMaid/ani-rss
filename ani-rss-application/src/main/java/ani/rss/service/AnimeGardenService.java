@@ -21,7 +21,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -29,6 +28,9 @@ import java.util.stream.Collectors;
 public class AnimeGardenService {
     private static final String HOST = "https://api.animes.garden";
     private static final int ANIME_GARDEN_REQUEST_TIMEOUT_MILLIS = 10_000;
+    private static final int MAX_SUBJECT_SNAPSHOTS = 32;
+    private static final int MAX_SUBJECT_IDS_PER_SNAPSHOT = 512;
+    private static final long SUBJECT_SNAPSHOT_TTL_MILLIS = 10 * 60 * 1000L;
 
     @Resource
     private CacheService cacheService;
@@ -36,37 +38,81 @@ public class AnimeGardenService {
     @Resource
     private PublicScoreService publicScoreService;
 
-    /** IDs from the most recently rendered subjects list; enrichment cannot
-     * turn this endpoint into an arbitrary Bangumi lookup proxy. */
-    private final Set<String> loadedSubjectIds = ConcurrentHashMap.newKeySet();
+    private final SubjectLoader subjectLoader;
+    private final BgmInfoLoader bgmInfoLoader;
+    /**
+     * A list request is a separate authorization snapshot. Keeping a small,
+     * expiring history means an enrichment request from one browser tab is
+     * not invalidated by a list request from another tab.
+     */
+    private final Object subjectSnapshotLock = new Object();
+    private final LinkedHashMap<String, SubjectSnapshot> subjectSnapshots = new LinkedHashMap<>();
+    private long subjectSnapshotSequence;
+
+    public AnimeGardenService() {
+        this(AnimeGardenService::loadSubjectsFromUpstream, null, null,
+                AnimeGardenService::loadBgmInfoFromUpstream);
+    }
+
+    AnimeGardenService(SubjectLoader subjectLoader) {
+        this(subjectLoader, null, null, AnimeGardenService::loadBgmInfoFromUpstream);
+    }
+
+    AnimeGardenService(
+            SubjectLoader subjectLoader,
+            CacheService cacheService,
+            PublicScoreService publicScoreService
+    ) {
+        this(subjectLoader, cacheService, publicScoreService,
+                AnimeGardenService::loadBgmInfoFromUpstream);
+    }
+
+    AnimeGardenService(
+            SubjectLoader subjectLoader,
+            CacheService cacheService,
+            PublicScoreService publicScoreService,
+            BgmInfoLoader bgmInfoLoader
+    ) {
+        this.subjectLoader = subjectLoader;
+        this.bgmInfoLoader = bgmInfoLoader;
+        this.cacheService = cacheService;
+        this.publicScoreService = publicScoreService;
+    }
 
     public List<AnimeGarden.Week> list(String bgmUrl) {
         List<AnimeGarden.Week> weekList = new ArrayList<>();
-        loadedSubjectIds.clear();
 
         if (StrUtil.isNotBlank(bgmUrl)) {
             AnimeGarden.Week week = new AnimeGarden.Week();
             weekList.add(week);
 
             String bgmId = BgmUtil.getSubjectId(bgmUrl);
-            BgmInfo bgmInfo = BgmUtil.getBgmInfo(bgmId);
+            BgmInfo bgmInfo;
+            try {
+                bgmInfo = bgmInfoLoader.load(bgmId);
+            } catch (Exception e) {
+                throw new IllegalStateException("AnimeGarden subject lookup failed", e);
+            }
             String name = BgmUtil.getFinalName(bgmInfo);
             String cover = Optional.ofNullable(bgmInfo.getImages())
                     .map(BgmInfo.Images::getSmall)
                     .orElse("");
-            double score = Optional.ofNullable(bgmInfo.getRating())
+            Double score = Optional.ofNullable(bgmInfo.getRating())
                     .map(BgmInfo.Rating::getScore)
-                    .orElse(0.0);
+                    .filter(value -> Double.isFinite(value) && value >= 0)
+                    .orElse(null);
 
             AnimeGarden.Subject subject = new AnimeGarden.Subject();
-            if (bgmId != null && bgmId.chars().allMatch(Character::isDigit)) {
-                loadedSubjectIds.add(bgmId);
+            if (isValidSubjectId(bgmId)) {
+                rememberSubjectSnapshot(bgmUrl, List.of(bgmId));
             }
             subject.setName(name)
                     .setId(bgmId)
                     .setCover(cover)
-                    .setScore(score)
                     .setExists(true);
+            if (score != null) {
+                subject.setScore(score);
+            }
 
             week.setWeekLabel("搜索")
                     .setSubjects(List.of(subject));
@@ -83,23 +129,17 @@ public class AnimeGardenService {
 
         List<AnimeGarden.Subject> subjectList;
         try {
-            subjectList = HttpReq.get(HOST + "/subjects")
-                    .timeout(ANIME_GARDEN_REQUEST_TIMEOUT_MILLIS)
-                    .thenFunction(res -> {
-                        HttpReq.assertStatus(res);
-                        JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
-                        JsonArray subjects = jsonObject.getAsJsonArray("subjects");
-                        return GsonStatic.fromJsonList(subjects, AnimeGarden.Subject.class);
-                    });
+            subjectList = subjectLoader.load();
         } catch (Exception e) {
-            log.warn("AnimeGarden subject request failed");
-            return weekList;
+            log.warn("AnimeGarden subject request failed: {}", e.getMessage());
+            throw new IllegalStateException("AnimeGarden subject request failed", e);
+        }
+        if (subjectList == null) {
+            throw new IllegalStateException("AnimeGarden subject response was empty or malformed");
         }
 
-        loadedSubjectIds.addAll(subjectList.stream()
+        rememberSubjectSnapshot(bgmUrl, subjectList.stream()
                 .map(AnimeGarden.Subject::getId)
-                .filter(StrUtil::isNotBlank)
-                .filter(id -> id.chars().allMatch(Character::isDigit))
                 .toList());
         JsonObject bgmCover = cacheService.getBgmCoverSnapshot();
         Set<String> subscribedBgmIds = new HashSet<>(bgmIdList);
@@ -114,9 +154,7 @@ public class AnimeGardenService {
                             .map(it -> GsonStatic.fromJson(it, BgmInfo.Images.class))
                             .map(BgmInfo.Images::getSmall)
                             .orElse("");
-                    Double score = Optional.ofNullable(subject.getScore()).orElse(0.0);
                     subject
-                            .setScore(score)
                             .setCover(cover)
                             .setExists(subscribedBgmIds.contains(id));
                 })
@@ -154,22 +192,40 @@ public class AnimeGardenService {
     }
 
     public AnimeGarden.EnrichmentResponse enrich(Collection<String> subjectIds) {
-        LinkedHashSet<String> ids = Optional.ofNullable(subjectIds)
+        List<String> requested = Optional.ofNullable(subjectIds)
                 .orElseGet(List::of)
                 .stream()
-                .filter(Objects::nonNull)
-                .map(String::trim)
-                .filter(id -> !id.isBlank() && id.chars().allMatch(Character::isDigit))
-                .filter(loadedSubjectIds::contains)
+                .map(id -> id == null ? null : id.trim())
+                .toList();
+        if (requested.size() > 48) {
+            throw new IllegalArgumentException("一次最多补载 48 个 AnimeGarden subject");
+        }
+        if (requested.stream().anyMatch(id -> !isValidSubjectId(id))) {
+            throw new IllegalArgumentException("AnimeGarden subject 必须是已加载列表中的数字 ID");
+        }
+        Set<String> acceptedSubjectIds = acceptedSubjectIds();
+        LinkedHashSet<String> ids = requested.stream()
+                .filter(acceptedSubjectIds::contains)
                 .distinct()
-                .limit(48)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
 
-        JsonObject coverIndex = cacheService.getBgmCoverForEnrichment();
+        if (ids.size() != requested.stream().distinct().count()) {
+            throw new IllegalArgumentException("AnimeGarden subject 不在最近一次有效列表快照中");
+        }
+
+        if (ids.isEmpty()) {
+            return new AnimeGarden.EnrichmentResponse()
+                    .setSubjects(new LinkedHashMap<>())
+                    .setRetryableSubjectIds(new ArrayList<>());
+        }
+
+        CacheService.CoverLookup coverLookup = cacheService.getBgmCoverForEnrichmentSnapshot();
+        JsonObject coverIndex = coverLookup.entries();
         PublicScoreService.BgmScoreLookup scoreLookup = publicScoreService.getCachedBgmScoresAndWarm(ids);
         Map<String, AnimeGarden.Enrichment> subjects = new LinkedHashMap<>();
         LinkedHashSet<String> retryable = new LinkedHashSet<>(scoreLookup.retryableSubjectIds());
-        boolean coverIndexPending = coverIndex.isEmpty();
+        boolean coverIndexPending = !coverLookup.loaded()
+                || coverLookup.expiresAt() <= System.currentTimeMillis();
         for (String id : ids) {
             String cover = Optional.ofNullable(coverIndex.get(id))
                     .map(it -> GsonStatic.fromJson(it, BgmInfo.Images.class))
@@ -187,6 +243,68 @@ public class AnimeGardenService {
                 .setRetryableSubjectIds(new ArrayList<>(retryable));
     }
 
+    private static boolean isValidSubjectId(String id) {
+        return id != null
+                && !id.isBlank()
+                && id.length() <= 20
+                && id.chars().allMatch(character -> character >= '0' && character <= '9');
+    }
+
+    private void rememberSubjectSnapshot(String query, Collection<String> subjectIds) {
+        LinkedHashSet<String> ids = Optional.ofNullable(subjectIds)
+                .orElseGet(List::of)
+                .stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(AnimeGardenService::isValidSubjectId)
+                .distinct()
+                .limit(MAX_SUBJECT_IDS_PER_SNAPSHOT)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        if (ids.isEmpty()) {
+            return;
+        }
+        String queryKey = StrUtil.blankToDefault(query, "__default__");
+        long now = System.currentTimeMillis();
+        synchronized (subjectSnapshotLock) {
+            purgeSubjectSnapshots(now);
+            String key = queryKey + "#" + (++subjectSnapshotSequence);
+            subjectSnapshots.put(key, new SubjectSnapshot(ids, now));
+            while (subjectSnapshots.size() > MAX_SUBJECT_SNAPSHOTS) {
+                subjectSnapshots.remove(subjectSnapshots.keySet().iterator().next());
+            }
+        }
+    }
+
+    private Set<String> acceptedSubjectIds() {
+        long now = System.currentTimeMillis();
+        synchronized (subjectSnapshotLock) {
+            purgeSubjectSnapshots(now);
+            LinkedHashSet<String> accepted = new LinkedHashSet<>();
+            subjectSnapshots.values().forEach(snapshot -> accepted.addAll(snapshot.ids()));
+            return accepted;
+        }
+    }
+
+    private void purgeSubjectSnapshots(long now) {
+        subjectSnapshots.entrySet().removeIf(entry ->
+                now - entry.getValue().createdAt() >= SUBJECT_SNAPSHOT_TTL_MILLIS);
+    }
+
+    private static List<AnimeGarden.Subject> loadSubjectsFromUpstream() throws Exception {
+        return HttpReq.get(HOST + "/subjects")
+                .timeout(ANIME_GARDEN_REQUEST_TIMEOUT_MILLIS)
+                .thenFunction(res -> {
+                    HttpReq.assertStatus(res);
+                    JsonObject jsonObject = GsonStatic.fromJson(res.body(), JsonObject.class);
+                    JsonArray subjects = jsonObject.getAsJsonArray("subjects");
+                    return GsonStatic.fromJsonList(subjects, AnimeGarden.Subject.class);
+                });
+    }
+
+    private static BgmInfo loadBgmInfoFromUpstream(String subjectId) {
+        return BgmUtil.getBgmInfo(subjectId);
+    }
+
     public List<AnimeGarden.Group> group(String bgmId) {
         List<AnimeGarden.Item> items;
         try {
@@ -202,8 +320,8 @@ public class AnimeGardenService {
                         return GsonStatic.fromJsonList(resources, AnimeGarden.Item.class);
                     });
         } catch (Exception e) {
-            log.warn("AnimeGarden group request failed");
-            return List.of();
+            log.warn("AnimeGarden group request failed: {}", e.getMessage());
+            throw new IllegalStateException("AnimeGarden group request failed", e);
         }
 
         items = items
@@ -260,5 +378,21 @@ public class AnimeGardenService {
         }
 
         return list;
+    }
+
+    @FunctionalInterface
+    interface SubjectLoader {
+        List<AnimeGarden.Subject> load() throws Exception;
+    }
+
+    @FunctionalInterface
+    interface BgmInfoLoader {
+        BgmInfo load(String subjectId) throws Exception;
+    }
+
+    private record SubjectSnapshot(Set<String> ids, long createdAt) {
+        private SubjectSnapshot {
+            ids = Set.copyOf(ids);
+        }
     }
 }

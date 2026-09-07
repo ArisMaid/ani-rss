@@ -250,10 +250,9 @@ public class MikanService {
                 }
                 String url = mikanInfo.getUrl();
                 String mikanId = PublicScoreService.extractMikanId(url);
-                if (subscribedMikanIds != null) {
-                    mikanInfo.setExists(mikanSubscriptions.contains(mikanId));
+                if (subscribedMikanIds != null && mikanSubscriptions.contains(mikanId)) {
+                    mikanInfo.setExists(true);
                 }
-                mikanInfo.setScore(0.0);
                 if (StrUtil.isBlank(mikanId)) {
                     continue;
                 }
@@ -262,10 +261,14 @@ public class MikanService {
                     continue;
                 }
 
-                Double score = Optional.ofNullable(mikanBgm.getScore()).orElse(0.0);
+                Double score = mikanBgm.getScore();
                 String bgmId = mikanBgm.getBgmId();
-                mikanInfo.setScore(score)
-                        .setBgmId(bgmId);
+                if (score != null && Double.isFinite(score) && score >= 0) {
+                    mikanInfo.setScore(score);
+                }
+                if (StrUtil.isNotBlank(bgmId)) {
+                    mikanInfo.setBgmId(bgmId);
+                }
 
                 if (subscriptions.contains(bgmId)) {
                     mikanInfo.setExists(true);
@@ -619,7 +622,6 @@ public class MikanService {
                                             .setTitle(title)
                                             .setUrl(href)
                                             .setExists(bangumiIdSet.contains(id))
-                                            .setScore(0.0)
                             );
                         }
                         return mikanInfos;

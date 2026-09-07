@@ -42,7 +42,7 @@
             <el-button :disabled="rssList.length < 1" bg icon="Plus" text @click="batchAddition">批量添加</el-button>
           </div>
         </div>
-        <div v-loading="loading" class="scroll-container">
+        <div v-loading="loading" :data-loading="loading" class="scroll-container">
           <el-tabs v-model="activeName" class="week-tabs">
             <el-tab-pane v-for="item in data.items" :key="item.weekLabel"
                          :label="item.weekLabel" :name="item.weekLabel" lazy>
@@ -134,7 +134,7 @@
 </template>
 
 <script setup>
-import {onBeforeUnmount, onMounted, ref, watch} from "vue";
+import {onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch} from "vue";
 import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy} from "@element-plus/icons-vue";
 import * as http from "@/js/http.js";
@@ -155,6 +155,9 @@ let enrichmentController
 let groupController
 let groupGeneration = 0
 let enrichmentKey = ''
+let currentListValid = false
+let needsListReload = false
+let lastListBgmUrl = ''
 let data = ref({
   'items': []
 })
@@ -171,20 +174,30 @@ let show = (bgmUrl = '') => {
 }
 
 let list = async (bgmUrl = '') => {
+  lastListBgmUrl = bgmUrl || ''
   const generation = listGeneration
   const controller = new AbortController()
   listController = controller
+  currentListValid = false
+  needsListReload = true
+  selectName.value = ''
+  groups.value = {}
   loading.value = true
-  return http.animeGardenList(bgmUrl, {signal: controller.signal})
+  return http.animeGardenList(lastListBgmUrl, {signal: controller.signal})
       .then(res => {
         if (generation !== listGeneration || controller.signal.aborted) return
-        let items = res.data;
+        const items = res?.data
+        if (!Array.isArray(items)) {
+          throw new Error('AnimeGarden 列表响应格式无效')
+        }
 
         if (!items || items.length < 1) {
           ElMessage.warning("搜索结果为空")
         }
 
         data.value.items = items
+        currentListValid = true
+        needsListReload = false
         if (items.length) {
           activeName.value = items[0].weekLabel
         }
@@ -207,14 +220,17 @@ const updateSubjects = subjects => {
       const enrichment = subjects?.[String(subject.id)]
       if (!enrichment) continue
       if (enrichment.cover) subject.cover = enrichment.cover
-      const score = Number(enrichment.score)
+      const rawScore = enrichment.score
+      const hasUsableRawScore = (typeof rawScore === 'number' && !Number.isNaN(rawScore))
+        || (typeof rawScore === 'string' && rawScore.trim() !== '')
+      const score = hasUsableRawScore ? Number(rawScore) : Number.NaN
       if (Number.isFinite(score)) subject.score = score
     }
   }
 }
 
 const startEnrichment = async (generation = listGeneration) => {
-  if (!dialogVisible.value || generation !== listGeneration) return
+  if (document.hidden || !dialogVisible.value || generation !== listGeneration) return
   const week = data.value.items?.find(item => item.weekLabel === activeName.value)
   const ids = (week?.subjects || []).map(subject => String(subject.id)).filter(Boolean)
   if (!ids.length) return
@@ -253,25 +269,49 @@ const closeRequests = () => {
   enrichmentController = undefined
   groupController = undefined
   enrichmentKey = ''
+  groupLoading.value = false
+  loading.value = false
 }
 
 const close = () => {
   listGeneration++
+  currentListValid = false
+  needsListReload = false
   closeRequests()
 }
 
 watch(activeName, () => startEnrichment())
 
-const handleVisibilityChange = () => {
-  if (document.hidden) {
-    listGeneration++
-    closeRequests()
-  } else if (dialogVisible.value) {
-    void startEnrichment()
+const pauseForLifecycle = () => {
+  const listWasInFlight = Boolean(listController)
+  listGeneration++
+  if (listWasInFlight) {
+    currentListValid = false
+    needsListReload = true
+  }
+  closeRequests()
+}
+
+const resumeFromLifecycle = () => {
+  if (!dialogVisible.value || document.hidden) return
+  if (needsListReload || !currentListValid) {
+    void list(lastListBgmUrl)
+    return
+  }
+  void startEnrichment()
+  if (selectName.value && !groups.value[selectName.value]) {
+    collapseChange(selectName.value)
   }
 }
 
+const handleVisibilityChange = () => {
+  if (document.hidden) pauseForLifecycle()
+  else resumeFromLifecycle()
+}
+
 onMounted(() => document.addEventListener('visibilitychange', handleVisibilityChange))
+onActivated(() => resumeFromLifecycle())
+onDeactivated(() => pauseForLifecycle())
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange)
   close()
@@ -286,8 +326,10 @@ let collapseChange = (v) => {
     groupController?.abort()
     groupController = undefined
     groupLoading.value = false
+    selectName.value = ''
     return
   }
+  if (document.hidden) return
   selectName.value = v
   if (groups.value[v]) {
     return;
@@ -348,7 +390,7 @@ let open = url => {
   window.open(url);
 }
 
-defineExpose({show})
+defineExpose({show, collapseChange})
 
 let emit = defineEmits(['callback'])
 

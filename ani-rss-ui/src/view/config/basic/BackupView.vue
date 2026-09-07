@@ -18,6 +18,9 @@
       </template>
       <template #footer>
         <el-button @click="previewVisible = false">取消</el-button>
+        <el-button v-if="canQueryAgain" :loading="querying" @click="queryAgain">
+          重新查询
+        </el-button>
         <el-button type="primary" :loading="confirming" :disabled="!canConfirm" @click="confirm">
           确认覆盖
         </el-button>
@@ -43,6 +46,9 @@ const restoreOperationKey = 'ani-rss.restore-operation'
 const terminalStates = new Set(['INVALID', 'SUCCEEDED', 'ROLLED_BACK', 'FAILED', 'MAINTENANCE_REQUIRED'])
 const activeStates = new Set(['QUEUED', 'STOPPING', 'SWITCHING'])
 const canConfirm = computed(() => restoreOperation.value?.status === 'VALIDATED' && !confirming.value)
+const querying = ref(false)
+const canQueryAgain = computed(() => Boolean(restoreOperation.value?.operationId)
+  && Boolean(restoreError.value || activeStates.has(String(restoreOperation.value?.status || ''))))
 
 let importConfig = () => {
   uploadRef.value?.selectAndUpload()
@@ -66,6 +72,7 @@ const stopPolling = () => {
   pollGeneration++
   clearTimeout(pollTimer)
   pollTimer = undefined
+  querying.value = false
 }
 
 const finishTerminalStatus = status => {
@@ -99,6 +106,7 @@ const pollStatus = async (generation = pollGeneration) => {
     return
   }
   try {
+    querying.value = true
     const next = await http.restoreStatus(operationId)
     if (generation !== pollGeneration) return
     restoreOperation.value = next
@@ -116,7 +124,19 @@ const pollStatus = async (generation = pollGeneration) => {
     } else {
       pollTimer = setTimeout(() => void pollStatus(generation), 1000)
     }
+  } finally {
+    if (generation === pollGeneration) querying.value = false
   }
+}
+
+const queryAgain = () => {
+  const operationId = restoreOperation.value?.operationId
+  if (!operationId || querying.value) return
+  stopPolling()
+  restoreError.value = ''
+  querying.value = true
+  pollStartedAt = Date.now()
+  void pollStatus(pollGeneration)
 }
 
 const confirm = async () => {

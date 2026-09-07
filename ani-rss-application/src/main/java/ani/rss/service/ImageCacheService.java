@@ -13,12 +13,14 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.security.SecureRandom;
 import java.security.MessageDigest;
 import java.time.Duration;
@@ -38,6 +40,7 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Service
 public class ImageCacheService {
@@ -48,6 +51,7 @@ public class ImageCacheService {
     private static final int PUBLIC_MAX_ENTRIES = 5_000;
     private static final long PUBLIC_MAX_BYTES = 256L * 1024 * 1024;
     private static final long PUBLIC_FAILURE_TTL_MILLIS = Duration.ofSeconds(30).toMillis();
+    private static final int PUBLIC_FAILURE_MAX_ENTRIES = 5_000;
     private static final int PUBLIC_QUEUE_CAPACITY = 48;
     private static final int PUBLIC_WORKERS = 6;
     private static final long PUBLIC_WAIT_TIMEOUT_MILLIS = 12_000;
@@ -59,6 +63,7 @@ public class ImageCacheService {
     private final Map<String, PublicEntry> publicEntries = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<PublicEntry>> publicFlights = new ConcurrentHashMap<>();
     private final Map<String, FailureEntry> publicFailures = new ConcurrentHashMap<>();
+    private final Object[] publicKeyLocks = createLocks();
     private final Object publicManifestLock = new Object();
     private final ExecutorService publicExecutor = new ThreadPoolExecutor(
             PUBLIC_WORKERS,
@@ -78,7 +83,7 @@ public class ImageCacheService {
     void loadPublicManifestOnStartup() {
         loadPublicManifest();
         maintenanceExecutor.scheduleWithFixedDelay(this::maintainPublicCache,
-                10, 10, TimeUnit.MINUTES);
+                30, 30, TimeUnit.SECONDS);
     }
 
     @PreDestroy
@@ -99,13 +104,15 @@ public class ImageCacheService {
         }
         String canonical = canonicalPublicUrl(url);
         loadPublicManifest();
+        trimPublicFailures();
         String key = SecureUtil.sha256(canonical);
         FailureEntry failure = publicFailures.get(key);
         if (failure != null) {
             long remaining = failure.retryAt() - System.currentTimeMillis();
             if (remaining > 0) {
-                throw new UpstreamServiceException("image source is temporarily unavailable; retry later",
-                        failure.cause(), Math.max(1, (remaining + 999) / 1000));
+                throw new UpstreamServiceException("image source is temporarily unavailable ("
+                        + failure.reason() + "); retry later",
+                        null, Math.max(1, (remaining + 999) / 1000));
             }
             publicFailures.remove(key, failure);
         }
@@ -149,6 +156,38 @@ public class ImageCacheService {
         }
     }
 
+    /**
+     * Opens a public image while holding a lease on the exact cache entry.
+     * Maintenance and replacement both honor this lease, so a slow servlet
+     * response cannot lose its backing file halfway through transfer.
+     */
+    public PublicImageHandle openPublicImage(String url, HttpServletRequest request) {
+        publicImage(url, request);
+        String canonical = canonicalPublicUrl(url);
+        String key = SecureUtil.sha256(canonical);
+        synchronized (publicKeyLock(key)) {
+            PublicEntry entry = publicEntries.get(key);
+            if (!isUsable(entry)) {
+                throw new IllegalStateException("public image became unavailable");
+            }
+            entry.activeReaders().incrementAndGet();
+            try {
+                InputStream input = Files.newInputStream(
+                        entry.path(), StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
+                PublicImage image = new PublicImage(entry.path(), entry.contentType(), entry.etag(),
+                        entry.expiresAt(), entry.length());
+                return new PublicImageHandle(this, entry, image, input);
+            } catch (Exception e) {
+                entry.activeReaders().decrementAndGet();
+                throw new IllegalStateException("open public image failed", e);
+            }
+        }
+    }
+
+    private void releasePublicReader(PublicEntry entry) {
+        entry.activeReaders().decrementAndGet();
+    }
+
     private void loadPublicImage(String canonical, String key, CompletableFuture<PublicEntry> future) {
         try {
             SafeImageFetcher.FetchedImage fetched = SafeImageFetcher.fetch(canonical, ConfigUtil.snapshot());
@@ -160,39 +199,60 @@ public class ImageCacheService {
             Path temporary = Files.createTempFile(root, ".public-image-", ".part");
             try {
                 fetched.writeTo(temporary);
-                try {
-                    Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE,
-                            StandardCopyOption.REPLACE_EXISTING);
-                } catch (java.nio.file.AtomicMoveNotSupportedException e) {
-                    Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+                long now = System.currentTimeMillis();
+                byte[] bytes = fetched.bytes();
+                PublicEntry entry = new PublicEntry(
+                        key,
+                        canonical,
+                        target,
+                        fetched.contentType(),
+                        etag(bytes),
+                        now,
+                        now + PUBLIC_TTL,
+                        bytes.length);
+                // A stale maintenance pass and a new publisher must serialize
+                // around both the target move and the map replacement. If the
+                // move happened before this lock, the stale pass could delete
+                // the newly published file at the same key.
+                synchronized (publicKeyLock(key)) {
+                    PublicEntry previous = publicEntries.get(key);
+                    if (previous != null && previous.activeReaders().get() > 0) {
+                        throw new UpstreamServiceException(
+                                "image cache entry is being read; retry later", null, 1);
+                    }
+                    try {
+                        Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE,
+                                StandardCopyOption.REPLACE_EXISTING);
+                    } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                        Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+                    }
+                    previous = publicEntries.put(key, entry);
+                    if (previous != null && !previous.path().equals(entry.path())) {
+                        try {
+                            Files.deleteIfExists(previous.path());
+                        } catch (IOException ignored) {
+                            // The old exact path is no longer reachable from
+                            // the manifest and can be retried by maintenance.
+                        }
+                    }
                 }
+                publicFailures.remove(key);
+                trimPublicEntries();
+                persistPublicManifest();
+                future.complete(entry);
             } finally {
                 Files.deleteIfExists(temporary);
             }
-            long now = System.currentTimeMillis();
-            byte[] bytes = fetched.bytes();
-            PublicEntry entry = new PublicEntry(
-                    key,
-                    canonical,
-                    target,
-                    fetched.contentType(),
-                    etag(bytes),
-                    now,
-                    now + PUBLIC_TTL,
-                    bytes.length);
-            publicEntries.put(key, entry);
-            publicFailures.remove(key);
-            trimPublicEntries();
-            persistPublicManifest();
-            future.complete(entry);
-        } catch (Exception e) {
+        } catch (IOException | RuntimeException e) {
             RuntimeException failure = e instanceof UpstreamServiceException upstream
                     && upstream.retryAfterSeconds() > 0
                     ? upstream
                     : new UpstreamServiceException(
                     "image fetch failed", e, PUBLIC_FAILURE_TTL_MILLIS / 1000);
             publicFailures.put(key, new FailureEntry(
-                    System.currentTimeMillis() + PUBLIC_FAILURE_TTL_MILLIS, failure));
+                    System.currentTimeMillis() + PUBLIC_FAILURE_TTL_MILLIS,
+                    failureCategory(failure)));
+            trimPublicFailures();
             future.completeExceptionally(failure);
         } finally {
             publicFlights.remove(key, future);
@@ -345,21 +405,64 @@ public class ImageCacheService {
     }
 
     private boolean removePublicEntry(PublicEntry entry) {
-        try {
-            Files.deleteIfExists(entry.path());
-            return publicEntries.remove(entry.key(), entry);
-        } catch (IOException e) {
-            // Keep the manifest entry until the next maintenance pass so a
-            // transient filesystem failure cannot orphan a tracked file.
-            org.slf4j.LoggerFactory.getLogger(ImageCacheService.class)
-                    .warn("public image cleanup deferred for {}: {}", entry.path(), e.getMessage());
-            return false;
+        if (entry == null) return false;
+        synchronized (publicKeyLock(entry.key())) {
+            if (publicEntries.get(entry.key()) != entry) {
+                return false;
+            }
+            if (entry.activeReaders().get() > 0) {
+                return false;
+            }
+            Path expected = publicRoot().resolve(
+                    entry.key() + extension(entry.contentType())).normalize();
+            if (!expected.equals(entry.path().toAbsolutePath().normalize())
+                    || !expected.startsWith(publicRoot())) {
+                return false;
+            }
+            if (!publicEntries.remove(entry.key(), entry)) {
+                return false;
+            }
+            try {
+                Files.deleteIfExists(expected);
+                return true;
+            } catch (IOException e) {
+                // Restore the exact entry while holding the same key lock so
+                // a publisher cannot replace it between remove and restore.
+                publicEntries.putIfAbsent(entry.key(), entry);
+                org.slf4j.LoggerFactory.getLogger(ImageCacheService.class)
+                        .warn("public image cleanup deferred for {}: {}", entry.path(), e.getMessage());
+                return false;
+            }
         }
+    }
+
+    private void trimPublicFailures() {
+        long now = System.currentTimeMillis();
+        publicFailures.entrySet().removeIf(entry -> entry.getValue().retryAt() <= now);
+        if (publicFailures.size() <= PUBLIC_FAILURE_MAX_ENTRIES) {
+            return;
+        }
+        List<Map.Entry<String, FailureEntry>> oldest = publicFailures.entrySet().stream()
+                .sorted(Comparator.comparingLong(entry -> entry.getValue().retryAt()))
+                .toList();
+        int removeCount = publicFailures.size() - PUBLIC_FAILURE_MAX_ENTRIES;
+        for (int index = 0; index < removeCount && index < oldest.size(); index++) {
+            Map.Entry<String, FailureEntry> entry = oldest.get(index);
+            publicFailures.remove(entry.getKey(), entry.getValue());
+        }
+    }
+
+    private static String failureCategory(Throwable failure) {
+        if (failure instanceof java.util.concurrent.TimeoutException) return "timeout";
+        if (failure instanceof java.net.ConnectException) return "connect";
+        if (failure instanceof UpstreamServiceException) return "upstream";
+        return "fetch";
     }
 
     private void maintainPublicCache() {
         try {
             loadPublicManifest();
+            trimPublicFailures();
             trimPublicEntries();
             persistPublicManifest();
         } catch (RuntimeException e) {
@@ -383,6 +486,10 @@ public class ImageCacheService {
             thread.setDaemon(true);
             return thread;
         };
+    }
+
+    private Object publicKeyLock(String key) {
+        return publicKeyLocks[Math.floorMod(key.hashCode(), publicKeyLocks.length)];
     }
 
     public ImageRef cache(String url, HttpServletRequest request) {
@@ -539,11 +646,51 @@ public class ImageCacheService {
                               long expiresAt, long length) {
     }
 
+    public static final class PublicImageHandle implements AutoCloseable {
+        private final ImageCacheService owner;
+        private final PublicEntry entry;
+        private final PublicImage image;
+        private final InputStream input;
+        private boolean closed;
+
+        private PublicImageHandle(ImageCacheService owner, PublicEntry entry,
+                                  PublicImage image, InputStream input) {
+            this.owner = owner;
+            this.entry = entry;
+            this.image = image;
+            this.input = input;
+        }
+
+        public PublicImage image() {
+            return image;
+        }
+
+        public InputStream inputStream() {
+            return input;
+        }
+
+        @Override
+        public synchronized void close() throws IOException {
+            if (closed) return;
+            closed = true;
+            try {
+                input.close();
+            } finally {
+                owner.releasePublicReader(entry);
+            }
+        }
+    }
+
     private record Entry(Path path, String contentType, String binding, String sourceKey, long expiresAt) {
     }
 
     private record PublicEntry(String key, String url, Path path, String contentType,
-                               String etag, long fetchedAt, long expiresAt, long length) {
+                               String etag, long fetchedAt, long expiresAt, long length,
+                               AtomicInteger activeReaders) {
+        private PublicEntry(String key, String url, Path path, String contentType,
+                            String etag, long fetchedAt, long expiresAt, long length) {
+            this(key, url, path, contentType, etag, fetchedAt, expiresAt, length, new AtomicInteger());
+        }
     }
 
     private record PublicManifest(List<PublicManifestEntry> entries) {
@@ -553,6 +700,6 @@ public class ImageCacheService {
                                        String etag, long fetchedAt, long expiresAt, long length) {
     }
 
-    private record FailureEntry(long retryAt, Throwable cause) {
+    private record FailureEntry(long retryAt, String reason) {
     }
 }

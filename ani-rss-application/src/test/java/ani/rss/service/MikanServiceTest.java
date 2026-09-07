@@ -21,6 +21,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -33,7 +34,7 @@ class MikanServiceTest {
     }
 
     @Test
-    void appliesScoresToEverySeasonResponseAndResetsMissingScoresToZero() {
+    void appliesScoresWithoutTurningMissingScoresIntoSuccessfulZeros() {
         Mikan spring = season("101", "102");
         MikanService.applyScores(
                 spring,
@@ -59,7 +60,7 @@ class MikanServiceTest {
 
         List<MikanInfo> summerItems = summer.getWeeks().get(0).getItems();
         assertEquals(9.1, summerItems.get(0).getScore());
-        assertEquals(0.0, summerItems.get(1).getScore());
+        assertNull(summerItems.get(1).getScore());
     }
 
     @Test

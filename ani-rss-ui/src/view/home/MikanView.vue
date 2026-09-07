@@ -58,7 +58,7 @@
             <el-button :disabled="rssList.length < 1" bg icon="Plus" text @click="batchAddition">批量添加</el-button>
           </div>
         </div>
-        <div v-loading="loading" class="scroll-container">
+        <div v-loading="loading" :data-loading="loading" class="scroll-container">
           <el-tabs v-model="activeName" class="week-tabs">
             <el-tab-pane v-for="week in data.weeks" :key="week.weekLabel"
                          :label="week.weekLabel" :name="week.weekLabel" lazy>
@@ -149,7 +149,7 @@
 </template>
 
 <script setup>
-import {onBeforeUnmount, ref, watch} from "vue";
+import {onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch} from "vue";
 import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy, Download as DownloadIcon} from "@element-plus/icons-vue";
 import SafeImageView from "@/view/custom/SafeImageView.vue";
@@ -220,6 +220,9 @@ let listController
 let scoreController
 let groupGeneration = 0
 let groupController
+let currentListValid = false
+let needsListReload = false
+let lastListRequest = {text: '', body: {}}
 let search = () => {
   if (text.value.length === 1) {
     ElMessage.error("搜索最少需要两个字符")
@@ -236,19 +239,22 @@ let cancelListRequests = () => {
   listController?.abort()
   scoreController?.abort()
   groupController?.abort()
+  groupGeneration++
   listController = undefined
   scoreController = undefined
   groupController = undefined
+  groupLoading.value = false
+  loading.value = false
 }
 
 let startScores = async (generation = listGeneration) => {
-  if (!showScore.value || !dialogVisible.value || generation !== listGeneration) return
-  const startKey = `${generation}:${activeName.value}`
+  if (document.hidden || !showScore.value || !dialogVisible.value || generation !== listGeneration) return
+  const startKey = `${generation}:${activeName.value}:${showScore.value}`
   if (scoreStartKey === startKey) return
-  scoreStartKey = startKey
   const week = data.value.weeks.find(item => item.weekLabel === activeName.value)
   const items = week?.items || []
   if (!items.length) return
+  scoreStartKey = startKey
   scoreController?.abort()
   const controller = new AbortController()
   scoreController = controller
@@ -273,24 +279,35 @@ let startScores = async (generation = listGeneration) => {
 }
 
 let list = async (text, body) => {
-  const generation = ++listGeneration
-  cancelListRequests()
-  const controller = new AbortController()
-  listController = controller
   const textSnapshot = text || ''
   const bodySnapshot = body ? {...body} : {}
+  lastListRequest = {text: textSnapshot, body: bodySnapshot}
+  const generation = ++listGeneration
+  cancelListRequests()
+  currentListValid = false
+  needsListReload = true
+  selectName.value = ''
+  groups.value = {}
+  const controller = new AbortController()
+  listController = controller
   loading.value = true
   try {
     const res = await http.mikan(textSnapshot, bodySnapshot, {signal: controller.signal})
     if (generation !== listGeneration || controller.signal.aborted) return
-        let {seasons, weeks, totalItems} = res.data;
+        const result = res?.data
+        if (!result || !Array.isArray(result.seasons) || !Array.isArray(result.weeks)) {
+          throw new Error('Mikan 列表响应格式无效')
+        }
+        let {seasons, weeks, totalItems} = result;
 
         if (totalItems < 1) {
           ElMessage.warning("搜索结果为空")
         }
 
-        data.value.seasons = seasons.length ? seasons : data.value.seasons
-        data.value.weeks = weeks || []
+        data.value.seasons = seasons
+        data.value.weeks = weeks
+        currentListValid = true
+        needsListReload = false
         if (data.value.weeks.length) {
           activeName.value = data.value.weeks[0].weekLabel
         }
@@ -301,7 +318,8 @@ let list = async (text, body) => {
         }
         void startScores(generation)
   } catch (error) {
-    if (error?.code !== 'REQUEST_ABORTED' && generation === listGeneration) {
+    if (error?.code !== 'REQUEST_ABORTED' && error?.name !== 'AbortError'
+        && generation === listGeneration && !controller.signal.aborted) {
       ElMessage.error(error?.message || 'Mikan 列表加载失败')
     }
   } finally {
@@ -328,8 +346,10 @@ let collapseChange = (v) => {
     groupController?.abort()
     groupController = undefined
     groupLoading.value = false
+    selectName.value = ''
     return
   }
+  if (document.hidden) return
   selectName.value = v
   if (groups.value[v]) {
     return;
@@ -345,7 +365,8 @@ let collapseChange = (v) => {
         groups.value[v] = res.data
       })
       .catch(error => {
-        if (error?.code !== 'REQUEST_ABORTED' && generation === groupGeneration) {
+        if (error?.code !== 'REQUEST_ABORTED' && error?.name !== 'AbortError'
+            && generation === groupGeneration && !controller.signal.aborted) {
           ElMessage.error(error?.message || '字幕组加载失败')
         }
       })
@@ -358,13 +379,14 @@ let collapseChange = (v) => {
 let close = () => {
   listGeneration++
   cancelListRequests()
+  currentListValid = false
+  needsListReload = false
   scoreStartKey = ''
   dialogVisible.value = false
 }
 
 let scoreStartKey = ''
 watch(activeName, () => {
-  scoreStartKey = ''
   startScores()
 })
 watch(showScore, value => {
@@ -377,17 +399,38 @@ watch(showScore, value => {
   }
 })
 
-const handleVisibilityChange = () => {
-  if (document.hidden) {
-    listGeneration++
-    cancelListRequests()
-    scoreStartKey = ''
-  } else if (dialogVisible.value && showScore.value) {
-    startScores()
+const pauseForLifecycle = () => {
+  const listWasInFlight = Boolean(listController)
+  listGeneration++
+  if (listWasInFlight) {
+    currentListValid = false
+    needsListReload = true
+  }
+  cancelListRequests()
+  scoreStartKey = ''
+}
+
+const resumeFromLifecycle = () => {
+  if (!dialogVisible.value || document.hidden) return
+  if (needsListReload || !currentListValid) {
+    const request = lastListRequest
+    void list(request.text, request.body)
+    return
+  }
+  if (showScore.value) startScores()
+  if (selectName.value && !groups.value[selectName.value]) {
+    collapseChange(selectName.value)
   }
 }
 
+const handleVisibilityChange = () => {
+  if (document.hidden) pauseForLifecycle()
+  else resumeFromLifecycle()
+}
+
 onMounted(() => document.addEventListener('visibilitychange', handleVisibilityChange))
+onActivated(() => resumeFromLifecycle())
+onDeactivated(() => pauseForLifecycle())
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', handleVisibilityChange)
@@ -426,7 +469,7 @@ let open = url => {
   window.open(url);
 }
 
-defineExpose({show})
+defineExpose({show, collapseChange})
 
 let emit = defineEmits(['callback'])
 

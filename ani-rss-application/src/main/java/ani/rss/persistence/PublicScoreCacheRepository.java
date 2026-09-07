@@ -22,6 +22,7 @@ import java.util.regex.Pattern;
 @Repository
 public class PublicScoreCacheRepository {
     private static final Pattern NUMERIC_ID = Pattern.compile("\\d+");
+    private static final long MAX_SCORE_FRESHNESS_MILLIS = 6 * 60 * 60 * 1000L;
     /** SQLite supports 999 bind variables by default; leave room for the expiry value. */
     private static final int MAX_IDS_PER_BATCH = 500;
 
@@ -80,15 +81,17 @@ public class PublicScoreCacheRepository {
             Map<String, BgmScore> result = new LinkedHashMap<>();
             for (List<String> batch : batches(ids)) {
                 String placeholders = String.join(",", java.util.Collections.nCopies(batch.size(), "?"));
-                String sql = "SELECT bgm_id, score, expires_at FROM public_bgm_score_cache "
-                        + "WHERE expires_at > ? AND bgm_id IN (" + placeholders + ")";
+                String sql = "SELECT bgm_id, score, expires_at, updated_at FROM public_bgm_score_cache "
+                        + "WHERE expires_at > ? AND updated_at > ? AND bgm_id IN (" + placeholders + ")";
                 try (PreparedStatement statement = connection.prepareStatement(sql)) {
                     statement.setLong(1, now);
-                    bindIds(statement, batch, 2);
+                    statement.setLong(2, now - MAX_SCORE_FRESHNESS_MILLIS);
+                    bindIds(statement, batch, 3);
                     try (ResultSet resultSet = statement.executeQuery()) {
                         while (resultSet.next()) {
                             result.put(resultSet.getString("bgm_id"), new BgmScore(
-                                    resultSet.getDouble("score"), resultSet.getLong("expires_at")));
+                                    resultSet.getDouble("score"), resultSet.getLong("expires_at"),
+                                    resultSet.getLong("updated_at")));
                         }
                     }
                 }
@@ -123,7 +126,20 @@ public class PublicScoreCacheRepository {
     }
 
     public void saveBgmScore(String bgmId, double score, long expiresAt) {
-        if (!isNumericId(bgmId) || !Double.isFinite(score) || expiresAt <= System.currentTimeMillis()) {
+        saveBgmScore(bgmId, score, expiresAt, System.currentTimeMillis());
+    }
+
+    /**
+     * Persists the expiry observed by the upstream lookup rather than
+     * extending it when a bounded background writer finally gets the SQLite
+     * connection.  This keeps delayed writes from renewing stale scores.
+     */
+    public void saveBgmScore(String bgmId, double score, long expiresAt, long observedAt) {
+        if (!isNumericId(bgmId) || !Double.isFinite(score) || observedAt <= 0 || expiresAt <= observedAt) {
+            return;
+        }
+        long effectiveExpiresAt = Math.min(expiresAt, observedAt + MAX_SCORE_FRESHNESS_MILLIS);
+        if (effectiveExpiresAt <= System.currentTimeMillis()) {
             return;
         }
         DatabaseManager.withConnection(connection -> {
@@ -135,11 +151,10 @@ public class PublicScoreCacheRepository {
                         expires_at = excluded.expires_at,
                         updated_at = excluded.updated_at
                     """)) {
-                long now = System.currentTimeMillis();
                 statement.setString(1, bgmId);
                 statement.setDouble(2, score);
-                statement.setLong(3, expiresAt);
-                statement.setLong(4, now);
+                statement.setLong(3, effectiveExpiresAt);
+                statement.setLong(4, observedAt);
                 statement.executeUpdate();
                 return null;
             }
@@ -182,6 +197,6 @@ public class PublicScoreCacheRepository {
     public record MikanMapping(String bgmId, long expiresAt) {
     }
 
-    public record BgmScore(double score, long expiresAt) {
+    public record BgmScore(double score, long expiresAt, long updatedAt) {
     }
 }

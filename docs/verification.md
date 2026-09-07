@@ -23,6 +23,7 @@
 | N06 manifest、旧文件追踪与 shutdown | 通过 | `ImageCacheServiceTest`；合并 writer、pending deletion、有界重试、排队 Future 完成和幂等关闭 |
 | N07 RSS 统一时钟与写失效 | 通过 | `TorrentSnapshotCycleTest` 精确覆盖 5s 边界/dirty；真实 `RssTask → SubscriptionDownloadQueue → DownloadService → TorrentUtil/ItemsUtil` 见 W6 报告 |
 | N08 8 秒慢轮询与页面恢复 | 通过 | 生产构建浏览器报告 page dwell `39,025ms`；每次 `8.010s`，hidden/visible 总请求 3，`maxInFlight=1`，手动刷新与可见恢复均已观察 |
+| v3.2.28.63 发布 | 通过 | tag `v3.2.28.63` / `ea9bde31`；workflow `34098183511`、GitHub Release、GHCR 三类 digest/platform 已核验 |
 
 ### W6/W7 原始证据
 
@@ -30,6 +31,13 @@
 - RSS 实际 add 报告：[`w6-rss-add-v3.2.28.63-20260907.json`](performance-data/w6-rss-add-v3.2.28.63-20260907.json)，同一真实服务链中 RSS 请求 1、`downloaderAddCalls=1`、结果 `SUCCESS`。
 - Service/热列表报告：[`w6-services-v3.2.28.63-20260907.json`](performance-data/w6-services-v3.2.28.63-20260907.json) 与 [`w6-hot-list-v3.2.28.63-20260907.json`](performance-data/w6-hot-list-v3.2.28.63-20260907.json)，均 `dirty=false`；热列表 cold `90.6249ms`、进程内 hot p95 `0.0395ms`、重启持久缓存 `0.2971ms`。这些是 Service 计时，不是端到端 HTTP p95。
 - 浏览器报告：[`n08-browser-v3.2.28.63-20260907.json`](performance-data/n08-browser-v3.2.28.63-20260907.json)，生产 Vite 输出、`dirty=false`；`pageErrors=[]`、`consoleErrors=[]`、`chunk404s=[]`、`mediaErrors=[]`，`visibleRecoveryObserved=true`。
+
+### 发布结果
+
+- GitHub Actions build workflow [`34098183511`](https://github.com/ArisMaid/ani-rss/actions/runs/34098183511) 成功，tag `v3.2.28.63` 精确指向 `ea9bde31a7d8440fff2778d995f563ace3c8c857`；[GitHub Release v3.2.28.63](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.63) 已发布。
+- Release 附件：`ani-rss.jar` SHA-256 `50c274304cc6673bbcffd17ef8e6c11a31a122534041c61ce9be12d395501ee2`；`ani-rss.exe` SHA-256 `f1ba758e7bdbbad09f782e790e4d3c679b0920e002287c0b51f2b454fd7db013`。
+- GHCR 已核验版本 tag 的 manifest index：temurin `ghcr.io/arismaid/ani-rss:v3.2.28.63` / `sha256:4c5b0feb9785dc879b84ccfef8f3463fb84d56cfdd1a3d990a11bae751a84d46`（linux/amd64、linux/arm64）；openj9 `ghcr.io/arismaid/ani-rss:v3.2.28.63-openj9` / `sha256:b59623c65e44bd59a4344eed509086dc502268156ba8a12518b559d9f7e59705`（linux/amd64、linux/arm64）；arm32v7 `ghcr.io/arismaid/ani-rss:v3.2.28.63-arm32v7` / `sha256:35b42191fe094c8f37eb8f7e22adc4e0e02589258fd71a6f75a5badbbe1b1548`（linux/arm/v7）。
+- Docker Hub 登录步骤按 workflow 条件跳过（未配置 `DOCKER_USERNAME`/`DOCKER_PASSWORD`）；这不影响 GHCR 发布。Docker Desktop/Linux engine 本地构建仍未验证。
 
 ### Java 跳过项
 
@@ -46,7 +54,7 @@
 
 - 真实 Mikan、Bangumi、AnimeGarden、图片代理和下载器的外网波动、认证、429/5xx、生产首屏和真实媒体解码。
 - 真实账号、生产数据库锁/查询、用户媒体目录、文件 walk、下载器 files/move/rename/delete 和完整缺集恢复成本；W6 JSON 对未测字段保留 `null`。
-- Docker Desktop/Linux engine 本地构建；镜像发布将以精确 tag workflow 的实际 digest/platform 结果为准。Docker Hub 是否发布取决于仓库凭据。
+- Docker Desktop/Linux engine 本地构建，以及真实外部源、下载器、账号和媒体链路仍未验证；GHCR 的版本 tag、digest 和平台已由上面的 tag workflow 实际核验。
 
 ## 历史 v3.2.28.62 验收记录
 

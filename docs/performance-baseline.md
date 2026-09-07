@@ -6,7 +6,7 @@
 
 | 项目 | 实际值 |
 | --- | --- |
-| 版本/标签 | `3.2.28.63` / `v3.2.28.63`（待 tag workflow 发布后核验） |
+| 版本/标签 | `3.2.28.63` / `v3.2.28.63`；tag 精确指向 `ea9bde31a7d8440fff2778d995f563ace3c8c857` |
 | 被测行为代码 | `f550cdddf57be2bf73185327e003aa2cbce18fbc` |
 | 版本提交 | `0c625810` |
 | 主对照 | `v3.2.28.62`，发布提交 `cce1190ecda820ff5a495265c59b9d729ab8a734` |
@@ -40,7 +40,19 @@ W6 RSS 的旧测试曾只推进虚拟 sleep 而没有推进 `TorrentUtil` 的真
 
 ### 当前边界
 
-浏览器 API/auth 和 RSS/downloader transport 是隔离 fixture；Vue 生产构建、真实 loader、router、组件交互和 Java 服务链是真实逻辑。未验证真实外部源、生产账号、下载器、媒体、数据库费用和 Linux engine。Docker/GHCR 的平台结论只在 tag workflow 完成后写入发布记录。
+浏览器 API/auth 和 RSS/downloader transport 是隔离 fixture；Vue 生产构建、真实 loader、router、组件交互和 Java 服务链是真实逻辑。未验证真实外部源、生产账号、下载器、媒体、数据库费用和 Linux engine；GHCR 平台结论见下方实际 tag workflow 结果。
+
+### 当前发布产物
+
+GitHub Actions build workflow [`34098183511`](https://github.com/ArisMaid/ani-rss/actions/runs/34098183511) 成功；[GitHub Release v3.2.28.63](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.63) 已上传 `ani-rss.jar`（SHA-256 `50c274304cc6673bbcffd17ef8e6c11a31a122534041c61ce9be12d395501ee2`）和 `ani-rss.exe`（SHA-256 `f1ba758e7bdbbad09f782e790e4d3c679b0920e002287c0b51f2b454fd7db013`）。
+
+| 镜像 tag | manifest index digest | 平台 |
+| --- | --- | --- |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.63` | `sha256:4c5b0feb9785dc879b84ccfef8f3463fb84d56cfdd1a3d990a11bae751a84d46` | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.63-openj9` | `sha256:b59623c65e44bd59a4344eed509086dc502268156ba8a12518b559d9f7e59705` | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.63-arm32v7` | `sha256:35b42191fe094c8f37eb8f7e22adc4e0e02589258fd71a6f75a5badbbe1b1548` | `linux/arm/v7` |
+
+Docker Hub 登录步骤因 secrets 未配置而按 workflow 条件跳过；GHCR 发布已成功，Docker Hub 不在本版本发布范围内。
 
 ## 历史 v3.2.28.62 记录
 

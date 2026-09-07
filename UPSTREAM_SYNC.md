@@ -1,6 +1,6 @@
 # Fork 上游同步规则
 
-本 fork 当前发布版本为 `3.2.28.64`（`v3.2.28.64` 的 tag workflow 待本次 push 后生成；上一版 `v3.2.28.63` 已指向 `ea9bde31a7d8440fff2778d995f563ace3c8c857`），上游前三段基线仍为 `v3.2.28`；本轮被测行为代码提交为 `bff06cb0618be5d77c7185f7dd09c6dc5cd0ebb0`，版本提交为 `21048e34`。本轮没有引入新的上游版本同步，所有差异均为 fork-local 修复与验收；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
+本 fork 当前发布版本为 `3.2.28.64`（标签 `v3.2.28.64` 精确指向 `6fd88343bbdb3ef4b16500693496907356f72f5f`；上一版 `v3.2.28.63` 已指向 `ea9bde31a7d8440fff2778d995f563ace3c8c857`），上游前三段基线仍为 `v3.2.28`；本轮被测行为代码提交为 `bff06cb0618be5d77c7185f7dd09c6dc5cd0ebb0`，版本提交为 `21048e34`。本轮没有引入新的上游版本同步，所有差异均为 fork-local 修复与验收；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
 
 同步时必须保留以下本地合同：
 
@@ -36,7 +36,7 @@
 - 被上游等效替代：无。本轮未执行上游提交合并，没有把冲突解决成功误记为行为等效。
 - 明确淘汰：无。未删除原有恢复、归属、完成、备份、下载和媒体路径。
 - 待确认：真实外部源/下载器/账号/媒体/数据库费用、Linux engine 本地构建；4 个 Java 测试仍因符号链接或外部样本缺失跳过，详见 [`docs/verification.md`](docs/verification.md)。
-- 证据：Java 319 tests、前端 35/35；W7/N08 raw reports 均记录 `commit=bff06cb...` 和 `dirty=false`；远端 `build-test` run `34109933350` 已成功。tag workflow、Release 资产和 GHCR digest 在正式打标后补记。
+- 证据：Java 319 tests、前端 35/35；W7/N08 raw reports 均记录 `commit=bff06cb...` 和 `dirty=false`；远端 `build-test` run `34109933350` 与 tag build run `34110438143` 均成功，Release 附件和 GHCR digest 已核验并记录在 [`docs/verification.md`](docs/verification.md)。
 
 ## 3.2.28.63 本轮审计记录
 

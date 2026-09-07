@@ -30,8 +30,10 @@
 
 ### 发布状态
 
-- 版本已固化为 `3.2.28.64`；`build-test` run [`34109933350`](https://github.com/ArisMaid/ani-rss/actions/runs/34109933350) 已成功，GitHub tag、Actions build workflow、GitHub Release 和 GHCR digest/platform 待正式 tag workflow 完成后补入本节。
-- Docker Hub 只有在 workflow 所需凭据存在时发布；未配置凭据不作为 GHCR 失败处理。
+- 版本已固化为 `3.2.28.64`；`build-test` run [`34109933350`](https://github.com/ArisMaid/ani-rss/actions/runs/34109933350) 与正式 build run [`34110438143`](https://github.com/ArisMaid/ani-rss/actions/runs/34110438143) 均成功。tag `v3.2.28.64` 精确指向 `6fd88343bbdb3ef4b16500693496907356f72f5f`；[GitHub Release v3.2.28.64](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.64) 已发布。
+- Release 附件：`ani-rss.jar` SHA-256 `1b9fbb12ae6381bac8b2c721561b2c1d7ed6f6ecfe67d4a6afda9a9fe48057e5`；`ani-rss.exe` SHA-256 `51c947ecc7e2594b788cdd2df5bbfe3a1d68a08995b3bcbe6037dace375854ec`。
+- GHCR 已核验 manifest index：`ghcr.io/arismaid/ani-rss:v3.2.28.64` / `sha256:6ec394b5ec4040b06f839d5708a21e59a99354a9a8fd10877f9c253ba5edc89f`（linux/amd64、linux/arm64）；`ghcr.io/arismaid/ani-rss:v3.2.28.64-openj9` / `sha256:36119d0eed47d1eeb455e0aed8112397511a58bf3421f421eceb2797ea41ef31`（linux/amd64、linux/arm64）；`ghcr.io/arismaid/ani-rss:v3.2.28.64-arm32v7` / `sha256:0bcff0e023167e6c54dad5750ff6c95e6d05b871ffa86b19dc92eb1383d9dc4d`（linux/arm/v7）。
+- Docker Hub 登录按 workflow 条件跳过（未配置 `DOCKER_USERNAME`/`DOCKER_PASSWORD`）；GHCR 三组镜像均已成功发布。
 
 ### 当前未验证边界
 

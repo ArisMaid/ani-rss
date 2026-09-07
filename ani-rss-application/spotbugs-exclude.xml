@@ -59,6 +59,12 @@
         <Class name="ani.rss.ownership.QuarantineService"/>
         <Bug pattern="CT_CONSTRUCTOR_THROW"/>
     </Match>
+    <!-- Constructor overloads delegate to the injectable clock constructor;
+         rejecting an invalid test/programmer dependency is intentional. -->
+    <Match>
+        <Class name="ani.rss.service.AnimeGardenService"/>
+        <Bug pattern="CT_CONSTRUCTOR_THROW"/>
+    </Match>
     <Match>
         <Class name="ani.rss.service.BackupService"/>
         <Field name="clearService"/>

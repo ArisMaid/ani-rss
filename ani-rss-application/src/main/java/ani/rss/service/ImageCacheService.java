@@ -415,7 +415,7 @@ public class ImageCacheService {
                     }
                     trimPublicEntries();
                 }
-            } catch (Exception ignored) {
+            } catch (IOException | RuntimeException ignored) {
                 // A corrupt optional image manifest must never prevent startup.
                 publicEntries.clear();
             } finally {

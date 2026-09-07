@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "runId": "w6-hot-list-2026-09-07T02-12-10.550885300Z-b6b4fe58",
+  "commit": "674f7b5508062629a62b177b3c25443bd3f22b4e",
+  "dirty": false,
+  "buildIdentity": "D:\\Github\\AI\\Codex\\anirss\\ani-rss-application\\target\\classes",
+  "measurementKind": "service-performance",
+  "systemUnderTest": [
+    "MikanService",
+    "MikanListCacheRepository",
+    "PublicScoreService"
+  ],
+  "stubbedBoundaries": [
+    "MikanListLoader",
+    "public score loader"
+  ],
+  "scenario": "mikan-list-cold-in-process-hot-restart-persistent",
+  "clockMode": "real",
+  "environment": {
+    "sampleCount": 30,
+    "arch": "amd64",
+    "os": "Windows 11",
+    "java": "25.0.4.1",
+    "configRoot": "D:\\Github\\AI\\Codex\\anirss\\ani-rss-application\\target\\w6-hot-list-3384de62-d904-40d2-8c71-1efc6e406d04"
+  },
+  "fixture": {
+    "season": "2026 summer",
+    "upstreamListLoads": 1,
+    "fixtureHash": "ca2eac782bea8cb676f407ab00f0e459f0889d86a94a176aba781f717d81c2b8"
+  },
+  "samples": [
+    {
+      "stage": "cold",
+      "serviceDurationMs": 137.579
+    },
+    {
+      "p95ServiceDurationMs": 0.0598,
+      "sampleCount": 30,
+      "stage": "in-process-hot",
+      "serviceDurationMs": [
+        0.0765,
+        0.0457,
+        0.0415,
+        0.0409,
+        0.0409,
+        0.0527,
+        0.0428,
+        0.0409,
+        0.042,
+        0.0428,
+        0.0403,
+        0.0536,
+        0.0422,
+        0.0418,
+        0.0417,
+        0.0496,
+        0.0416,
+        0.0398,
+        0.0386,
+        0.059,
+        0.0414,
+        0.0388,
+        0.0486,
+        0.0399,
+        0.0389,
+        0.0598,
+        0.0418,
+        0.0407,
+        0.047,
+        0.0474
+      ]
+    },
+    {
+      "stage": "restart-persistent",
+      "serviceDurationMs": 0.801
+    }
+  ],
+  "counters": {
+    "mikanListLoaderCalls": 1,
+    "hotSampleCount": 30,
+    "hotP95TargetMs": 200,
+    "databaseQueries": null,
+    "lockWaitMs": null,
+    "httpRequests": null
+  },
+  "assertions": [
+    "cold service call loads one synthetic Mikan snapshot",
+    "30 complete in-process hot list service calls reuse the snapshot",
+    "a cache-memory miss after reopen restores the same snapshot from SQLite",
+    "hot p95 is compared with the existing 200ms target without changing the threshold"
+  ],
+  "limitations": [
+    "serviceDurationMs uses monotonic nanosecond timing converted to decimal milliseconds and is not end-to-end HTTP time; it includes the real service response copy and score-cache read",
+    "Mikan list transport and public score loader are synthetic; no external account or production data is used",
+    "database query count and lock wait are uninstrumented (null), not inferred from the 30 samples"
+  ]
+}

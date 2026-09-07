@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "runId": "w6-services-2026-09-07T02-12-10.268634200Z-3915b43b",
+  "commit": "674f7b5508062629a62b177b3c25443bd3f22b4e",
+  "dirty": false,
+  "buildIdentity": "D:\\Github\\AI\\Codex\\anirss\\ani-rss-application\\target\\classes",
+  "measurementKind": "service-fixture",
+  "systemUnderTest": [
+    "MikanService",
+    "PublicScoreService",
+    "AnimeGardenService",
+    "CacheService",
+    "ImageCacheService",
+    "SafeImageFetcher"
+  ],
+  "stubbedBoundaries": [
+    "Mikan list loader",
+    "AnimeGarden subject/search loader",
+    "local image HTTP transport"
+  ],
+  "scenario": "mikan-96-anime-garden-two-consumers-images-50",
+  "clockMode": "real",
+  "environment": {
+    "os": "Windows 11",
+    "configRoot": "D:\\Github\\AI\\Codex\\anirss\\ani-rss-application\\target\\w6-service-fixture-3ccee818-d039-4058-9b54-cf732e54afa6",
+    "arch": "amd64",
+    "java": "25.0.4.1"
+  },
+  "fixture": {
+    "animeGardenSearchConsumers": 1,
+    "mikanWeeks": 2,
+    "fixtureHash": "8150046314bea22ec0c533660bea4f223151eed16554b219982b3176e4e27389",
+    "mikanLargestGroupItems": 64,
+    "imageLogicalReferences": 50,
+    "animeGardenDefaultConsumers": 1,
+    "mikanEntries": 96,
+    "imageBytes": "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4XmO45OYGRAwQCgAohgV5hwtPMgAAAABJRU5ErkJggg==",
+    "imageUniqueUrls": 25
+  },
+  "samples": [
+    {
+      "animeGardenDefaultWeekCount": 2,
+      "animeGardenDefaultEnrichmentKeys": [
+        "900001",
+        "900002"
+      ],
+      "imageRequestByPath": {
+        "/images/fixture-21": 1,
+        "/images/fixture-20": 1,
+        "/images/fixture-24": 1,
+        "/images/fixture-23": 1,
+        "/images/fixture-22": 1,
+        "/images/fixture-2": 1,
+        "/images/fixture-3": 1,
+        "/images/fixture-0": 1,
+        "/images/fixture-1": 1,
+        "/images/fixture-6": 1,
+        "/images/fixture-18": 1,
+        "/images/fixture-7": 1,
+        "/images/fixture-17": 1,
+        "/images/fixture-4": 1,
+        "/images/fixture-16": 1,
+        "/images/fixture-5": 1,
+        "/images/fixture-15": 1,
+        "/images/fixture-8": 1,
+        "/images/fixture-9": 1,
+        "/images/fixture-19": 1,
+        "/images/versioned": 2,
+        "/images/fixture-10": 1,
+        "/images/fixture-14": 1,
+        "/images/fixture-13": 1,
+        "/images/fixture-12": 1,
+        "/images/fixture-11": 1
+      },
+      "animeGardenSearchEnrichmentKeys": [
+        "900003"
+      ],
+      "animeGardenDefaultListLoaderCalls": 1,
+      "animeGardenSearchWeekCount": 1,
+      "mikanListLoaderCalls": 1,
+      "imageUpstreamRequests": 27,
+      "imageStreamBytes": 73
+    }
+  ],
+  "counters": {
+    "rssTransportRequests": null,
+    "downloaderListCalls": null,
+    "dbQueries": null,
+    "fileWalks": null,
+    "imageUpstreamRequests": 27,
+    "imageMaxExternalConcurrency": null
+  },
+  "assertions": [
+    "96 Mikan entries span at least two weeks and one group larger than 48",
+    "AnimeGarden default and single-subject search snapshots remain independently enrichable",
+    "50 logical image references use 25 shared URLs across two sessions",
+    "same-key image content version change produces a new ETag",
+    "image stream is opened and fully read through the production lease handle"
+  ],
+  "limitations": [
+    "Mikan and AnimeGarden external list/search transports are injected fixture loaders; the production consumers are real.",
+    "No real downloader, external source account, production database, or user media is touched.",
+    "DB query, lock-wait, file-walk, and queue-depth counters are explicitly unmeasured (null), not inferred from fixture size.",
+    "Image version change is forced through the cache's exact-entry maintenance path to make the replacement observable in one isolated run."
+  ]
+}

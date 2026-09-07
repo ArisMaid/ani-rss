@@ -1,67 +1,76 @@
 # Fork 性能基线与验收记录
 
-本文件只记录实际执行结果。目标阈值、隔离夹具结果和真实实例结果分开列出，任何未连接真实账号、下载器或浏览器的项目都不标记为生产验证。
+本文件只记录实际执行结果。静态 bundle、浏览器启动资源和 Java Service fixture 分开统计；合成边界不冒充真实外部服务性能。
 
-## 版本与环境
-
-最近一次隔离夹具运行：`t0-db76860d`；原始 JSON 与提交哈希保持一一对应。
+## 版本、对照与环境
 
 | 项目 | 实际值 |
 | --- | --- |
-| 对照提交 | `562454f287645531e09bb2ada65afd31dbfa4091` (`3.2.28.58`) |
-| 性能代码提交 | `db76860d` (`3.2.28.61`) |
-| 发布标签 | `v3.2.28.61`（包含本基线、验证文档与发布门禁修复） |
+| 发布版本 | `3.2.28.62`，计划发布标签 `v3.2.28.62` |
+| 行为代码提交 | `19dfaf3a` |
+| 版本提交 | `674f7b55` |
+| 最终证据提交 | `4df5e7e2` |
+| 最新 fork 主对照 | `02990a97dcb993040ade2c121b94ebd9eefe2f3e` (`v3.2.28.61`) |
+| 历史目标对照 | `562454f287645531e09bb2ada65afd31dbfa4091`，仅用于历史说明 |
 | Node / pnpm | Node `v24.16.0` / pnpm `11.19.0` |
 | Java / Maven | Temurin `25.0.4.1` / Apache Maven `3.9.11`，项目按 Java 17 release 编译 |
-| 机器 | Windows `win32/x64`；CPU 型号记录在原始 JSON |
-| HTTP 模式 | `127.0.0.1` 隔离 HTTP stub；不读取真实账号数据 |
-| fixture | 100 个订阅、96 个 Mikan 条目、50 张内存小图片 |
-| 原始数据 | [`docs/performance-data/t0-db76860d.json`](performance-data/t0-db76860d.json) |
+| 机器 | Windows 11 `amd64`；细节见原始 JSON |
+| 外部边界 | `127.0.0.1` 合成 HTTP、loader 和 downloader stub；不读取生产账号或文件 |
+
+## 原始数据
+
+- [`w6-services-v3.2.28.62-20260907.json`](performance-data/w6-services-v3.2.28.62-20260907.json)：96 Mikan、AnimeGarden 两类消费者、50 个逻辑图片引用。
+- [`w6-hot-list-v3.2.28.62-20260907.json`](performance-data/w6-hot-list-v3.2.28.62-20260907.json)：冷/30 次进程内热/重启持久缓存。
+- [`w6-rss-v3.2.28.62-20260907.json`](performance-data/w6-rss-v3.2.28.62-20260907.json)：实际 RssTask 服务链和 100 个启用订阅。
+- [`w7-browser-v3.2.28.62-20260907.json`](performance-data/w7-browser-v3.2.28.62-20260907.json)：生产 Vite 输出的 8 个浏览器场景；`commit=4df5e7e2`、`dirty=false`。
+
+## 静态 bundle 门禁
+
+构建输出为唯一目录 `ani-rss-ui/w7-dist-20260907-f`，使用固定 gzip 统计和 Vite manifest/module map；没有自动更新预算。
+
+| 场景 | JS gzip | CSS gzip | 预算结果 |
+| --- | ---: | ---: | --- |
+| `staticEntryClosure` | 105,194 B | 48,953 B | 通过 |
+| login | 201,949 B | 63,229 B | 通过 |
+| home | 192,168 B | 61,822 B | 通过 |
+| subscriptions | 185,246 B | 63,645 B | 通过 |
+
+所有场景都没有播放器、Markdown 或备份模块；首页和订阅场景增加的共享入口引用已写入 [`ani-rss-ui/scripts/bundle-budget.json`](../ani-rss-ui/scripts/bundle-budget.json)，并保留原因、旧值和新值。历史 `562454f2` 的 431,801 B 首入口数字只作为旧口径说明，不推导本轮真实首屏下降比例。
+
+## W7 浏览器资源
+
+使用生产输出启动本地 fixture。登录、首页、订阅各自先在同一 session 中跑 cold，再跑 hot；播放和设置使用干净 session。每个场景等待明确 UI marker，并保留 500ms 稳定窗口。
+
+| 场景 | JS/CSS 资源数 | 就绪时间 | page/console/chunk 错误 | 备注 |
+| --- | ---: | ---: | --- | --- |
+| login cold/hot | 42 / 42 | 1,809.4 / 1,997.7 ms | 0 / 0 / 0 | 未登录 CSRF/IP-login 各返回预期 401 |
+| home cold/hot | 37 / 37 | 2,027.0 / 1,937.5 ms | 0 / 0 / 0 | 真实首页组件与轮询 fixture |
+| subscriptions cold/hot | 42 / 42 | 1,748.1 / 1,981.4 ms | 0 / 0 / 0 | 真实订阅列表组件 |
+| player | 46 | 3,477.7 ms | 0 / 0 / 0 | 实际点击播放列表并加载 ArtPlayer；合成视频解码事件列为 `mediaErrors` |
+| settings | 67 | 1,798.9 ms | 0 / 0 / 0 | 实际设置页动态路由 |
+
+浏览器传输统计、请求 URL、编码和错误原始值均保留在 W7 JSON；四条 HTTP 401 是故意的未登录边界，其他 HTTP 错误为 0。
+
+## W6 Service fixture
+
+| 场景 | 实测结果 | 口径限制 |
+| --- | --- | --- |
+| Mikan/AnimeGarden/图片 | 96 条 Mikan、2 周、最大组 64；AnimeGarden default/search 可独立补载；50 引用/25 URL；图片上游请求 27 | Mikan、AnimeGarden loader 和图片 HTTP 是合成边界；生产 Service、缓存和 lease 为真实实现 |
+| 热 Mikan 列表 | cold `137.579ms`；30 次 in-process hot p95 `0.0598ms`；restart-persistent `0.801ms` | 单 Service 计时，DB 查询/锁等待/HTTP 为 null，不是生产 HTTP p95 |
+| RSS 100 订阅 | RSS 请求 100；downloader connect/list 各 1；100/100 `SUCCESS`；虚拟节流 `50,000ms`；墙钟 `1,226ms` | 空 RSS 不进入 add/download、files、move、rename 或缺集恢复写路径；对应计数明确为 null |
 
 ## 可重复命令
 
 ```text
 cd ani-rss-ui
 pnpm install --frozen-lockfile
-pnpm test
-pnpm build:verify
-pnpm check:bundle
-pnpm measure:baseline
+pnpm test -- --run
+pnpm exec vite build --outDir w7-dist-<unique> --emptyOutDir false
+$env:BUNDLE_OUTPUT_DIR = 'w7-dist-<unique>'; pnpm check:bundle
 ```
-
-后端编译使用隔离 Maven 路径，PowerShell 参数必须整体引用：
 
 ```text
-& 'C:\Users\tendo\.cache\codex-runtimes\anirss-build\apache-maven-3.9.11\bin\mvn.cmd' -B '-Dskip.frontend=true' '-DskipTests' '-pl' 'ani-rss-application' '-am' 'compile'
+& 'C:\Users\tendo\.cache\codex-runtimes\anirss-build\apache-maven-3.9.11\bin\mvn.cmd' '-B' '-Pci' '-Dskip.frontend=true' 'verify'
 ```
 
-`measure:baseline` 启动一次本地 HTTP stub，生成新的 `docs/performance-data/t0-<commit>.json`。它测量请求调度和前端纯逻辑，不冒充完整 Java 服务或真实上游性能。
-
-## 隔离 fixture 实测结果
-
-| 场景 | 实测结果 | 验收解释 |
-| --- | --- | --- |
-| 热 Mikan 列表 | 30 次；stub p50 `0.434ms`、p95 `1.455ms`、最大 `10.123ms` | 仅证明本地 stub 往返，不证明真实 Mikan p95 |
-| Mikan 评分 | 96 条，批量上限 48；外部 stub 请求 `2`；剩余 retryable `0` | 证明首轮覆盖两个批次；真实评分源仍未测 |
-| 同资源图片 | 20 个消费者、相同 key 外部请求 `1` | 证明 fixture 单飞；Java `ImageCacheServiceTest` 另测认证/重启缓存 |
-| 图片失败恢复 | 首次失败后下一轮恢复，恢复实体 `15` bytes；含恢复共 `3` 次外部请求 | 证明 fixture 可恢复；30 秒失败缓存由 Java 实现测试/审查 |
-| 慢下载器轮询 | 响应模拟 8 秒；隐藏后只启动 `1` 个请求；最大在途 `1` | 仅验证前端调度模型，真实下载器未连接 |
-| RSS 刷新 | 100 个启用订阅、100 个 RSS stub 请求；主动 sleep `0ms`；网络 `35.582ms`，业务 `4.503ms` | 证明 fixture 不包含固定等待；RssTask/真实源仍需 Java/下载器环境复核 |
-| 首屏依赖闭包 | JS gzip `105,196` bytes，CSS gzip `48,953` bytes | 对照 `562454f2` 实测首入口 JS 闭包 `431,801` bytes，减少约 `75.6%`；门禁见 `scripts/bundle-budget.json` |
-
-## 已通过的代码门禁
-
-- 前端 Vitest：6 tests passed，包含 96 条评分分批、失败重试、截止时间和首批悬挂不阻塞后续批次场景。
-- `pnpm build:verify`：隔离输出构建通过。
-- `pnpm check:bundle`：按 manifest 入口闭包统计，播放器/Markdown/备份内容禁入，25% JS 门槛通过。
-- 后端 Java release 编译通过。
-
-## 仍未宣称完成的指标
-
-- 真实 Mikan、Bangumi、AnimeGarden、图片代理响应的 200ms/2s/超时/429/500 分布。
-- 真实浏览器登录、首屏 LCP、路由/弹窗操作、媒体 Range/字幕/外部播放器操作。
-- 真实下载器 8 秒响应、100 订阅 RSS 周期的锁等待、数据库调用、文件 walk 和缺集恢复行为。
-- 运行中 Java 图片缓存的失败 30 秒冷却、容量淘汰失败报告和进程重启后的真实目录复用。
-- Docker Desktop/Linux engine 本地构建；多架构镜像和 GitHub Release 只在发布工作流成功后才能单独列为已验证。
-
-这些项目需要隔离账号、下载器、媒体句柄或浏览器服务；没有这些外部条件时保留为待验证，不用 stub 数值替代。
+禁止以 `clean`、批量删除或覆盖历史输出作为测量前置条件。生产外部源、下载器和数据库费用采样继续按“未验证（原因）”记录，不能以 fixture 数字替代。

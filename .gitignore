@@ -58,6 +58,10 @@ ani-rss-update.exe
 .pnpm-store
 .playwright-cli/
 
+# Local follow-up-plan verification outputs.
+ani-rss-ui/w7-dist-*/
+output/
+
 # Local backups and generated first-run credentials may contain secrets.
 ani-rss.backup.*.zip
 initial-setup-code.txt

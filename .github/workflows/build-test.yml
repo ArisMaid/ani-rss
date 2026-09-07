@@ -9,6 +9,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - name: Set up JDK 17
@@ -35,10 +36,36 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm test -- --run
-          W7_DIST_DIR="$RUNNER_TEMP/ani-rss-w7-dist-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          export W7_DIST_DIR
-          pnpm exec vite build --outDir "$W7_DIST_DIR" --emptyOutDir false
-          BUNDLE_OUTPUT_DIR="$W7_DIST_DIR" pnpm check:bundle
-          W7_DIST_DIR="$W7_DIST_DIR" \
-            W7_REPORT_PATH="$RUNNER_TEMP/ani-rss-w7-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json" \
-            bash scripts/w7-browser-smoke.sh
+          BROWSER_DIST_DIR="$RUNNER_TEMP/ani-rss-browser-dist-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          W7_REPORT_PATH="$RUNNER_TEMP/ani-rss-w7-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          N08_REPORT_PATH="$RUNNER_TEMP/ani-rss-n08-browser-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          pnpm exec vite build --outDir "$BROWSER_DIST_DIR" --emptyOutDir false
+          BUNDLE_OUTPUT_DIR="$BROWSER_DIST_DIR" pnpm check:bundle
+          {
+            echo "ANI_RSS_BROWSER_DIST_DIR=$BROWSER_DIST_DIR"
+            echo "ANI_RSS_W7_REPORT_PATH=$W7_REPORT_PATH"
+            echo "ANI_RSS_N08_REPORT_PATH=$N08_REPORT_PATH"
+          } >> "$GITHUB_ENV"
+      - name: W7 browser smoke
+        working-directory: ani-rss-ui
+        run: timeout --signal=TERM 6m bash scripts/w7-browser-smoke.sh
+        env:
+          W7_DIST_DIR: ${{ env.ANI_RSS_BROWSER_DIST_DIR }}
+          W7_REPORT_PATH: ${{ env.ANI_RSS_W7_REPORT_PATH }}
+      - name: N08 slow-polling browser smoke
+        working-directory: ani-rss-ui
+        run: timeout --signal=TERM 6m bash scripts/n08-browser-smoke.sh
+        env:
+          N08_DIST_DIR: ${{ env.ANI_RSS_BROWSER_DIST_DIR }}
+          N08_REPORT_PATH: ${{ env.ANI_RSS_N08_REPORT_PATH }}
+      - name: Upload browser smoke evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ani-rss-browser-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/ani-rss-w7-browser-*.json
+            ${{ runner.temp }}/ani-rss-n08-browser-*.json
+            ${{ runner.temp }}/w7-browser-server.log
+            ${{ runner.temp }}/n08-browser-server.log

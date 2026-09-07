@@ -31,6 +31,10 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -449,6 +453,181 @@ class ImageCacheServiceTest {
         }
     }
 
+    @Test
+    void manifestWriterKeepsARevisionPublishedDuringAnInFlightSnapshot() throws Exception {
+        CountDownLatch firstWriteStarted = new CountDownLatch(1);
+        CountDownLatch releaseFirstWrite = new CountDownLatch(1);
+        AtomicBoolean first = new AtomicBoolean(true);
+        List<String> payloads = new CopyOnWriteArrayList<>();
+        ImageCacheService service = new ImageCacheService((root, json) -> {
+            payloads.add(json);
+            if (first.compareAndSet(true, false)) {
+                firstWriteStarted.countDown();
+                try {
+                    if (!releaseFirstWrite.await(5, TimeUnit.SECONDS)) {
+                        throw new IOException("manifest barrier timed out");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("manifest barrier interrupted", e);
+                }
+            }
+        });
+        try {
+            markManifestDirty(service);
+            assertTrue(firstWriteStarted.await(5, TimeUnit.SECONDS));
+            long firstRevision = service.publicCacheDiagnostics().currentRevision();
+
+            markManifestDirty(service);
+            releaseFirstWrite.countDown();
+            awaitCondition(() -> service.publicCacheDiagnostics().persistedRevision()
+                    == service.publicCacheDiagnostics().currentRevision()
+                    && service.publicCacheDiagnostics().writeSuccesses() >= 2);
+
+            ImageCacheService.PublicCacheDiagnostics diagnostics = service.publicCacheDiagnostics();
+            assertTrue(diagnostics.currentRevision() > firstRevision);
+            assertEquals(diagnostics.currentRevision(), diagnostics.persistedRevision());
+            assertEquals(2, payloads.size());
+            assertFalse(diagnostics.dirty());
+        } finally {
+            releaseFirstWrite.countDown();
+            service.closeImageClients();
+        }
+    }
+
+    @Test
+    void closeFlushesTheLatestManifestAndReportsClosedLifecycle() throws Exception {
+        AtomicInteger writes = new AtomicInteger();
+        ImageCacheService service = new ImageCacheService((root, json) -> writes.incrementAndGet());
+        markManifestDirty(service);
+
+        service.closeImageClients();
+
+        ImageCacheService.PublicCacheDiagnostics diagnostics = service.publicCacheDiagnostics();
+        assertEquals("CLOSED", diagnostics.lifecycle());
+        assertEquals("success", diagnostics.finalFlushStatus());
+        assertEquals(diagnostics.currentRevision(), diagnostics.persistedRevision());
+        assertTrue(writes.get() >= 1);
+        service.closeImageClients();
+    }
+
+    @Test
+    void closeReportsFinalManifestFailureWithoutClaimingPersistence() throws Exception {
+        ImageCacheService service = new ImageCacheService((root, json) -> {
+            throw new IOException("manifest test failure");
+        });
+        markManifestDirty(service);
+
+        service.closeImageClients();
+
+        ImageCacheService.PublicCacheDiagnostics diagnostics = service.publicCacheDiagnostics();
+        assertEquals("CLOSED", diagnostics.lifecycle());
+        assertEquals("failed", diagnostics.finalFlushStatus());
+        assertTrue(diagnostics.writeFailures() >= 1);
+        assertTrue(diagnostics.dirty());
+        assertNotEquals(diagnostics.currentRevision(), diagnostics.persistedRevision());
+    }
+
+    @Test
+    void closeReportsTimeoutWhenTheSingleManifestWriterCannotReleaseItsLease() throws Exception {
+        CountDownLatch writeStarted = new CountDownLatch(1);
+        ImageCacheService service = new ImageCacheService((root, json) -> {
+            writeStarted.countDown();
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(5_500);
+            while (System.nanoTime() < deadline) {
+                try {
+                    Thread.sleep(20);
+                } catch (InterruptedException ignored) {
+                    // Simulate a filesystem call that does not abort immediately.
+                }
+            }
+        });
+        markManifestDirty(service);
+        assertTrue(writeStarted.await(5, TimeUnit.SECONDS));
+
+        long started = System.nanoTime();
+        service.closeImageClients();
+        long elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+        assertTrue(elapsedMillis >= 4_500);
+        assertEquals("timeout", service.publicCacheDiagnostics().finalFlushStatus());
+    }
+
+    @Test
+    void pendingDeletionIsPathDeduplicatedAndUsesBoundedBackoff() throws Exception {
+        ImageCacheService service = new ImageCacheService();
+        try {
+            Path root = tempDir.resolve("image-cache").resolve("public");
+            Files.createDirectories(root);
+            Path blocked = root.resolve("blocked-old-image");
+            Files.createDirectory(blocked);
+            Files.writeString(blocked.resolve("child"), "keep");
+            Method remember = ImageCacheService.class.getDeclaredMethod(
+                    "rememberPendingDeletion", String.class, Path.class, long.class);
+            remember.setAccessible(true);
+            assertEquals(true, remember.invoke(service, "key-a", blocked, 7L));
+            assertEquals(true, remember.invoke(service, "key-b", blocked, 99L));
+            assertEquals(1, service.publicCacheDiagnostics().pendingDeletionFiles());
+            assertEquals(7, service.publicCacheDiagnostics().pendingDeletionBytes());
+
+            Method retry = ImageCacheService.class.getDeclaredMethod("retryPendingDeletions");
+            retry.setAccessible(true);
+            retry.invoke(service);
+            Map<String, Object> pending = pendingDeletions(service);
+            Object value = pending.values().iterator().next();
+            assertEquals(1, ((Integer) recordValue(value, "attempts")).intValue());
+            long nextRetryAt = recordValue(value, "nextRetryAt");
+            assertTrue(nextRetryAt > System.currentTimeMillis());
+            long retries = service.publicCacheDiagnostics().pendingDeletionRetries();
+            retry.invoke(service);
+            assertEquals(retries, service.publicCacheDiagnostics().pendingDeletionRetries());
+        } finally {
+            service.closeImageClients();
+        }
+    }
+
+    @Test
+    void pendingDeletionAdmissionIsBoundedAndCountedInTrackedBudget() throws Exception {
+        ImageCacheService service = new ImageCacheService();
+        try {
+            Path root = tempDir.resolve("image-cache").resolve("public");
+            Files.createDirectories(root);
+            Method remember = ImageCacheService.class.getDeclaredMethod(
+                    "rememberPendingDeletion", String.class, Path.class, long.class);
+            remember.setAccessible(true);
+            for (int index = 0; index < 1_025; index++) {
+                remember.invoke(service, "key-" + index,
+                        root.resolve("pending-" + index), 1L);
+            }
+            ImageCacheService.PublicCacheDiagnostics diagnostics = service.publicCacheDiagnostics();
+            assertEquals(1_024, diagnostics.pendingDeletionFiles());
+            assertEquals(1_024, diagnostics.pendingDeletionBytes());
+            assertEquals(1_024, diagnostics.trackedFiles());
+            assertEquals(1_024, diagnostics.trackedBytes());
+        } finally {
+            service.closeImageClients();
+        }
+    }
+
+    @Test
+    void reservedBytesRejectAnOversizedAdmissionWithoutChangingReservation() throws Exception {
+        ImageCacheService service = new ImageCacheService();
+        try {
+            Field reserved = ImageCacheService.class.getDeclaredField("publicReservedBytes");
+            reserved.setAccessible(true);
+            AtomicLong bytes = (AtomicLong) reserved.get(service);
+            bytes.set(256L * 1024 * 1024);
+            Method reserve = ImageCacheService.class.getDeclaredMethod(
+                    "reservePublicCapacity", Class.forName(
+                            "ani.rss.service.ImageCacheService$PublicEntry"), long.class);
+            reserve.setAccessible(true);
+            assertEquals(false, reserve.invoke(service, new Object[]{null, 1L}));
+            assertEquals(256L * 1024 * 1024, bytes.get());
+        } finally {
+            service.closeImageClients();
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static Map<String, Object> publicEntries(ImageCacheService service) throws Exception {
         Field field = ImageCacheService.class.getDeclaredField("publicEntries");
@@ -469,6 +648,27 @@ class ImageCacheServiceTest {
         Field field = ImageCacheService.class.getDeclaredField("publicFlights");
         field.setAccessible(true);
         return (Map<String, CompletableFuture<Object>>) (Map<?, ?>) field.get(service);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> pendingDeletions(ImageCacheService service) throws Exception {
+        Field field = ImageCacheService.class.getDeclaredField("publicPendingDeletions");
+        field.setAccessible(true);
+        return (Map<String, Object>) field.get(service);
+    }
+
+    private static void markManifestDirty(ImageCacheService service) throws Exception {
+        Method mark = ImageCacheService.class.getDeclaredMethod("markPublicManifestDirty");
+        mark.setAccessible(true);
+        mark.invoke(service);
+    }
+
+    private static void awaitCondition(BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+        while (!condition.getAsBoolean() && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertTrue(condition.getAsBoolean(), "condition did not become true before the deadline");
     }
 
     private static <T> T recordValue(Object record, String name) throws Exception {

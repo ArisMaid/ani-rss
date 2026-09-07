@@ -233,7 +233,8 @@ let searchGeneration = 0
 let listGeneration = 0
 let listController
 let scoreController
-let scoreActiveKey = ''
+let scoreActivation
+let scoreStartKey = ''
 let groupGeneration = 0
 let groupController
 let currentListValid = false
@@ -253,12 +254,10 @@ let search = () => {
 
 let cancelListRequests = () => {
   listController?.abort()
-  markScoreIncomplete()
-  scoreController?.abort()
+  cancelScoreActivation('list')
   groupController?.abort()
   groupGeneration++
   listController = undefined
-  scoreController = undefined
   groupController = undefined
   groupLoading.value = false
   loading.value = false
@@ -271,22 +270,49 @@ const scoreState = weekName => {
   return scoreStates.value[weekName]
 }
 
-const markScoreIncomplete = () => {
-  if (!scoreActiveKey) return
-  const state = scoreStates.value[scoreActiveKey]
-  if (state?.status === 'loading') {
+const isCurrentScoreActivation = activation => scoreActivation === activation
+  && activation.generation === listGeneration
+  && scoreStates.value[activation.groupKey] === activation.state
+  && !activation.controller.signal.aborted
+
+const cancelScoreActivation = (_reason = 'cancelled') => {
+  const activation = scoreActivation
+  if (!activation) return false
+
+  scoreActivation = undefined
+  if (scoreController === activation.controller) scoreController = undefined
+  if (scoreStartKey === activation.startKey) scoreStartKey = ''
+
+  const state = scoreStates.value[activation.groupKey]
+  if (state === activation.state && state.status === 'loading') {
     state.status = 'incomplete'
     state.error = ''
+    state.pendingIds = [...new Set(state.pendingIds || [])]
   }
+  activation.controller.abort()
+  return true
 }
 
 let startScores = async (generation = listGeneration, {force = false} = {}) => {
+  const groupKey = activeName.value
+  const existing = scoreActivation
+  if (existing && (existing.generation !== generation || existing.groupKey !== groupKey)) {
+    cancelScoreActivation('group-switch')
+  }
   if (document.hidden || !showScore.value || !dialogVisible.value || generation !== listGeneration) return
-  const startKey = `${generation}:${activeName.value}:${showScore.value}`
-  const state = scoreState(activeName.value)
-  if (!force && (scoreStartKey === startKey || state.status === 'loading'
-      || state.status === 'complete' || state.status === 'failed')) return
-  const week = data.value.weeks.find(item => item.weekLabel === activeName.value)
+
+  const startKey = `${generation}:${groupKey}:${showScore.value}`
+  const state = scoreState(groupKey)
+  const current = scoreActivation
+  if (current && current.generation === generation && current.groupKey === groupKey) return
+  if (!force && (scoreStartKey === startKey || state.status === 'complete'
+      || state.status === 'failed')) return
+  if (!force && state.status === 'loading') {
+    state.status = 'incomplete'
+    state.error = ''
+  }
+
+  const week = data.value.weeks.find(item => item.weekLabel === groupKey)
   const items = week?.items || []
   if (!items.length) return
   const itemsById = new Map(items
@@ -301,49 +327,62 @@ let startScores = async (generation = listGeneration, {force = false} = {}) => {
     state.pendingIds = []
     return
   }
+
+  const controller = new AbortController()
+  const activation = {
+    generation,
+    groupKey,
+    controller,
+    state,
+    startKey
+  }
+  scoreActivation = activation
+  scoreController = controller
   scoreStartKey = startKey
-  scoreActiveKey = activeName.value
   state.status = 'loading'
   state.error = ''
-  state.pendingIds = [...ids]
-  scoreController?.abort()
-  const controller = new AbortController()
-  scoreController = controller
+  state.pendingIds = [...new Set(ids)]
   try {
-    await enrichScores({
+    const pending = await enrichScores({
       items: ids.map(id => itemsById.get(id)),
       fetchScores: (requestIds, options) =>
         http.mikanScores(requestIds, {...options, silent: true}),
       onUpdate: ({scores, subscribedBgmIds}, meta) => {
-        if (generation !== listGeneration || controller.signal.aborted) return
+        if (!isCurrentScoreActivation(activation)) return
         mergeScores(data.value.weeks, scores, subscribedBgmIds)
         if (meta?.batch) {
           const retryable = new Set(meta.retryable || [])
-          state.pendingIds = state.pendingIds.filter(id =>
+          activation.state.pendingIds = activation.state.pendingIds.filter(id =>
               !meta.batch.includes(id) || retryable.has(id))
         }
       },
       signal: controller.signal
-    }).then(pending => {
-      if (generation !== listGeneration || controller.signal.aborted) return
+    })
+
+    if (isCurrentScoreActivation(activation)) {
       state.pendingIds = [...pending]
       state.status = pending.length ? 'incomplete' : 'complete'
-    })
+    }
   } catch (error) {
-    if (error?.name !== 'AbortError' && error?.code !== 'REQUEST_ABORTED'
-        && !controller.signal.aborted && generation === listGeneration) {
+    if (isCurrentScoreActivation(activation)
+        && error?.name !== 'AbortError' && error?.code !== 'REQUEST_ABORTED'
+        && !controller.signal.aborted) {
       state.status = 'failed'
       state.error = error?.message || '评分加载失败'
-      ElMessage.warning('评分暂时不可用，可重新切换星期重试')
+      ElMessage.warning('评分加载失败，可重试剩余项目')
     }
   } finally {
-    if (scoreController === controller) scoreController = undefined
-    if (scoreActiveKey === activeName.value && scoreController === undefined) scoreActiveKey = ''
-    if (scoreStartKey === startKey) scoreStartKey = ''
+    if (scoreActivation === activation) {
+      scoreActivation = undefined
+      if (scoreController === controller) scoreController = undefined
+      if (scoreStartKey === startKey) scoreStartKey = ''
+    }
   }
 }
 
 const retryScores = () => {
+  if (scoreActivation?.generation === listGeneration
+      && scoreActivation.groupKey === activeName.value) return
   scoreStartKey = ''
   void startScores(listGeneration, {force: true})
 }
@@ -457,7 +496,6 @@ let close = () => {
   dialogVisible.value = false
 }
 
-let scoreStartKey = ''
 watch(activeName, () => {
   startScores()
 })
@@ -467,8 +505,7 @@ watch(showScore, value => {
     startScores()
   } else {
     scoreStartKey = ''
-    markScoreIncomplete()
-    scoreController?.abort()
+    cancelScoreActivation('score-disabled')
   }
 })
 
@@ -479,7 +516,6 @@ const pauseForLifecycle = () => {
     currentListValid = false
     needsListReload = true
   }
-  markScoreIncomplete()
   cancelListRequests()
   scoreStartKey = ''
 }

@@ -68,6 +68,19 @@ const validMikanList = title => ({data: {
   totalItems: 1
 }})
 
+const multiWeekMikanList = () => ({data: {
+  seasons: [],
+  weeks: [
+    {weekLabel: '星期一', items: [{
+      url: 'https://mikan.example/Home/Bangumi/123', title: '周一', cover: '', score: 0, exists: false
+    }]},
+    {weekLabel: '星期二', items: [{
+      url: 'https://mikan.example/Home/Bangumi/456', title: '周二', cover: '', score: 0, exists: false
+    }]}
+  ],
+  totalItems: 2
+}})
+
 const validAnimeGardenList = title => ({data: [{
   weekLabel: '星期一', subjects: [{id: '123', name: title, cover: '', score: null, exists: false}]
 }]})
@@ -207,6 +220,44 @@ describe('list view lifecycle', () => {
     resolveScores?.({data: {scores: {}, retryableMikanIds: []}})
   })
 
+  it('restarts Mikan enrichment when switching A to B and back to A', async () => {
+    const scoreRequests = []
+    http.mikan.mockResolvedValue(multiWeekMikanList())
+    http.mikanScores.mockReset().mockImplementation((ids, options) => {
+      let resolve
+      const promise = new Promise(nextResolve => { resolve = nextResolve })
+      scoreRequests.push({ids, signal: options.signal, resolve})
+      return promise
+    })
+
+    wrapper = mount(MikanView, {
+      global: {stubs, directives: {loading: {}}}
+    })
+    wrapper.vm.show({title: '分组切换'})
+    await tick()
+    expect(scoreRequests).toHaveLength(1)
+    expect(scoreRequests[0].ids).toEqual(['123'])
+
+    wrapper.vm.activeName = '星期二'
+    await tick()
+    expect(scoreRequests).toHaveLength(2)
+    expect(scoreRequests[0].signal.aborted).toBe(true)
+
+    wrapper.vm.activeName = '星期一'
+    await tick()
+    expect(scoreRequests).toHaveLength(3)
+    expect(scoreRequests[2].ids).toEqual(['123'])
+    expect(wrapper.vm.scoreStates['星期一'].status).toBe('loading')
+
+    scoreRequests[2].resolve({data: {scores: {'123': 8}, retryableMikanIds: []}})
+    await tick()
+    await tick()
+    expect(wrapper.vm.scoreStates['星期一'].status).toBe('complete')
+    expect(wrapper.vm.scoreStates['星期一'].pendingIds).toEqual([])
+
+    http.mikanScores.mockReset().mockResolvedValue({data: {scores: {}, retryableMikanIds: []}})
+  })
+
   it('uses the submitted Mikan query snapshot when the cancelled list resumes', async () => {
     let resolveSecond
     http.mikan
@@ -313,6 +364,27 @@ describe('list view lifecycle', () => {
     expect(http.animeGardenList).toHaveBeenCalledTimes(2)
     expect(http.animeGardenEnrichment).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).toContain('受控重载列表')
+  })
+
+  it('keeps AnimeGarden list recovery failed when the controlled reload fails', async () => {
+    const expired = Object.assign(new Error('列表已过期'), {
+      code: 'ANIME_GARDEN_LIST_EXPIRED', status: 409
+    })
+    http.animeGardenList.mockReset()
+      .mockResolvedValueOnce(validAnimeGardenList('旧列表'))
+      .mockRejectedValueOnce(new Error('重载服务不可用'))
+    http.animeGardenEnrichment.mockReset().mockRejectedValueOnce(expired)
+
+    wrapper = mount(AnimeGardenView, {
+      global: {stubs, directives: {loading: {}}}
+    })
+    wrapper.vm.show()
+    for (let index = 0; index < 8; index++) await tick()
+
+    expect(http.animeGardenList).toHaveBeenCalledTimes(2)
+    expect(wrapper.vm.listRecoveryState.status).toBe('failed')
+    expect(wrapper.find('[data-list-recovery-status]').text()).toContain('重新加载列表')
+    expect(wrapper.text()).toContain('重载服务不可用')
   })
 
   it('keeps an unknown AnimeGarden score unknown instead of converting it to zero', async () => {

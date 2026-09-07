@@ -40,7 +40,9 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Service
 public class ImageCacheService {
@@ -55,6 +57,9 @@ public class ImageCacheService {
     private static final int PUBLIC_QUEUE_CAPACITY = 48;
     private static final int PUBLIC_WORKERS = 6;
     private static final long PUBLIC_WAIT_TIMEOUT_MILLIS = 12_000;
+    private static final long PUBLIC_BUSY_RETRY_SECONDS = 1;
+    private static final long MANIFEST_RETRY_INITIAL_MILLIS = 1_000;
+    private static final long MANIFEST_RETRY_MAX_MILLIS = 30_000;
     private static final String PUBLIC_MANIFEST = "public-manifest.json";
     private static final SecureRandom RANDOM = new SecureRandom();
     private final Map<String, Entry> entries = new ConcurrentHashMap<>();
@@ -63,8 +68,11 @@ public class ImageCacheService {
     private final Map<String, PublicEntry> publicEntries = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<PublicEntry>> publicFlights = new ConcurrentHashMap<>();
     private final Map<String, FailureEntry> publicFailures = new ConcurrentHashMap<>();
+    private final Map<String, PendingDeletion> publicPendingDeletions = new ConcurrentHashMap<>();
     private final Object[] publicKeyLocks = createLocks();
     private final Object publicManifestLock = new Object();
+    private final AtomicLong publicManifestRevision = new AtomicLong();
+    private final AtomicBoolean publicManifestWriteScheduled = new AtomicBoolean();
     private final ExecutorService publicExecutor = new ThreadPoolExecutor(
             PUBLIC_WORKERS,
             PUBLIC_WORKERS,
@@ -77,7 +85,12 @@ public class ImageCacheService {
     private final ScheduledExecutorService maintenanceExecutor =
             java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
                     daemonFactory("ani-rss-image-maintenance"));
+    private final ScheduledExecutorService publicManifestExecutor =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(
+                    daemonFactory("ani-rss-image-manifest"));
     private volatile boolean publicManifestLoaded;
+    private volatile boolean publicManifestDirty;
+    private volatile boolean closed;
 
     @PostConstruct
     void loadPublicManifestOnStartup() {
@@ -88,8 +101,16 @@ public class ImageCacheService {
 
     @PreDestroy
     void closeImageClients() {
+        if (closed) return;
+        closed = true;
         publicExecutor.shutdownNow();
+        publicFlights.forEach((key, future) -> {
+            future.completeExceptionally(new UpstreamServiceException(
+                    "image cache is closed", null, 0));
+            publicFlights.remove(key, future);
+        });
         maintenanceExecutor.shutdownNow();
+        publicManifestExecutor.shutdownNow();
         SafeImageFetcher.closeCachedClients();
     }
 
@@ -101,6 +122,9 @@ public class ImageCacheService {
     public PublicImage publicImage(String url, HttpServletRequest request) {
         if (!AuthService.validateRequest(request)) {
             throw new AuthenticationFailureException("session required");
+        }
+        if (closed) {
+            throw new UpstreamServiceException("image cache is closed", null, 0);
         }
         String canonical = canonicalPublicUrl(url);
         loadPublicManifest();
@@ -190,7 +214,32 @@ public class ImageCacheService {
 
     private void loadPublicImage(String canonical, String key, CompletableFuture<PublicEntry> future) {
         try {
+            if (closed) {
+                throw new ImageCacheClosedException();
+            }
+            // The flight can be installed after another producer has already
+            // published and removed its own flight. Re-read the cache under
+            // the key lock before touching the network so that race does not
+            // cause a duplicate external fetch.
+            synchronized (publicKeyLock(key)) {
+                PublicEntry current = publicEntries.get(key);
+                if (isUsable(current)) {
+                    future.complete(current);
+                    return;
+                }
+                FailureEntry failure = publicFailures.get(key);
+                if (failure != null && failure.retryAt() > System.currentTimeMillis()) {
+                    future.completeExceptionally(new UpstreamServiceException(
+                            "image source is temporarily unavailable; retry later",
+                            null,
+                            Math.max(1, (failure.retryAt() - System.currentTimeMillis() + 999) / 1000)));
+                    return;
+                }
+            }
             SafeImageFetcher.FetchedImage fetched = SafeImageFetcher.fetch(canonical, ConfigUtil.snapshot());
+            if (closed) {
+                throw new ImageCacheClosedException();
+            }
             Path root = publicRoot();
             Files.createDirectories(root);
             verifyCacheRoot(root);
@@ -215,10 +264,12 @@ public class ImageCacheService {
                 // move happened before this lock, the stale pass could delete
                 // the newly published file at the same key.
                 synchronized (publicKeyLock(key)) {
+                    if (closed) {
+                        throw new ImageCacheClosedException();
+                    }
                     PublicEntry previous = publicEntries.get(key);
                     if (previous != null && previous.activeReaders().get() > 0) {
-                        throw new UpstreamServiceException(
-                                "image cache entry is being read; retry later", null, 1);
+                        throw new PublicImageBusyException();
                     }
                     try {
                         Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE,
@@ -232,17 +283,24 @@ public class ImageCacheService {
                             Files.deleteIfExists(previous.path());
                         } catch (IOException ignored) {
                             // The old exact path is no longer reachable from
-                            // the manifest and can be retried by maintenance.
+                            // the manifest and must be retried by maintenance.
+                            rememberPendingDeletion(key, previous.path());
                         }
                     }
                 }
                 publicFailures.remove(key);
                 trimPublicEntries();
-                persistPublicManifest();
+                markPublicManifestDirty();
                 future.complete(entry);
             } finally {
                 Files.deleteIfExists(temporary);
             }
+        } catch (PublicImageBusyException e) {
+            future.completeExceptionally(new UpstreamServiceException(
+                    "image cache entry is being read; retry later", e, PUBLIC_BUSY_RETRY_SECONDS));
+        } catch (ImageCacheClosedException e) {
+            future.completeExceptionally(new UpstreamServiceException(
+                    "image cache is closed", e, 0));
         } catch (IOException | RuntimeException e) {
             RuntimeException failure = e instanceof UpstreamServiceException upstream
                     && upstream.retryAfterSeconds() > 0
@@ -346,6 +404,15 @@ public class ImageCacheService {
                                 item.key(), item.url(), path, item.contentType(), item.etag(),
                                 item.fetchedAt(), item.expiresAt(), item.length()));
                     }
+                    for (PendingDeletion item : value == null || value.pendingDeletions() == null
+                            ? List.<PendingDeletion>of() : value.pendingDeletions()) {
+                        if (item == null || item.key() == null || item.path() == null) continue;
+                        Path path = Path.of(item.path()).toAbsolutePath().normalize();
+                        if (path.startsWith(publicRoot()) && !Files.isSymbolicLink(path)) {
+                            publicPendingDeletions.put(pendingDeletionKey(item.key(), path),
+                                    new PendingDeletion(item.key(), path.toString()));
+                        }
+                    }
                     trimPublicEntries();
                 }
             } catch (Exception ignored) {
@@ -357,33 +424,95 @@ public class ImageCacheService {
         }
     }
 
-    private void persistPublicManifest() {
-        synchronized (publicManifestLock) {
+    private void markPublicManifestDirty() {
+        publicManifestDirty = true;
+        publicManifestRevision.incrementAndGet();
+        scheduleManifestWriter();
+    }
+
+    private void scheduleManifestWriter() {
+        if (closed || publicManifestWriteScheduled.get()) return;
+        if (!publicManifestWriteScheduled.compareAndSet(false, true)) return;
+        try {
+            publicManifestExecutor.execute(() -> runManifestWriter(MANIFEST_RETRY_INITIAL_MILLIS));
+        } catch (RejectedExecutionException e) {
+            publicManifestWriteScheduled.set(false);
+        }
+    }
+
+    private void runManifestWriter(long retryDelayMillis) {
+        if (closed) {
+            publicManifestWriteScheduled.set(false);
+            return;
+        }
+        if (!publicManifestDirty) {
+            publicManifestWriteScheduled.set(false);
+            if (publicManifestDirty) scheduleManifestWriter();
+            return;
+        }
+
+        long observedRevision = publicManifestRevision.get();
+        if (!persistPublicManifestSnapshot()) {
+            long nextDelay = Math.min(MANIFEST_RETRY_MAX_MILLIS,
+                    Math.max(MANIFEST_RETRY_INITIAL_MILLIS, retryDelayMillis * 2));
             try {
-                Path root = publicRoot();
-                Files.createDirectories(root);
-                verifyCacheRoot(root);
-                List<PublicManifestEntry> entries = publicEntries.values().stream()
+                publicManifestExecutor.schedule(
+                        () -> runManifestWriter(nextDelay), nextDelay, TimeUnit.MILLISECONDS);
+            } catch (RejectedExecutionException e) {
+                publicManifestWriteScheduled.set(false);
+            }
+            return;
+        }
+
+        if (publicManifestRevision.get() == observedRevision) {
+            publicManifestDirty = false;
+        }
+        try {
+            if (publicManifestDirty) {
+                publicManifestExecutor.execute(
+                        () -> runManifestWriter(MANIFEST_RETRY_INITIAL_MILLIS));
+            } else {
+                publicManifestWriteScheduled.set(false);
+                if (publicManifestDirty) scheduleManifestWriter();
+            }
+        } catch (RejectedExecutionException e) {
+            publicManifestWriteScheduled.set(false);
+        }
+    }
+
+    private boolean persistPublicManifestSnapshot() {
+        try {
+            Path root = publicRoot();
+            Files.createDirectories(root);
+            verifyCacheRoot(root);
+            List<PublicManifestEntry> entries;
+            List<PendingDeletion> pendingDeletions;
+            synchronized (publicManifestLock) {
+                entries = publicEntries.values().stream()
                         .map(item -> new PublicManifestEntry(item.key(), item.url(), item.contentType(),
                                 item.etag(), item.fetchedAt(), item.expiresAt(), item.length()))
                         .sorted(Comparator.comparing(PublicManifestEntry::fetchedAt))
                         .toList();
-                Path temporary = Files.createTempFile(root, ".public-manifest-", ".part");
-                try {
-                    Files.writeString(temporary, GsonStatic.toJson(new PublicManifest(entries)));
-                    try {
-                        Files.move(temporary, root.resolve(PUBLIC_MANIFEST),
-                                StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                    } catch (java.nio.file.AtomicMoveNotSupportedException e) {
-                        Files.move(temporary, root.resolve(PUBLIC_MANIFEST),
-                                StandardCopyOption.REPLACE_EXISTING);
-                    }
-                } finally {
-                    Files.deleteIfExists(temporary);
-                }
-            } catch (IOException | RuntimeException ignored) {
-                // Public caching is an acceleration layer, not a reason to fail a request.
+                pendingDeletions = publicPendingDeletions.values().stream().toList();
             }
+            Path temporary = Files.createTempFile(root, ".public-manifest-", ".part");
+            try {
+                Files.writeString(temporary,
+                        GsonStatic.toJson(new PublicManifest(entries, pendingDeletions)));
+                try {
+                    Files.move(temporary, root.resolve(PUBLIC_MANIFEST),
+                            StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+                    Files.move(temporary, root.resolve(PUBLIC_MANIFEST),
+                            StandardCopyOption.REPLACE_EXISTING);
+                }
+            } finally {
+                Files.deleteIfExists(temporary);
+            }
+            return true;
+        } catch (IOException | RuntimeException ignored) {
+            // Public caching is an acceleration layer, not a reason to fail a request.
+            return false;
         }
     }
 
@@ -424,16 +553,67 @@ public class ImageCacheService {
             }
             try {
                 Files.deleteIfExists(expected);
+                publicPendingDeletions.remove(pendingDeletionKey(entry.key(), expected));
+                markPublicManifestDirty();
                 return true;
             } catch (IOException e) {
                 // Restore the exact entry while holding the same key lock so
                 // a publisher cannot replace it between remove and restore.
                 publicEntries.putIfAbsent(entry.key(), entry);
+                rememberPendingDeletion(entry.key(), expected);
                 org.slf4j.LoggerFactory.getLogger(ImageCacheService.class)
                         .warn("public image cleanup deferred for {}: {}", entry.path(), e.getMessage());
                 return false;
             }
         }
+    }
+
+    private void rememberPendingDeletion(String key, Path path) {
+        Path normalized = path.toAbsolutePath().normalize();
+        Path root = publicRoot();
+        if (!normalized.startsWith(root) || normalized.equals(root.resolve(PUBLIC_MANIFEST))) {
+            return;
+        }
+        publicPendingDeletions.put(pendingDeletionKey(key, normalized),
+                new PendingDeletion(key, normalized.toString()));
+        markPublicManifestDirty();
+    }
+
+    private void retryPendingDeletions() {
+        boolean changed = false;
+        Path root = publicRoot();
+        for (Map.Entry<String, PendingDeletion> item : List.copyOf(publicPendingDeletions.entrySet())) {
+            PendingDeletion pending = item.getValue();
+            Path path;
+            try {
+                path = Path.of(pending.path()).toAbsolutePath().normalize();
+            } catch (RuntimeException e) {
+                changed |= publicPendingDeletions.remove(item.getKey(), pending);
+                continue;
+            }
+            if (!path.startsWith(root) || Files.isSymbolicLink(path)) {
+                changed |= publicPendingDeletions.remove(item.getKey(), pending);
+                continue;
+            }
+            synchronized (publicKeyLock(pending.key())) {
+                PublicEntry current = publicEntries.get(pending.key());
+                if (current != null && current.path().toAbsolutePath().normalize().equals(path)) {
+                    changed |= publicPendingDeletions.remove(item.getKey(), pending);
+                    continue;
+                }
+                try {
+                    Files.deleteIfExists(path);
+                    changed |= publicPendingDeletions.remove(item.getKey(), pending);
+                } catch (IOException ignored) {
+                    // Keep the durable pending record for the next bounded pass.
+                }
+            }
+        }
+        if (changed) markPublicManifestDirty();
+    }
+
+    private static String pendingDeletionKey(String key, Path path) {
+        return key + "|" + path.toAbsolutePath().normalize();
     }
 
     private void trimPublicFailures() {
@@ -464,7 +644,8 @@ public class ImageCacheService {
             loadPublicManifest();
             trimPublicFailures();
             trimPublicEntries();
-            persistPublicManifest();
+            retryPendingDeletions();
+            markPublicManifestDirty();
         } catch (RuntimeException e) {
             org.slf4j.LoggerFactory.getLogger(ImageCacheService.class)
                     .warn("public image maintenance failed: {}", e.getMessage());
@@ -693,7 +874,11 @@ public class ImageCacheService {
         }
     }
 
-    private record PublicManifest(List<PublicManifestEntry> entries) {
+    private record PublicManifest(List<PublicManifestEntry> entries,
+                                 List<PendingDeletion> pendingDeletions) {
+        private PublicManifest(List<PublicManifestEntry> entries) {
+            this(entries, List.of());
+        }
     }
 
     private record PublicManifestEntry(String key, String url, String contentType,
@@ -701,5 +886,14 @@ public class ImageCacheService {
     }
 
     private record FailureEntry(long retryAt, String reason) {
+    }
+
+    private record PendingDeletion(String key, String path) {
+    }
+
+    private static final class PublicImageBusyException extends RuntimeException {
+    }
+
+    private static final class ImageCacheClosedException extends RuntimeException {
     }
 }

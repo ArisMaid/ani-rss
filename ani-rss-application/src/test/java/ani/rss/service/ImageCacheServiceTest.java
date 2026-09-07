@@ -27,11 +27,14 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -222,6 +225,14 @@ class ImageCacheServiceTest {
             }
             assertEquals(1, requests.get());
 
+            Path manifest = tempDir.resolve("image-cache").resolve("public")
+                    .resolve("public-manifest.json");
+            long manifestDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!Files.isRegularFile(manifest) && System.nanoTime() < manifestDeadline) {
+                Thread.sleep(10);
+            }
+            assertTrue(Files.isRegularFile(manifest), "coalesced manifest writer did not publish");
+
             ImageCacheService restarted = new ImageCacheService();
             try {
                 ImageCacheService.PublicImage persisted = restarted.publicImage(
@@ -317,8 +328,10 @@ class ImageCacheServiceTest {
     void staleCleanupCannotDeleteAReplacementPublishedForTheSameKey() throws Exception {
         byte[] image = Base64.getDecoder().decode(
                 "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        AtomicInteger requests = new AtomicInteger();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/image", exchange -> {
+            requests.incrementAndGet();
             exchange.getResponseHeaders().add("Content-Type", "image/png");
             exchange.sendResponseHeaders(200, image.length);
             exchange.getResponseBody().write(image);
@@ -338,11 +351,9 @@ class ImageCacheServiceTest {
             load.invoke(service, url, key, replacement);
             replacement.get(5, TimeUnit.SECONDS);
 
-            Method remove = ImageCacheService.class.getDeclaredMethod("removePublicEntry", oldEntry.getClass());
-            remove.setAccessible(true);
-            assertEquals(false, remove.invoke(service, oldEntry));
+            assertEquals(1, requests.get(), "late producer must re-use the published cache entry");
             Object current = publicEntries(service).get(key);
-            assertTrue(current != oldEntry);
+            assertTrue(current == oldEntry);
             assertTrue(java.nio.file.Files.exists(handlePath(current)));
         } finally {
             service.closeImageClients();
@@ -374,6 +385,70 @@ class ImageCacheServiceTest {
         }
     }
 
+    @Test
+    void readerContentionUsesShortRetryWithoutPoisoningThePublicFailureCache() throws Exception {
+        byte[] image = Base64.getDecoder().decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/image", exchange -> {
+            exchange.getResponseHeaders().add("Content-Type", "image/png");
+            exchange.sendResponseHeaders(200, image.length);
+            exchange.getResponseBody().write(image);
+            exchange.close();
+        });
+        server.start();
+        ImageCacheService service = new ImageCacheService();
+        try {
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/image";
+            service.publicImage(url, authenticated(login(), "GET"));
+            String key = cn.hutool.crypto.SecureUtil.sha256(url);
+            Object current = publicEntries(service).get(key);
+            Class<?> entryType = current.getClass();
+            var constructor = entryType.getDeclaredConstructor(
+                    String.class, String.class, Path.class, String.class, String.class,
+                    long.class, long.class, long.class, AtomicInteger.class);
+            constructor.setAccessible(true);
+            Object expiredBusy = constructor.newInstance(
+                    recordValue(current, "key"), recordValue(current, "url"), handlePath(current),
+                    recordValue(current, "contentType"), recordValue(current, "etag"),
+                    recordValue(current, "fetchedAt"), System.currentTimeMillis() - 1,
+                    recordValue(current, "length"), new AtomicInteger(1));
+            publicEntries(service).put(key, expiredBusy);
+
+            Method load = ImageCacheService.class.getDeclaredMethod(
+                    "loadPublicImage", String.class, String.class, CompletableFuture.class);
+            load.setAccessible(true);
+            CompletableFuture<Object> future = new CompletableFuture<>();
+            load.invoke(service, url, key, future);
+
+            ExecutionException failure = assertThrows(ExecutionException.class,
+                    () -> future.get(5, TimeUnit.SECONDS));
+            UpstreamServiceException upstream = assertInstanceOf(
+                    UpstreamServiceException.class, failure.getCause());
+            assertEquals(1, upstream.retryAfterSeconds());
+            assertFalse(publicFailures(service).containsKey(key));
+        } finally {
+            service.closeImageClients();
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void shutdownCompletesFlightsThatWereQueuedBeforeTheExecutorStopped() throws Exception {
+        ImageCacheService service = new ImageCacheService();
+        try {
+            CompletableFuture<Object> queued = new CompletableFuture<>();
+            publicFlights(service).put("queued", queued);
+
+            service.closeImageClients();
+
+            assertTrue(queued.isCompletedExceptionally());
+            assertTrue(publicFlights(service).isEmpty());
+        } finally {
+            service.closeImageClients();
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private static Map<String, Object> publicEntries(ImageCacheService service) throws Exception {
         Field field = ImageCacheService.class.getDeclaredField("publicEntries");
@@ -386,6 +461,22 @@ class ImageCacheServiceTest {
         Field field = ImageCacheService.class.getDeclaredField("publicFailures");
         field.setAccessible(true);
         return (Map<String, Object>) field.get(service);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, CompletableFuture<Object>> publicFlights(ImageCacheService service)
+            throws Exception {
+        Field field = ImageCacheService.class.getDeclaredField("publicFlights");
+        field.setAccessible(true);
+        return (Map<String, CompletableFuture<Object>>) (Map<?, ?>) field.get(service);
+    }
+
+    private static <T> T recordValue(Object record, String name) throws Exception {
+        Method accessor = record.getClass().getDeclaredMethod(name);
+        accessor.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        T value = (T) accessor.invoke(record);
+        return value;
     }
 
     private static Path handlePath(Object entry) throws Exception {

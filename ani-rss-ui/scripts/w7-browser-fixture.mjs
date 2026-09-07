@@ -362,7 +362,13 @@ const server = createServer(async (request, response) => {
     }
   } catch (error) {
     status = 500
-    bytes = sendJson(response, 500, {code: 'FIXTURE_ERROR', message: String(error?.message || error)})
+    if (!response.headersSent && !response.writableEnded) {
+      try {
+        bytes = sendJson(response, 500, {code: 'FIXTURE_ERROR', message: String(error?.message || error)})
+      } catch {
+        // The browser may close an aborted request while the fixture is handling it.
+      }
+    }
   } finally {
     if (pollingRecord) {
       pollingRecord.endedAtMs = Number(performance.now().toFixed(3))

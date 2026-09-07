@@ -198,11 +198,13 @@ class RssApplicationChainPerformanceTest {
         AtomicInteger addCalls = new AtomicInteger();
         AtomicBoolean added = new AtomicBoolean();
         Map<String, RssTask.Outcome> outcomes = new LinkedHashMap<>();
+        String fixtureId = "rss-add-fixture-" + UUID.randomUUID();
+        String fixtureHash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-1")
+                .digest(fixtureId.getBytes(StandardCharsets.UTF_8)));
         HttpServer server = createRssServer(rssRequests, rssFailures,
-                ConcurrentHashMap.newKeySet(), true);
+                ConcurrentHashMap.newKeySet(), true, fixtureHash);
         DownloaderClient client = mock(DownloaderClient.class);
         Config config = ConfigUtil.snapshot();
-        String fixtureHash = "0123456789abcdef0123456789abcdef01234567";
         when(client.configurationSnapshot()).thenReturn(config);
         when(client.connect(anyBoolean())).thenReturn(DownloaderResult.success(null));
         when(client.torrents()).thenAnswer(invocation -> {
@@ -219,12 +221,12 @@ class RssApplicationChainPerformanceTest {
                 .thenAnswer((Answer<DownloaderResult<Void>>) invocation -> {
                     addCalls.incrementAndGet();
                     added.set(true);
-                    return DownloaderResult.success(null, "rss-add-fixture");
+                    return DownloaderResult.success(null, fixtureId);
                 });
         setTorrentClient(client);
 
         Ani fixture = AniUtil.createAni()
-                .setId("rss-add-fixture")
+                .setId(fixtureId)
                 .setTitle("RSS add fixture")
                 .setBgmUrl("https://bgm.tv/subject/100001")
                 .setUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/rss/add-fixture")
@@ -233,12 +235,13 @@ class RssApplicationChainPerformanceTest {
                 .setOffset(0)
                 .setEnable(true);
         AniUtil.commit(List.of(fixture));
+        Ani runtimeFixture = AniUtil.findRuntimeById(fixture.getId()).orElseThrow();
         RssTask.installTestHooks(ignored -> { },
                 (id, outcome) -> outcomes.put(id, outcome));
         AtomicLong fakeNanos = new AtomicLong();
         TorrentUtil.installTestMonotonicClock(fakeNanos::get);
         try {
-            RssTask.syncDownload(List.of(fixture));
+            RssTask.syncDownload(List.of(runtimeFixture));
         } finally {
             RssTask.resetTestHooks();
             TorrentUtil.resetTestMonotonicClock();
@@ -261,6 +264,13 @@ class RssApplicationChainPerformanceTest {
 
     private HttpServer createRssServer(AtomicInteger requests, AtomicInteger failures,
                                        Set<String> threads, boolean includeAddFixture) throws IOException {
+        return createRssServer(requests, failures, threads, includeAddFixture,
+                "0123456789abcdef0123456789abcdef01234567");
+    }
+
+    private HttpServer createRssServer(AtomicInteger requests, AtomicInteger failures,
+                                       Set<String> threads, boolean includeAddFixture,
+                                       String addFixtureHash) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/rss", exchange -> {
             requests.incrementAndGet();
@@ -268,8 +278,8 @@ class RssApplicationChainPerformanceTest {
             String fixture = includeAddFixture
                     && exchange.getRequestURI().getPath().endsWith("/add-fixture")
                     ? "<item><title>RSS add fixture - 01</title>"
-                    + "<guid>0123456789abcdef0123456789abcdef01234567</guid>"
-                    + "<enclosure url=\"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567\" length=\"1\"/>"
+                    + "<guid>" + addFixtureHash + "</guid>"
+                    + "<enclosure url=\"magnet:?xt=urn:btih:" + addFixtureHash + "\" length=\"1\"/>"
                     + "</item>"
                     : "";
             byte[] payload = ("<?xml version=\"1.0\"?><rss version=\"2.0\"><channel>"

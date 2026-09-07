@@ -16,6 +16,7 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 import java.net.InetSocketAddress;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.io.IOException;
@@ -604,6 +605,41 @@ class ImageCacheServiceTest {
             assertEquals(1_024, diagnostics.pendingDeletionBytes());
             assertEquals(1_024, diagnostics.trackedFiles());
             assertEquals(1_024, diagnostics.trackedBytes());
+        } finally {
+            service.closeImageClients();
+        }
+    }
+
+    @Test
+    void trackedBudgetDeduplicatesAnActiveEntryAndPendingRecordForTheSamePath() throws Exception {
+        ImageCacheService service = new ImageCacheService();
+        try {
+            Path root = tempDir.resolve("image-cache").resolve("public");
+            Files.createDirectories(root);
+            Path shared = root.resolve("shared.png");
+            Files.writeString(shared, "image");
+            Class<?> entryType = Class.forName(
+                    "ani.rss.service.ImageCacheService$PublicEntry");
+            Constructor<?> entryConstructor = entryType.getDeclaredConstructor(
+                    String.class, String.class, Path.class, String.class, String.class,
+                    long.class, long.class, long.class);
+            entryConstructor.setAccessible(true);
+            Object entry = entryConstructor.newInstance(
+                    "active", "https://example.test/shared.png", shared,
+                    "image/png", "\"etag\"", System.currentTimeMillis(),
+                    System.currentTimeMillis() + 60_000, 7L);
+            publicEntries(service).put("active", entry);
+
+            Method remember = ImageCacheService.class.getDeclaredMethod(
+                    "rememberPendingDeletion", String.class, Path.class, long.class);
+            remember.setAccessible(true);
+            assertEquals(true, remember.invoke(service, "old-key", shared, 99L));
+
+            ImageCacheService.PublicCacheDiagnostics diagnostics = service.publicCacheDiagnostics();
+            assertEquals(1, diagnostics.entryFiles());
+            assertEquals(1, diagnostics.pendingDeletionFiles());
+            assertEquals(1, diagnostics.trackedFiles());
+            assertEquals(99L, diagnostics.trackedBytes());
         } finally {
             service.closeImageClients();
         }

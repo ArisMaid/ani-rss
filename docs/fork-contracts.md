@@ -26,6 +26,16 @@
 | F20 | 发布镜像必须由可审计的 tag 工作流构建；测试工作流不能推送 `test` 镜像 | `.github/workflows/build.yml`、`.github/workflows/build-test.yml` |
 | F21 | 发布前不能宣称未执行的真实上游、下载器、浏览器或多架构验证 | 本文件、`verification.md`、`performance-baseline.md` |
 
+## 3.2.28.64 增量合同
+
+| ID | 合同 | 主要证据 |
+| --- | --- | --- |
+| F30 | Mikan 补载请求必须绑定 query generation/group context；切组、取消、恢复和 finally 不能回写其他组状态，失败只归属自己的请求 | `MikanView.vue`、`list-lifecycle.test.js`、前端 35/35 |
+| F31 | AnimeGarden 列表层显式返回 success/failed/aborted/stale；列表恢复不能被 enrichment 失败吞掉；过期只允许一次受控自动 reload，并提供手动 retry | `AnimeGardenView.vue`、`list-lifecycle.test.js`、W7 production fixture |
+| F32 | ImageCache manifest 快照、revision 捕获和 dirty/persisted 状态由同一状态锁协调；单 writer 负责正常写与 close 最终 flush，生命周期为 OPEN/CLOSING/CLOSED | `ImageCacheServiceTest` manifest/close/timeout 用例 |
+| F33 | pending deletion 按规范化路径去重并计入 tracked/reserved bytes/files；准入、轮转维护、attempts/nextRetryAt 和 bounded retry 不得耗尽关闭预算 | `ImageCacheServiceTest` union-budget、pending、capacity、shutdown 用例 |
+| F34 | CI 的 W7/N08 必须使用同一个唯一生产 dist，报告路径/构建目录隔离，报告上传 always，超时失败不得被 continue-on-error 隐藏 | `.github/workflows/build-test.yml`、W7/N08 raw reports |
+
 ## 3.2.28.63 增量合同
 
 | ID | 合同 | 主要证据 |

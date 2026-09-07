@@ -1,8 +1,41 @@
 # Fork 性能基线与验收记录
 
-本文件只记录实际执行结果。静态 bundle、浏览器启动资源和 Java Service fixture 分开统计；合成边界不冒充真实外部服务性能。当前发布单元以 `v3.2.28.62` 为主对照，不把旧版更早的首入口数字当作本轮下降结论。
+本文件只记录实际执行结果。静态 bundle、浏览器启动资源和 Java Service fixture 分开统计；合成边界不冒充真实外部服务性能。当前发布单元为 `v3.2.28.64`，历史版本仅作对照，不把旧版更早的首入口数字当作本轮下降结论。
 
-## 当前发布单元：v3.2.28.63
+## 当前发布单元：v3.2.28.64
+
+| 项目 | 实际值 |
+| --- | --- |
+| 版本/标签 | `3.2.28.64` / `v3.2.28.64`；tag workflow 待本次 push 后补记 |
+| 被测行为代码 | `bff06cb0618be5d77c7185f7dd09c6dc5cd0ebb0` |
+| 主要实现提交 | `da4a0c23`；ImageCache 修正 `bff06cb0` |
+| 版本提交 | `21048e34` |
+| 主对照 | `v3.2.28.63`，用于历史行为/包体对照 |
+| Node / pnpm | Node `v24.16.0` / pnpm `11.19.0` |
+| Java / Maven | Temurin `25.0.4.1` / Apache Maven `3.9.11`，项目按 Java 17 release 编译 |
+| 机器 | Windows `amd64`；浏览器 raw JSON 记录 CPU/架构 |
+| 外部边界 | `127.0.0.1` 合成 HTTP、loader/downloader stub；不读取生产账号或文件 |
+
+### 原始数据与静态 bundle
+
+- [`w7-browser-v3.2.28.64-20260907.json`](performance-data/w7-browser-v3.2.28.64-20260907.json)：唯一生产 dist 的 login/home/subscriptions cold 场景；`commit=bff06cb...`、`dirty=false`，四类页面错误均为 0。
+- [`n08-browser-v3.2.28.64-20260907.json`](performance-data/n08-browser-v3.2.28.64-20260907.json)：唯一生产 dist 的 8 秒慢轮询；停留 `39,036ms`，总请求 3、hidden 请求 1、`maxInFlight=1`，手动刷新和可见恢复均为 true。
+- Java 完整门禁为 319/0/0/4 skipped，前端为 35/35；ImageCacheService 定向回归为 19/19。
+
+| 场景 | JS gzip | CSS gzip | 预算结果 |
+| --- | ---: | ---: | --- |
+| `staticEntryClosure` | 105,197 B | 48,953 B | 通过 |
+| login | 201,953 B | 63,229 B | 通过 |
+| home | 192,172 B | 61,822 B | 通过 |
+| subscriptions | 185,251 B | 63,645 B | 通过 |
+
+没有从 ImageCache 单元测试推导生产吞吐或百分比提升；真实外部源、下载器、账号、媒体、数据库费用和 Linux engine 仍保持未验证边界。
+
+### 当前发布产物
+
+GitHub Release、jar/exe SHA-256 和 GHCR manifest digest/platform 将在 tag workflow 成功后补入；当前不填入推测值。
+
+## 历史对照：v3.2.28.63
 
 | 项目 | 实际值 |
 | --- | --- |

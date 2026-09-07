@@ -1,8 +1,45 @@
-# Fork v3.2.28.63 验证记录
+# Fork v3.2.28.64 验证记录
 
-本记录严格按 `FORK_V3.2.28.62_OPTIMIZATION_PLAN.md` 执行；附带开发书是验收规范，不是额外的生产授权。当前发布单元的行为代码提交为 `f550cdddf57be2bf73185327e003aa2cbce18fbc`，版本提交为 `0c625810`。真实账号、生产下载器、用户媒体和外部数据未连接；合成 fixture 不冒充生产验证。
+本记录严格按 `FORK_V3.2.28.63_OPTIMIZATION_PLAN.md` 执行；附带开发书是验收规范，不是额外的生产授权。v3.2.28.64 的行为提交为 `bff06cb0618be5d77c7185f7dd09c6dc5cd0ebb0`，实现提交为 `da4a0c23`，版本提交为 `21048e34`。真实账号、生产下载器、用户媒体和外部数据未连接；合成 fixture 不冒充生产验证。
 
-## 当前发布单元：3.2.28.63
+## 当前发布单元：3.2.28.64
+
+### 门禁与构建
+
+- 前端 Vitest：5 个测试文件、35/35 通过；其中 `list-lifecycle.test.js` 覆盖 Mikan 查询世代切换、取消、恢复以及 AnimeGarden 列表恢复。
+- 生产 UI 构建：使用唯一临时 dist，未清理既有输出；构建通过。
+- bundle 门禁：static entry JS/CSS gzip 为 `105,197/48,953 B`；login `201,953/63,229 B`；home `192,172/61,822 B`；subscriptions `185,251/63,645 B`，均通过现有预算；`forbiddenModules=[]`。
+- Java 完整门禁：`mvn -B -Pci -Dskip.frontend=true verify`；319 tests、0 failures、0 errors、4 skipped；JaCoCo 达标，SpotBugs `BugInstance size is 0`，CycloneDX SBOM 生成成功。
+
+### R63 开发方案验收矩阵
+
+| 工作包 | 状态 | 实现与证据 |
+| --- | --- | --- |
+| R63-01 Mikan 查询上下文/取消/恢复 | 通过 | `da4a0c23`；Mikan generation、groupKey、AbortController 和 finally 归属检查；A→B→A 回归与 35 项前端全量通过 |
+| R63-02 AnimeGarden 列表级恢复 | 通过 | `da4a0c23`；list 结果显式区分成功/失败/中止/过期，列表恢复与 enrichment 解耦，一次受控 reload 和手动 retry；失败恢复用例通过 |
+| R63-03 manifest 单 writer 与 revision | 通过 | `bff06cb0`；manifest revision/dirty/persistedRevision、同锁快照和写入 owner；`ImageCacheServiceTest` 19/19 通过 |
+| R63-04 close 最终 flush | 通过 | `bff06cb0`；OPEN/CLOSING/CLOSED、共享有界 deadline、最终 flush 与诊断状态；成功、失败、超时和幂等关闭用例通过 |
+| R63-05 pending deletion 全预算 | 通过 | `bff06cb0`；路径并集计费、reserved/tracked bytes/files、准入、轮转扫描、退避和 bounded maintenance；同路径 entry+pending 并集计费回归通过 |
+| R63-06 CI N08 门禁 | 已实现 | `da4a0c23`；W7/N08 使用同一唯一生产 dist、独立报告、always artifact upload、超时门禁；本地 W7/N08 已通过，远端 CI 待本次 push 验证 |
+
+### W7/N08 原始证据
+
+- W7：[`w7-browser-v3.2.28.64-20260907.json`](performance-data/w7-browser-v3.2.28.64-20260907.json)，`commit=bff06cb...`、`dirty=false`；login/home/subscriptions cold 三场景均 `pageErrors=0`、`consoleErrors=0`、`chunk404s=0`、`mediaErrors=0`。
+- N08：[`n08-browser-v3.2.28.64-20260907.json`](performance-data/n08-browser-v3.2.28.64-20260907.json)，`pageDwellMs=39,036`、总请求 3、`maxInFlight=1`、hidden 请求 1；手动刷新与可见恢复均已观察，四类错误均为 0。
+- 这组报告使用同一生产 dist，raw JSON 保留 CPU、Node、请求时间线、资源和未跟踪开发书文件清单；未把 untracked 开发书误记为 tracked dirty。
+
+### 发布状态
+
+- 版本已固化为 `3.2.28.64`；GitHub tag、Actions build workflow、GitHub Release 和 GHCR digest/platform 需在本次推送后补入本节。
+- Docker Hub 只有在 workflow 所需凭据存在时发布；未配置凭据不作为 GHCR 失败处理。
+
+### 当前未验证边界
+
+- 真实 Mikan、Bangumi、AnimeGarden、图片代理和下载器的外网波动、认证、429/5xx、生产首屏和真实媒体解码。
+- 真实账号、生产数据库锁/查询、用户媒体目录、文件 walk、下载器 files/move/rename/delete 和完整缺集恢复成本。
+- Docker Desktop/Linux engine 本地构建，以及 ImageCache 在生产负载下的吞吐百分比；本轮只验证状态、预算、关闭和恢复不变量。
+
+## 历史 v3.2.28.63 验收记录
 
 ### 门禁与构建
 

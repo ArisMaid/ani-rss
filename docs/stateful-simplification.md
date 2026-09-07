@@ -1,6 +1,13 @@
-# 有状态模块依赖与本次决策（v3.2.28.63）
+# 有状态模块依赖与本次决策（v3.2.28.64）
 
-本文件按开发书 T7 建立依赖清单。`3.2.28.63` 完成了真实 Java 服务链的合成采样，但没有把 RSS fixture 推导成完整数据库/文件系统成本；T7 中未测的费用项仍明确后置。
+本文件按开发书 T7 建立依赖清单。`3.2.28.64` 在既有状态链合同上补齐 ImageCache manifest、关闭和 pending deletion 的状态/预算边界；真实数据库、文件系统和外部下载器成本仍明确后置。
+
+## v3.2.28.64 新增状态验证
+
+- ImageCache 生命周期明确为 `OPEN → CLOSING → CLOSED`；close 使用共享有界 deadline，完成排队 flight 后由同一 writer 执行最后一次 manifest flush，并记录 success/failure/timeout 诊断。
+- manifest 的 revision、entry/pending 快照、dirty 和 persistedRevision 在同一状态锁下捕获；不会在快照内容与 revision 之间留下可观察窗口。
+- pending deletion 以规范化路径做并集计费，active entry 与同路径 pending 不重复计数；reserved bytes/files 参加准入，维护按 bounded scan、轮转和指数退避推进。
+- `ImageCacheServiceTest` 定向 19/19、Java 完整门禁 319/0/0/4 skipped 通过。上述是状态不变量证据，不是生产吞吐或文件系统故障率测量。
 
 ## 依赖地图
 

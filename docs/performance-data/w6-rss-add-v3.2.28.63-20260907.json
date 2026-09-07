@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "commit": "f550cdddf57be2bf73185327e003aa2cbce18fbc",
+  "measurementKind": "real-rss-add-fixture",
+  "fixture": "one parseable magnet RSS item submitted through RssTask and DownloadService",
+  "rssRequests": 1,
+  "downloaderAddCalls": 1,
+  "outcomes": {
+    "rss-add-fixture-6a34c35b-e7be-4a52-b6e5-6128e030f234": "SUCCESS"
+  }
+}

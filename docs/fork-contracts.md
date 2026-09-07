@@ -26,6 +26,19 @@
 | F20 | 发布镜像必须由可审计的 tag 工作流构建；测试工作流不能推送 `test` 镜像 | `.github/workflows/build.yml`、`.github/workflows/build-test.yml` |
 | F21 | 发布前不能宣称未执行的真实上游、下载器、浏览器或多架构验证 | 本文件、`verification.md`、`performance-baseline.md` |
 
+## 3.2.28.63 增量合同
+
+| ID | 合同 | 主要证据 |
+| --- | --- | --- |
+| F22 | 评分内部负缓存不得使用 NaN；公开响应只返回有限数值、合法 `0` 或 `null`，无评分已终结项不进入 retryable，网络失败仍可重试 | `PublicScoreServiceTest`、`MikanServiceTest`、`BgmInfoJsonTest` |
+| F23 | Mikan/AnimeGarden 补载在当前查询世代内显式维护 `pending/loading/complete/incomplete/failed`；用户可重试剩余 ID，双击不重复启动，取消不伪装失败 | `mikan-loader.test.js`、`list-lifecycle.test.js`、`MikanView.vue`、`AnimeGardenView.vue` |
+| F24 | AnimeGarden 合法但不在当前上下文的 ID 使用机器码 `ANIME_GARDEN_LIST_EXPIRED` 和 HTTP 409；快照最多登记 10,000 ID、总引用最多 100,000，前端一次受控重载后停止循环 | `AnimeGardenServiceTest`、Controller 测试、513 条列表测试、View lifecycle 测试 |
+| F25 | 图片本地 reader/队列争用返回短 Retry-After 且不写入源站 30s failure cache；源站失败与本地内容错误保留独立类别 | `ImageCacheServiceTest`、`ImageController` |
+| F26 | 同 key miss 在取得 flight 后必须二次检查缓存/冷却；同一外部加载只允许一个生产者，所有 Future 都在成功、失败、取消和关闭路径完成 | `ImageCacheServiceTest` 并发 barrier、shutdown 用例 |
+| F27 | manifest 通过单 writer/revision/dirty 合并写入；旧路径删除失败进入 bounded pending deletion，维护重试且不丢计数；关闭完成 queued flights 和最后一次有界 flush | `ImageCacheServiceTest` manifest、pending deletion、shutdown 用例 |
+| F28 | RSS snapshot 的年龄和 500ms sleep 由同一个 monotonic clock 推进；`age >= 5s` 过期，add/delete 等 mutation dirty 后立即重读，不跨线程虚构失效 | `TorrentSnapshotCycleTest`、`RssApplicationChainPerformanceTest`、W6 raw reports |
+| F29 | 生产页面下载器轮询在 8s 响应下始终 `maxInFlight=1`；hidden 不启动下一次，visible 可恢复，手动刷新不并发第二个请求且取消不报错 | `dashboard-polling.test.js`、N08 slow-polling raw report |
+
 ## 同步审计顺序
 
 1. 从当前四段版本号的前三段确定上游基线标签，只审阅基线到目标标签之间的提交与最终差异。

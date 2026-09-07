@@ -1,3 +1,4 @@
+- release: 发布 v3.2.28.63：无评分作品不再以非法 NaN 破坏 Mikan JSON；补载失败、列表上下文失效和隐藏/恢复路径现在显示有界状态并支持只重试剩余资源；AnimeGarden 过期列表使用明确错误码和一次受控重载；图片缓存区分本地繁忙与源站失败，补齐同 key single-flight、manifest 合并写入、旧文件待删除追踪和关闭收尾；RSS 快照过期测试统一到同一时间轴，并补充真实 add fixture；首页慢轮询在 8 秒响应下保持单请求并可从隐藏状态恢复。该版本通过 Java 311 项回归、前端 33 项测试和生产构建证据；真实外部源、下载器、账号、媒体和 T7 数据库/文件费用仍按文档标记为未验证。
 - release: 发布 v3.2.28.62；按 fork follow-up 开发书完成 Mikan/AnimeGarden 部分补载与可取消生命周期、图片 lock/read lease 与有界失败状态、评分 6h 绝对 TTL、W6 实际服务链/W7 生产浏览器证据，并接入唯一目录构建、bundle 与浏览器 CI 门禁。tag workflow 已发布并核验 GitHub Release 附件及 GHCR 的 temurin/openj9/arm32v7 多架构 tag；真实外部源、下载器页面停留和 T7 DB/file 费用仍按文档保持边界，Docker Hub 因未配置凭据未发布。
 - fix: 修复发布门禁暴露的图片 manifest 与 WebUI SpotBugs 问题，保留 3.2.28.60 的功能修复并发布 v3.2.28.61
 - perf/fix: 严格推进 fork 修复计划：Mikan/AnimeGarden 可取消按需补载、评分有界 single-flight、图片公共缓存恢复与失败冷却、下载器周期快照与失败状态、刷新轮询和验证门禁；版本升级为 v3.2.28.60

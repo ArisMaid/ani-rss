@@ -1,0 +1,473 @@
+{
+  "schemaVersion": 1,
+  "runId": "w6-rss-2026-09-07T07-52-20.233871400Z-ae998001",
+  "commit": "f550cdddf57be2bf73185327e003aa2cbce18fbc",
+  "dirty": false,
+  "buildIdentity": "D:\\Github\\AI\\Codex\\anirss\\ani-rss-application\\target\\classes",
+  "measurementKind": "java-service-chain",
+  "systemUnderTest": [
+    "RssTask",
+    "SubscriptionDownloadQueue",
+    "DownloadService",
+    "TorrentUtil",
+    "ItemsUtil"
+  ],
+  "stubbedBoundaries": [
+    "synthetic RSS HTTP transport",
+    "DownloaderClient"
+  ],
+  "scenario": "rss-cycle-100-enabled",
+  "clockMode": "shared-fake-monotonic-and-rss-sleeper",
+  "environment": {
+    "os": "Windows 11",
+    "java": "25.0.4.1",
+    "arch": "amd64",
+    "configRoot": "D:\\Github\\AI\\Codex\\anirss\\ani-rss-application\\target\\w6-application-config"
+  },
+  "fixture": {
+    "fixtureHash": "0eaea41bb85363e1f04ce776cc292e43f8621293408c8e03062cd84539daf0e4",
+    "enabledSubscriptions": 100,
+    "rssBody": "parseable-empty-channel"
+  },
+  "samples": [
+    {
+      "downloaderThreads": [
+        "main"
+      ],
+      "outcomes": [
+        {
+          "id": "w6-subscription-1",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-2",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-3",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-4",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-5",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-6",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-7",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-8",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-9",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-10",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-11",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-12",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-13",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-14",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-15",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-16",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-17",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-18",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-19",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-20",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-21",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-22",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-23",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-24",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-25",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-26",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-27",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-28",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-29",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-30",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-31",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-32",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-33",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-34",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-35",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-36",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-37",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-38",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-39",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-40",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-41",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-42",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-43",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-44",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-45",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-46",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-47",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-48",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-49",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-50",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-51",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-52",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-53",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-54",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-55",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-56",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-57",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-58",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-59",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-60",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-61",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-62",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-63",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-64",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-65",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-66",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-67",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-68",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-69",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-70",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-71",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-72",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-73",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-74",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-75",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-76",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-77",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-78",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-79",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-80",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-81",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-82",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-83",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-84",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-85",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-86",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-87",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-88",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-89",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-90",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-91",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-92",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-93",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-94",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-95",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-96",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-97",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-98",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-99",
+          "outcome": "SUCCESS"
+        },
+        {
+          "id": "w6-subscription-100",
+          "outcome": "SUCCESS"
+        }
+      ],
+      "elapsedMs": 1177,
+      "workerRunningAfterReturn": false,
+      "rssThreads": [
+        "HTTP-Dispatcher"
+      ]
+    }
+  ],
+  "counters": {
+    "subscriptions": 100,
+    "rssTransportRequests": 100,
+    "rssTransportFailures": 0,
+    "downloaderConnectCalls": 1,
+    "downloaderListCalls": 10,
+    "downloaderFilesCalls": null,
+    "virtualPerSubscriptionSleepMs": 50000,
+    "wallClockElapsedMs": 1177,
+    "failedCount": 0,
+    "snapshotHits": 90,
+    "snapshotMisses": 10,
+    "snapshotDirtyEvents": null,
+    "snapshotReadsAfterFiveSeconds": 9
+  },
+  "assertions": [
+    "100 real subscription ids reached ItemsUtil through RssTask",
+    "the shared monotonic clock forced a fresh downloader snapshot at t=5s boundaries",
+    "all 100 actual subscription outcomes were SUCCESS",
+    "500ms per-subscription throttle was measured as virtual time, not removed"
+  ],
+  "limitations": [
+    "This 100-subscription timing fixture uses an empty RSS channel; the real add/download mutation fixture is covered separately.",
+    "Downloader files/add/delete/move/rename counters are null because those operations were not invoked.",
+    "Snapshot dirty events are not instrumented in this run; hit/miss and post-boundary reads are derived from the actual mock transport calls.",
+    "Only external RSS HTTP and downloader boundaries are synthetic; Spring services, queue, parser and worker are real."
+  ]
+}

@@ -28,6 +28,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 
 /**
  * 管理下载器的调用与种子存取
@@ -37,6 +38,7 @@ public class TorrentUtil {
     private static final Object CLIENT_LOCK = new Object();
     private static final long SNAPSHOT_MAX_AGE_NANOS = TimeUnit.SECONDS.toNanos(5);
     private static final ThreadLocal<SnapshotCycle> SNAPSHOT_CYCLE = new ThreadLocal<>();
+    private static volatile LongSupplier monotonicClock = System::nanoTime;
     private static volatile DownloaderClient CLIENT;
 
     public static DownloaderClient client() {
@@ -64,9 +66,19 @@ public class TorrentUtil {
      */
     public static SnapshotCycle openSnapshotCycle() {
         SnapshotCycle previous = SNAPSHOT_CYCLE.get();
-        SnapshotCycle current = new SnapshotCycle(previous);
+        SnapshotCycle current = new SnapshotCycle(previous, monotonicClock);
         SNAPSHOT_CYCLE.set(current);
         return current;
+    }
+
+    /** Installs the monotonic clock used by RSS snapshot cycles in deterministic tests. */
+    public static void installTestMonotonicClock(LongSupplier clock) {
+        monotonicClock = java.util.Objects.requireNonNull(clock);
+    }
+
+    /** Restores the production monotonic clock after a deterministic RSS test. */
+    public static void resetTestMonotonicClock() {
+        monotonicClock = System::nanoTime;
     }
 
     /** Marks the current cycle stale after a remote task mutation. */
@@ -85,7 +97,7 @@ public class TorrentUtil {
 
         SnapshotCycle cycle = SNAPSHOT_CYCLE.get();
         if (cycle != null) {
-            List<TorrentsInfo> cached = cycle.cached(client, System.nanoTime());
+            List<TorrentsInfo> cached = cycle.cached(client);
             if (cached != null) {
                 return DownloaderResult.success(copyTasks(cached));
             }
@@ -102,7 +114,7 @@ public class TorrentUtil {
         // candidates never enter the operational stream.
         tasks = ownershipService().observeOwnedTasks(downloaderType, tasks);
         if (cycle != null) {
-            cycle.store(client, tasks, System.nanoTime());
+            cycle.store(client, tasks);
         }
         return DownloaderResult.success(copyTasks(tasks));
     }
@@ -452,23 +464,31 @@ public class TorrentUtil {
         private boolean dirty;
         private boolean closed;
 
-        private SnapshotCycle(SnapshotCycle previous) {
+        private final LongSupplier clock;
+
+        SnapshotCycle(SnapshotCycle previous, LongSupplier clock) {
             this.previous = previous;
+            this.clock = java.util.Objects.requireNonNull(clock);
         }
 
-        private List<TorrentsInfo> cached(DownloaderClient activeClient, long nowNanos) {
+        List<TorrentsInfo> cached(DownloaderClient activeClient) {
+            long nowNanos = clock.getAsLong();
             if (tasks == null || dirty || client != activeClient ||
-                    nowNanos - readAtNanos > SNAPSHOT_MAX_AGE_NANOS) {
+                    nowNanos - readAtNanos >= SNAPSHOT_MAX_AGE_NANOS) {
                 return null;
             }
             return tasks;
         }
 
-        private void store(DownloaderClient activeClient, List<TorrentsInfo> observedTasks, long nowNanos) {
+        void store(DownloaderClient activeClient, List<TorrentsInfo> observedTasks) {
             client = activeClient;
             tasks = List.copyOf(observedTasks == null ? List.of() : observedTasks);
-            readAtNanos = nowNanos;
+            readAtNanos = clock.getAsLong();
             dirty = false;
+        }
+
+        void markDirty() {
+            dirty = true;
         }
 
         @Override

@@ -10,6 +10,8 @@ import ani.rss.commons.GsonStatic;
 import ani.rss.download.DownloaderClient;
 import ani.rss.download.DownloaderResult;
 import ani.rss.entity.Login;
+import ani.rss.entity.torrent.TorrentsInfo;
+import ani.rss.enums.TorrentsStateEnum;
 import com.google.gson.GsonBuilder;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.AfterAll;
@@ -35,11 +37,13 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -92,6 +96,7 @@ class RssApplicationChainPerformanceTest {
     @AfterEach
     void restoreRuntimeState() throws Exception {
         RssTask.resetTestHooks();
+        TorrentUtil.resetTestMonotonicClock();
         TaskService.LOOP.set(false);
         if (originalConfig != null) {
             ConfigUtil.sync(originalConfig);
@@ -118,6 +123,7 @@ class RssApplicationChainPerformanceTest {
         AtomicInteger downloaderConnectCalls = new AtomicInteger();
         AtomicInteger downloaderListCalls = new AtomicInteger();
         AtomicLong virtualSleepMillis = new AtomicLong();
+        AtomicLong virtualMonotonicNanos = new AtomicLong();
         Set<String> rssThreads = ConcurrentHashMap.newKeySet();
         Set<String> downloaderThreads = ConcurrentHashMap.newKeySet();
         Map<String, RssTask.Outcome> outcomes = new LinkedHashMap<>();
@@ -141,8 +147,12 @@ class RssApplicationChainPerformanceTest {
         List<Ani> subscriptions = subscriptions(server.getAddress().getPort());
         AniUtil.commit(subscriptions);
         RssTask.installTestHooks(
-                virtualSleepMillis::addAndGet,
+                milliseconds -> {
+                    virtualSleepMillis.addAndGet(milliseconds);
+                    virtualMonotonicNanos.addAndGet(milliseconds * 1_000_000L);
+                },
                 (id, outcome) -> outcomes.put(id, outcome));
+        TorrentUtil.installTestMonotonicClock(virtualMonotonicNanos::get);
         long started = System.nanoTime();
         try {
             RssTask.syncDownload(subscriptions);
@@ -158,8 +168,8 @@ class RssApplicationChainPerformanceTest {
         assertEquals(SUBSCRIPTION_COUNT, rssRequests.get());
         assertEquals(0, rssFailures.get());
         assertEquals(1, downloaderConnectCalls.get());
-        assertEquals(1, downloaderListCalls.get(),
-                "one successful downloader snapshot is reused by the real worker cycle");
+        assertEquals(10, downloaderListCalls.get(),
+                "the shared fake clock must force a fresh snapshot at each five-second boundary");
         assertEquals(SUBSCRIPTION_COUNT, outcomes.size());
         assertTrue(outcomes.values().stream().allMatch(RssTask.Outcome.SUCCESS::equals));
         assertEquals(0, status.failedCount());
@@ -181,13 +191,89 @@ class RssApplicationChainPerformanceTest {
         );
     }
 
+    @Test
+    void exercisesARealRssAddFixtureThroughTheSameWorkerChain() throws Exception {
+        AtomicInteger rssRequests = new AtomicInteger();
+        AtomicInteger rssFailures = new AtomicInteger();
+        AtomicInteger addCalls = new AtomicInteger();
+        AtomicBoolean added = new AtomicBoolean();
+        Map<String, RssTask.Outcome> outcomes = new LinkedHashMap<>();
+        HttpServer server = createRssServer(rssRequests, rssFailures,
+                ConcurrentHashMap.newKeySet(), true);
+        DownloaderClient client = mock(DownloaderClient.class);
+        Config config = ConfigUtil.snapshot();
+        String fixtureHash = "0123456789abcdef0123456789abcdef01234567";
+        when(client.configurationSnapshot()).thenReturn(config);
+        when(client.connect(anyBoolean())).thenReturn(DownloaderResult.success(null));
+        when(client.torrents()).thenAnswer(invocation -> {
+            if (!added.get()) return DownloaderResult.success(List.of());
+            return DownloaderResult.success(List.of(new TorrentsInfo()
+                    .setId("rss-add-fixture")
+                    .setHash(fixtureHash)
+                    .setName("RSS add fixture")
+                    .setState(TorrentsStateEnum.downloading)
+                    .setTagList(new ArrayList<>())
+                    .setSavePath(ConfigUtil.CONFIG.getDownloadPathTemplate())));
+        });
+        when(client.download(any(), any(), any(), any()))
+                .thenAnswer((Answer<DownloaderResult<Void>>) invocation -> {
+                    addCalls.incrementAndGet();
+                    added.set(true);
+                    return DownloaderResult.success(null, "rss-add-fixture");
+                });
+        setTorrentClient(client);
+
+        Ani fixture = AniUtil.createAni()
+                .setId("rss-add-fixture")
+                .setTitle("RSS add fixture")
+                .setBgmUrl("https://bgm.tv/subject/100001")
+                .setUrl("http://127.0.0.1:" + server.getAddress().getPort() + "/rss/add-fixture")
+                .setSubgroup("fixture")
+                .setSeason(1)
+                .setOffset(0)
+                .setEnable(true);
+        AniUtil.commit(List.of(fixture));
+        RssTask.installTestHooks(ignored -> { },
+                (id, outcome) -> outcomes.put(id, outcome));
+        AtomicLong fakeNanos = new AtomicLong();
+        TorrentUtil.installTestMonotonicClock(fakeNanos::get);
+        try {
+            RssTask.syncDownload(List.of(fixture));
+        } finally {
+            RssTask.resetTestHooks();
+            TorrentUtil.resetTestMonotonicClock();
+            TaskService.LOOP.set(false);
+            server.stop(0);
+            setTorrentClient(originalClient);
+        }
+
+        assertEquals(1, rssRequests.get());
+        assertEquals(1, addCalls.get());
+        assertTrue(added.get());
+        assertEquals(RssTask.Outcome.SUCCESS, outcomes.get(fixture.getId()));
+        writeAddFixtureReport(rssRequests.get(), addCalls.get(), outcomes);
+    }
+
     private HttpServer createRssServer(AtomicInteger requests, AtomicInteger failures,
                                        Set<String> threads) throws IOException {
+        return createRssServer(requests, failures, threads, false);
+    }
+
+    private HttpServer createRssServer(AtomicInteger requests, AtomicInteger failures,
+                                       Set<String> threads, boolean includeAddFixture) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/rss", exchange -> {
             requests.incrementAndGet();
             threads.add(Thread.currentThread().getName());
-            byte[] payload = "<?xml version=\"1.0\"?><rss version=\"2.0\"><channel>"
+            String fixture = includeAddFixture
+                    && exchange.getRequestURI().getPath().endsWith("/add-fixture")
+                    ? "<item><title>RSS add fixture - 01</title>"
+                    + "<guid>0123456789abcdef0123456789abcdef01234567</guid>"
+                    + "<enclosure url=\"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567\" length=\"1\"/>"
+                    + "</item>"
+                    : "";
+            byte[] payload = ("<?xml version=\"1.0\"?><rss version=\"2.0\"><channel>"
+                    + fixture)
                     .getBytes(StandardCharsets.UTF_8);
             byte[] suffix = "</channel></rss>".getBytes(StandardCharsets.UTF_8);
             byte[] body = new byte[payload.length + suffix.length];
@@ -206,6 +292,23 @@ class RssApplicationChainPerformanceTest {
         });
         server.start();
         return server;
+    }
+
+    private void writeAddFixtureReport(int rssRequests, int addCalls,
+                                       Map<String, RssTask.Outcome> outcomes) throws Exception {
+        Path output = Path.of("target", "w6-performance-data", "w6-rss-add-fixture.json")
+                .toAbsolutePath().normalize();
+        Files.createDirectories(output.getParent());
+        Map<String, Object> report = new LinkedHashMap<>();
+        report.put("schemaVersion", 1);
+        report.put("commit", gitOutput("rev-parse", "HEAD"));
+        report.put("measurementKind", "real-rss-add-fixture");
+        report.put("fixture", "one parseable magnet RSS item submitted through RssTask and DownloadService");
+        report.put("rssRequests", rssRequests);
+        report.put("downloaderAddCalls", addCalls);
+        report.put("outcomes", outcomes);
+        Files.writeString(output, reportJson(report) + System.lineSeparator(), StandardCharsets.UTF_8);
+        System.out.println("W6_ADD_FIXTURE_REPORT=" + output);
     }
 
     private List<Ani> subscriptions(int port) {
@@ -253,10 +356,10 @@ class RssApplicationChainPerformanceTest {
         counters.put("virtualPerSubscriptionSleepMs", virtualSleepMillis);
         counters.put("wallClockElapsedMs", elapsedMillis);
         counters.put("failedCount", status.failedCount());
-        counters.put("snapshotHits", null);
-        counters.put("snapshotMisses", null);
+        counters.put("snapshotHits", SUBSCRIPTION_COUNT - downloaderListCalls);
+        counters.put("snapshotMisses", downloaderListCalls);
         counters.put("snapshotDirtyEvents", null);
-        counters.put("snapshotReadsAfterFiveSeconds", null);
+        counters.put("snapshotReadsAfterFiveSeconds", Math.max(0, downloaderListCalls - 1));
 
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("schemaVersion", 1);
@@ -270,7 +373,7 @@ class RssApplicationChainPerformanceTest {
                 "RssTask", "SubscriptionDownloadQueue", "DownloadService", "TorrentUtil", "ItemsUtil"));
         report.put("stubbedBoundaries", List.of("synthetic RSS HTTP transport", "DownloaderClient"));
         report.put("scenario", "rss-cycle-100-enabled");
-        report.put("clockMode", "real-with-virtual-rss-sleep");
+        report.put("clockMode", "shared-fake-monotonic-and-rss-sleeper");
         report.put("environment", Map.of(
                 "java", System.getProperty("java.version"),
                 "os", System.getProperty("os.name"),
@@ -290,13 +393,13 @@ class RssApplicationChainPerformanceTest {
         report.put("counters", counters);
         report.put("assertions", List.of(
                 "100 real subscription ids reached ItemsUtil through RssTask",
-                "one successful downloader list snapshot served the cycle",
+                "the shared monotonic clock forced a fresh downloader snapshot at t=5s boundaries",
                 "all 100 actual subscription outcomes were SUCCESS",
                 "500ms per-subscription throttle was measured as virtual time, not removed"));
         report.put("limitations", List.of(
-                "RSS body is a valid empty channel, so the real add/download mutation path is not exercised in this scenario.",
+                "This 100-subscription timing fixture uses an empty RSS channel; the real add/download mutation fixture is covered separately.",
                 "Downloader files/add/delete/move/rename counters are null because those operations were not invoked.",
-                "Snapshot hit/miss/dirty sub-counters are not instrumented in this run; downloader list calls are actual mock transport calls.",
+                "Snapshot dirty events are not instrumented in this run; hit/miss and post-boundary reads are derived from the actual mock transport calls.",
                 "Only external RSS HTTP and downloader boundaries are synthetic; Spring services, queue, parser and worker are real."));
         Files.writeString(output, reportJson(report) + System.lineSeparator(), StandardCharsets.UTF_8);
         System.out.println("W6_REPORT=" + output);

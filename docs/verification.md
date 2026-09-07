@@ -14,6 +14,7 @@
 - W6 RSS 链路：实际 `RssTask → SubscriptionDownloadQueue → DownloadService → TorrentUtil/ItemsUtil`，100 个启用订阅全部 `SUCCESS`，RSS 请求 100、downloader connect/list 各 1，虚拟节流 `50,000ms`，实测墙钟 `1,226ms`。
 - W7 浏览器：[`w7-browser-v3.2.28.62-20260907.json`](performance-data/w7-browser-v3.2.28.62-20260907.json) 在 commit `4df5e7e2`、`dirty:false` 上完成 8/8 场景：登录/首页/订阅 cold+hot、播放弹窗、设置页。所有场景 `pageErrors=0`、`consoleErrors=0`、`chunk404s=0`；HTTP 失败仅为未登录 CSRF/IP-login 的预期 401。
 - W7 播放动态资源实际加载 46 个 JS/CSS、设置页 67 个 JS/CSS；播放合成媒体的解码事件单独记录为 `mediaErrors`，不冒充页面脚本错误。
+- 发布：tag `v3.2.28.62` 指向精确提交 `cce1190e`，workflow `34077710357` 成功；GitHub Release 已上传 `ani-rss.jar`（SHA-256 `fa4706e7429f7bfc12e24f954068e7d783bb11f4674cf23483eae4d801bf68ca`）和 `ani-rss.exe`（SHA-256 `87db32444a247da78f8a11e6c535588892c04ab09b3acea57ba8856374961b71`）。GHCR 已核验 temurin `sha256:bb33815c239e18b150ec2717400b98b3acfcdca633099a7799e1255a9b011358`（linux/amd64、linux/arm64）、openj9 `sha256:54ec8316c552039a64f698c365816246395fe4aec8c9b3c2a04f322f7008bedd`（linux/amd64、linux/arm64）和 arm32v7 `sha256:4a7ff86fc683cc8476f9582f4682155e75ce3291a54e9640745747781b58fb06`（linux/arm/v7）；Docker Hub 因未配置凭据而跳过。
 
 ## 可重复命令
 
@@ -45,7 +46,7 @@ W6 原始报告：
 - 真实账号登录、生产首屏 LCP、真实媒体格式解码、Range/字幕/外部播放器完整操作；本轮仅用本地合成接口验证前端链路。
 - W6 RSS fixture 使用可解析空 RSS，因此真实 add/download、文件 walk、移动/重命名、缺集恢复路径的运行时计数仍为 `null`，不能从 100 个订阅推导。
 - 真实下载器、生产数据库锁等待、DB 查询数和用户媒体目录恢复；W6 原始 JSON 已明确标记未测字段。
-- Docker Desktop/Linux engine 本地构建；多架构镜像、GHCR/Docker Hub 推送和 GitHub Release 产物必须以精确 tag workflow 的实际结果为准。
+- Docker Desktop/Linux engine 本地构建仍未验证；多架构 GHCR 镜像和 GitHub Release 已以精确 tag workflow 实际结果核验，Docker Hub 因未配置凭据未发布。
 
 计划状态只使用允许值：通过、进行中、失败、未开始、未验证（原因）。
 
@@ -66,4 +67,4 @@ W6 原始报告：
 | 媒体与恢复契约 | 通过 | 合成媒体/恢复组件与 HTTP 测试；复杂媒体格式未验证 |
 | 缺集补全与归属 | 通过 | 完整回归 302/0/0/4 skipped |
 | T7 DB/network/file 费用采样 | 未验证（原因） | DB、lock、file-walk 计数在 W6 原始报告中保留为 null |
-| 发布 | 进行中 | 代码、版本和验收提交已冻结，等待 tag workflow 产物核验 |
+| 发布 | 通过 | `v3.2.28.62` / `cce1190e`；tag workflow `34077710357`、Release 附件和 GHCR 多架构 digest 已核验 |

@@ -6,7 +6,7 @@
 
 | 项目 | 实际值 |
 | --- | --- |
-| 发布版本 | `3.2.28.62`，计划发布标签 `v3.2.28.62` |
+| 发布版本 | `3.2.28.62`，已发布标签 `v3.2.28.62`；tag workflow `34077710357` |
 | 行为代码提交 | `19dfaf3a` |
 | 版本提交 | `674f7b55` |
 | 最终证据提交 | `4df5e7e2` |
@@ -23,6 +23,18 @@
 - [`w6-hot-list-v3.2.28.62-20260907.json`](performance-data/w6-hot-list-v3.2.28.62-20260907.json)：冷/30 次进程内热/重启持久缓存。
 - [`w6-rss-v3.2.28.62-20260907.json`](performance-data/w6-rss-v3.2.28.62-20260907.json)：实际 RssTask 服务链和 100 个启用订阅。
 - [`w7-browser-v3.2.28.62-20260907.json`](performance-data/w7-browser-v3.2.28.62-20260907.json)：生产 Vite 输出的 8 个浏览器场景；`commit=4df5e7e2`、`dirty=false`。
+
+## 发布产物
+
+tag `v3.2.28.62` 指向 `cce1190e`。GitHub Release 已上传 `ani-rss.jar`（SHA-256 `fa4706e7429f7bfc12e24f954068e7d783bb11f4674cf23483eae4d801bf68ca`）和 `ani-rss.exe`（SHA-256 `87db32444a247da78f8a11e6c535588892c04ab09b3acea57ba8856374961b71`）。GHCR manifest index 已核验：
+
+| 镜像 tag | index digest | 平台 |
+| --- | --- | --- |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.62` | `sha256:bb33815c239e18b150ec2717400b98b3acfcdca633099a7799e1255a9b011358` | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.62-openj9` | `sha256:54ec8316c552039a64f698c365816246395fe4aec8c9b3c2a04f322f7008bedd` | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.62-arm32v7` | `sha256:4a7ff86fc683cc8476f9582f4682155e75ce3291a54e9640745747781b58fb06` | `linux/arm/v7` |
+
+Docker Hub 推送因 workflow 未检测到凭据而跳过；这不是 GHCR 发布失败。
 
 ## 静态 bundle 门禁
 

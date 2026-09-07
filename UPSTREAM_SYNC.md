@@ -36,7 +36,7 @@
 - 被上游等效替代：无。本轮未执行上游提交合并，没有把冲突解决成功误记为行为等效。
 - 明确淘汰：无。未删除原有恢复、归属、完成、备份、下载和媒体路径。
 - 待确认：真实外部源/下载器/账号/媒体/数据库费用、Linux engine 本地构建；4 个 Java 测试仍因符号链接或外部样本缺失跳过，详见 [`docs/verification.md`](docs/verification.md)。
-- 证据：Java 319 tests、前端 35/35；W7/N08 raw reports 均记录 `commit=bff06cb...` 和 `dirty=false`。远端 tag workflow、Release 资产和 GHCR digest 在 push 后补记。
+- 证据：Java 319 tests、前端 35/35；W7/N08 raw reports 均记录 `commit=bff06cb...` 和 `dirty=false`；远端 `build-test` run `34109933350` 已成功。tag workflow、Release 资产和 GHCR digest 在正式打标后补记。
 
 ## 3.2.28.63 本轮审计记录
 

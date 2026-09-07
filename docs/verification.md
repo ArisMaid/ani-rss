@@ -20,7 +20,7 @@
 | R63-03 manifest 单 writer 与 revision | 通过 | `bff06cb0`；manifest revision/dirty/persistedRevision、同锁快照和写入 owner；`ImageCacheServiceTest` 19/19 通过 |
 | R63-04 close 最终 flush | 通过 | `bff06cb0`；OPEN/CLOSING/CLOSED、共享有界 deadline、最终 flush 与诊断状态；成功、失败、超时和幂等关闭用例通过 |
 | R63-05 pending deletion 全预算 | 通过 | `bff06cb0`；路径并集计费、reserved/tracked bytes/files、准入、轮转扫描、退避和 bounded maintenance；同路径 entry+pending 并集计费回归通过 |
-| R63-06 CI N08 门禁 | 已实现 | `da4a0c23`；W7/N08 使用同一唯一生产 dist、独立报告、always artifact upload、超时门禁；本地 W7/N08 已通过，远端 CI 待本次 push 验证 |
+| R63-06 CI N08 门禁 | 通过 | `da4a0c23`；W7/N08 使用同一唯一生产 dist、独立报告、always artifact upload、超时门禁；本地与远端 `build-test` run `34109933350` 均通过 |
 
 ### W7/N08 原始证据
 
@@ -30,7 +30,7 @@
 
 ### 发布状态
 
-- 版本已固化为 `3.2.28.64`；GitHub tag、Actions build workflow、GitHub Release 和 GHCR digest/platform 需在本次推送后补入本节。
+- 版本已固化为 `3.2.28.64`；`build-test` run [`34109933350`](https://github.com/ArisMaid/ani-rss/actions/runs/34109933350) 已成功，GitHub tag、Actions build workflow、GitHub Release 和 GHCR digest/platform 待正式 tag workflow 完成后补入本节。
 - Docker Hub 只有在 workflow 所需凭据存在时发布；未配置凭据不作为 GHCR 失败处理。
 
 ### 当前未验证边界

@@ -2,14 +2,18 @@ package ani.rss.service;
 
 import ani.rss.entity.AnimeGarden;
 import ani.rss.entity.BgmInfo;
+import ani.rss.exception.ApiProblemException;
 import com.google.gson.JsonObject;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -33,8 +37,59 @@ class AnimeGardenServiceTest {
 
         assertEquals(Set.of("1", "2"), result.getSubjects().keySet(),
                 "a later list request must not invalidate the first consumer's ids");
-        assertThrows(IllegalArgumentException.class, () -> service.enrich(List.of("999")),
+        assertThrows(ApiProblemException.class, () -> service.enrich(List.of("999")),
                 "an id never returned by a list must be rejected before enrichment");
+    }
+
+    @Test
+    void keepsAllSubjectsWhenAListContainsMoreThanTheOld512EntryLimit() {
+        AnimeGardenService service = newService(() -> IntStream.rangeClosed(1, 513)
+                .mapToObj(index -> subject(String.valueOf(index)))
+                .toList());
+
+        service.list("");
+
+        assertTrue(service.enrich(List.of("513")).getSubjects().containsKey("513"));
+    }
+
+    @Test
+    void reportsStableConflictWhenAListSnapshotExpires() {
+        AtomicLong now = new AtomicLong(1_000L);
+        AnimeGardenService service = new AnimeGardenService(
+                () -> List.of(subject("123")),
+                emptyCache(),
+                new PublicScoreService(id -> null, url -> "") {
+                    @Override
+                    public BgmScoreLookup getCachedBgmScoresAndWarm(java.util.Collection<String> subjectIds) {
+                        return new BgmScoreLookup(Map.of(), Set.copyOf(subjectIds));
+                    }
+                },
+                id -> null,
+                now::get);
+        service.list("");
+        now.addAndGet(10 * 60 * 1000L);
+
+        ApiProblemException error = assertThrows(ApiProblemException.class,
+                () -> service.enrich(List.of("123")));
+
+        assertEquals(HttpStatus.CONFLICT, error.status());
+        assertEquals("ANIME_GARDEN_LIST_EXPIRED", error.code());
+    }
+
+    @Test
+    void reportsStableConflictWhenAnOldSnapshotIsEvicted() {
+        AtomicInteger nextId = new AtomicInteger();
+        AnimeGardenService service = newService(() ->
+                List.of(subject(String.valueOf(nextId.incrementAndGet()))));
+
+        for (int index = 0; index < 33; index++) {
+            service.list("");
+        }
+
+        ApiProblemException error = assertThrows(ApiProblemException.class,
+                () -> service.enrich(List.of("1")));
+
+        assertEquals("ANIME_GARDEN_LIST_EXPIRED", error.code());
     }
 
     @Test

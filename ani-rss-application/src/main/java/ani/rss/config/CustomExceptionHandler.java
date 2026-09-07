@@ -28,7 +28,7 @@ public class CustomExceptionHandler {
 
     @ExceptionHandler(ApiProblemException.class)
     public Object apiProblem(ApiProblemException e, HttpServletRequest request) {
-        if (!isV2(request)) {
+        if (!isV2(request) && !"ANIME_GARDEN_LIST_EXPIRED".equals(e.code())) {
             return Result.error(e.getMessage());
         }
         ProblemDetail detail = problem(e.status(), e.code(), e.getMessage(), e.operationId());

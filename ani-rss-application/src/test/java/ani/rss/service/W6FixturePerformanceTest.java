@@ -207,7 +207,7 @@ class W6FixturePerformanceTest {
         assertEquals(0.0, defaultEnrichment.getSubjects().get("900002").getScore());
         assertEquals(8.0, searchEnrichment.getSubjects().get("900003").getScore());
         assertTrue(garden.enrich(List.of("900001")).getRetryableSubjectIds().isEmpty());
-        assertThrows(IllegalArgumentException.class, () -> garden.enrich(List.of("900999")));
+        assertThrows(ani.rss.exception.ApiProblemException.class, () -> garden.enrich(List.of("900999")));
 
         ImageFixtureResult images = measureImages();
         assertEquals(IMAGE_REFERENCE_COUNT, images.logicalReferences());

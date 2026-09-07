@@ -187,6 +187,26 @@ describe('list view lifecycle', () => {
     resolveScores?.({data: {scores: {}, retryableMikanIds: []}})
   })
 
+  it('shows the Mikan enrichment state while a score request is still pending', async () => {
+    let resolveScores
+    http.mikan.mockResolvedValue(validMikanList('评分状态列表'))
+    http.mikanScores.mockImplementationOnce(() => new Promise(resolve => {
+      resolveScores = resolve
+    }))
+    wrapper = mount(MikanView, {
+      global: {stubs, directives: {loading: {}}}
+    })
+    wrapper.vm.show({title: '评分状态'})
+    await tick()
+
+    expect(wrapper.find('[data-enrichment-status]').text()).toContain('评分加载中')
+    wrapper.vm.scoreStates['星期一'].status = 'incomplete'
+    wrapper.vm.scoreStates['星期一'].pendingIds = ['123']
+    await tick()
+    expect(wrapper.find('[data-enrichment-status]').text()).toContain('重试剩余资源')
+    resolveScores?.({data: {scores: {}, retryableMikanIds: []}})
+  })
+
   it('uses the submitted Mikan query snapshot when the cancelled list resumes', async () => {
     let resolveSecond
     http.mikan
@@ -271,6 +291,28 @@ describe('list view lifecycle', () => {
     expect(http.animeGardenEnrichment).toHaveBeenCalledTimes(1)
     expect(wrapper.vm.data.items[0].subjects[0].cover).toBe('cover-after')
     expect(wrapper.vm.data.items[0].subjects[0].score).toBe(0)
+  })
+
+  it('reloads AnimeGarden exactly once when enrichment reports an expired list', async () => {
+    const expired = Object.assign(new Error('列表已过期'), {
+      code: 'ANIME_GARDEN_LIST_EXPIRED', status: 409
+    })
+    http.animeGardenList
+      .mockResolvedValueOnce(validAnimeGardenList('旧列表'))
+      .mockResolvedValueOnce(validAnimeGardenList('受控重载列表'))
+    http.animeGardenEnrichment
+      .mockRejectedValueOnce(expired)
+      .mockResolvedValueOnce({data: {subjects: {}, retryableSubjectIds: []}})
+
+    wrapper = mount(AnimeGardenView, {
+      global: {stubs, directives: {loading: {}}}
+    })
+    wrapper.vm.show()
+    for (let index = 0; index < 6; index++) await tick()
+
+    expect(http.animeGardenList).toHaveBeenCalledTimes(2)
+    expect(http.animeGardenEnrichment).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('受控重载列表')
   })
 
   it('keeps an unknown AnimeGarden score unknown instead of converting it to zero', async () => {

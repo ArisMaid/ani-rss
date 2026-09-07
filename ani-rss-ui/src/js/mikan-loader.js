@@ -150,6 +150,10 @@ const sleepUntilDeadline = async ({sleep, milliseconds, signal, deadline, now}) 
 const isRecord = value => value !== null && typeof value === 'object'
   && !Array.isArray(value)
 
+const isTerminalEnrichmentError = error =>
+  error?.code === 'ANIME_GARDEN_LIST_EXPIRED'
+  || error?.problem?.code === 'ANIME_GARDEN_LIST_EXPIRED'
+
 /**
  * Accepts both the current API envelope ({data: {...}}) and the original
  * direct payload ({...}), while keeping malformed responses retryable. The
@@ -209,51 +213,83 @@ export const enrichIds = async ({
   let pending = uniqueIds(ids)
   const deadline = now() + maxDuration
   let retryRound = 0
+  const internalController = new AbortController()
+  const relayAbort = () => internalController.abort()
+  signal?.addEventListener('abort', relayAbort, {once: true})
+  if (signal?.aborted) internalController.abort()
 
-  while (pending.length && now() < deadline) {
-    const nextPending = []
-    const batches = chunk(pending, SCORE_BATCH_SIZE)
-    let nextBatch = 0
-    const worker = async () => {
-      while (nextBatch < batches.length) {
-        const batch = batches[nextBatch++]
-        if (now() >= deadline) {
-          nextPending.push(...batch)
-          continue
+  try {
+    while (pending.length && now() < deadline) {
+      const nextPending = []
+      const batches = chunk(pending, SCORE_BATCH_SIZE)
+      let nextBatch = 0
+      let terminalError
+      const worker = async () => {
+        while (nextBatch < batches.length) {
+          const batch = batches[nextBatch++]
+          if (now() >= deadline) {
+            nextPending.push(...batch)
+            continue
+          }
+          const result = await requestUntilDeadline({
+            fetchBatch, batch, signal: internalController.signal, deadline, now
+          })
+          if (result.error) {
+            if (isTerminalEnrichmentError(result.error)) {
+              terminalError = result.error
+              internalController.abort()
+              throw result.error
+            }
+            nextPending.push(...batch)
+            continue
+          }
+          if (result.timedOut) {
+            nextPending.push(...batch)
+            continue
+          }
+          const normalized = normalizeEnrichmentResponse(result.response, {
+            batch,
+            resultKey,
+            retryKey
+          })
+          if (!normalized.valid) {
+            nextPending.push(...batch)
+            continue
+          }
+          // A retryable id may also have partial fields in this response. It
+          // must be rendered now and sent again in the next bounded round.
+          onUpdate?.(normalized.payload, {
+            batch: [...batch],
+            retryable: [...normalized.retryable]
+          })
+          nextPending.push(...batch.filter(id => normalized.retryable.includes(id)))
         }
-        const result = await requestUntilDeadline({fetchBatch, batch, signal, deadline, now})
-        if (result.timedOut || result.error) {
-          nextPending.push(...batch)
-          continue
-        }
-        const normalized = normalizeEnrichmentResponse(result.response, {
-          batch,
-          resultKey,
-          retryKey
-        })
-        if (!normalized.valid) {
-          nextPending.push(...batch)
-          continue
-        }
-        // A retryable id may also have partial fields in this response. It
-        // must be rendered now and sent again in the next bounded round.
-        onUpdate?.(normalized.payload)
-        nextPending.push(...batch.filter(id => normalized.retryable.includes(id)))
       }
+
+      const workers = Array.from({
+        length: Math.min(SCORE_MAX_CONCURRENT_BATCHES, batches.length)
+      }, worker)
+      try {
+        await Promise.all(workers)
+      } catch (error) {
+        if (terminalError) throw terminalError
+        throw error
+      }
+
+      pending = uniqueIds(nextPending)
+      if (!pending.length || now() >= deadline) break
+      const delay = SCORE_RETRY_DELAYS[Math.min(retryRound, SCORE_RETRY_DELAYS.length - 1)] || 2000
+      retryRound++
+      if (!await sleepUntilDeadline({
+        sleep, milliseconds: delay, signal: internalController.signal, deadline, now
+      })) break
     }
-    const workers = Array.from({
-      length: Math.min(SCORE_MAX_CONCURRENT_BATCHES, batches.length)
-    }, worker)
-    await Promise.all(workers)
 
-    pending = uniqueIds(nextPending)
-    if (!pending.length || now() >= deadline) break
-    const delay = SCORE_RETRY_DELAYS[Math.min(retryRound, SCORE_RETRY_DELAYS.length - 1)] || 2000
-    retryRound++
-    if (!await sleepUntilDeadline({sleep, milliseconds: delay, signal, deadline, now})) break
+    return pending
+  } finally {
+    signal?.removeEventListener('abort', relayAbort)
+    internalController.abort()
   }
-
-  return pending
 }
 
 /**

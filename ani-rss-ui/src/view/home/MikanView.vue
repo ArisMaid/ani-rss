@@ -58,6 +58,16 @@
             <el-button :disabled="rssList.length < 1" bg icon="Plus" text @click="batchAddition">批量添加</el-button>
           </div>
         </div>
+        <div v-if="showScore && activeScoreState.status !== 'idle' && activeScoreState.status !== 'complete'"
+             class="enrichment-status" data-enrichment-status>
+          <span v-if="activeScoreState.status === 'loading'">评分加载中…</span>
+          <span v-else-if="activeScoreState.status === 'incomplete'">
+            仍有 {{ activeScoreState.pendingIds.length }} 项评分未完成
+          </span>
+          <span v-else>评分加载失败，可重试剩余资源</span>
+          <el-button v-if="activeScoreState.status !== 'loading'" bg text
+                     @click="retryScores">重试剩余资源</el-button>
+        </div>
         <div v-loading="loading" :data-loading="loading" class="scroll-container">
           <el-tabs v-model="activeName" class="week-tabs">
             <el-tab-pane v-for="week in data.weeks" :key="week.weekLabel"
@@ -149,12 +159,12 @@
 </template>
 
 <script setup>
-import {onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch} from "vue";
+import {computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch} from "vue";
 import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy, Download as DownloadIcon} from "@element-plus/icons-vue";
 import SafeImageView from "@/view/custom/SafeImageView.vue";
 import * as http from "@/js/http.js";
-import {enrichScores, mergeScores} from "@/js/mikan-loader.js";
+import {enrichScores, extractMikanId, mergeScores} from "@/js/mikan-loader.js";
 import {showScore} from "@/js/global.js";
 
 // 批量添加订阅
@@ -168,6 +178,10 @@ let data = ref({
   'seasons': [],
   'items': [],
   'weeks': []
+})
+let scoreStates = ref({})
+let activeScoreState = computed(() => scoreStates.value[activeName.value] || {
+  status: 'idle', pendingIds: [], error: ''
 })
 
 let seasonSelect = ref('')
@@ -183,6 +197,7 @@ let show = (ani) => {
     'items': [],
     'weeks': []
   }
+  scoreStates.value = {}
   rssList.value = []
   searchAni(ani)
   list(text.value)
@@ -218,6 +233,7 @@ let searchGeneration = 0
 let listGeneration = 0
 let listController
 let scoreController
+let scoreActiveKey = ''
 let groupGeneration = 0
 let groupController
 let currentListValid = false
@@ -237,6 +253,7 @@ let search = () => {
 
 let cancelListRequests = () => {
   listController?.abort()
+  markScoreIncomplete()
   scoreController?.abort()
   groupController?.abort()
   groupGeneration++
@@ -247,35 +264,88 @@ let cancelListRequests = () => {
   loading.value = false
 }
 
-let startScores = async (generation = listGeneration) => {
+const scoreState = weekName => {
+  if (!scoreStates.value[weekName]) {
+    scoreStates.value[weekName] = {status: 'idle', pendingIds: [], error: ''}
+  }
+  return scoreStates.value[weekName]
+}
+
+const markScoreIncomplete = () => {
+  if (!scoreActiveKey) return
+  const state = scoreStates.value[scoreActiveKey]
+  if (state?.status === 'loading') {
+    state.status = 'incomplete'
+    state.error = ''
+  }
+}
+
+let startScores = async (generation = listGeneration, {force = false} = {}) => {
   if (document.hidden || !showScore.value || !dialogVisible.value || generation !== listGeneration) return
   const startKey = `${generation}:${activeName.value}:${showScore.value}`
-  if (scoreStartKey === startKey) return
+  const state = scoreState(activeName.value)
+  if (!force && (scoreStartKey === startKey || state.status === 'loading'
+      || state.status === 'complete' || state.status === 'failed')) return
   const week = data.value.weeks.find(item => item.weekLabel === activeName.value)
   const items = week?.items || []
   if (!items.length) return
+  const itemsById = new Map(items
+      .map(item => [extractMikanId(item?.url), item])
+      .filter(([id]) => id))
+  const allIds = [...itemsById.keys()]
+  const ids = state.status === 'incomplete' || state.status === 'failed'
+    ? state.pendingIds.filter(id => itemsById.has(id))
+    : allIds
+  if (!ids.length) {
+    state.status = 'complete'
+    state.pendingIds = []
+    return
+  }
   scoreStartKey = startKey
+  scoreActiveKey = activeName.value
+  state.status = 'loading'
+  state.error = ''
+  state.pendingIds = [...ids]
   scoreController?.abort()
   const controller = new AbortController()
   scoreController = controller
   try {
     await enrichScores({
-      items,
-      fetchScores: (ids, options) => http.mikanScores(ids, options),
-      onUpdate: ({scores, subscribedBgmIds}) => {
+      items: ids.map(id => itemsById.get(id)),
+      fetchScores: (requestIds, options) =>
+        http.mikanScores(requestIds, {...options, silent: true}),
+      onUpdate: ({scores, subscribedBgmIds}, meta) => {
         if (generation !== listGeneration || controller.signal.aborted) return
         mergeScores(data.value.weeks, scores, subscribedBgmIds)
+        if (meta?.batch) {
+          const retryable = new Set(meta.retryable || [])
+          state.pendingIds = state.pendingIds.filter(id =>
+              !meta.batch.includes(id) || retryable.has(id))
+        }
       },
       signal: controller.signal
+    }).then(pending => {
+      if (generation !== listGeneration || controller.signal.aborted) return
+      state.pendingIds = [...pending]
+      state.status = pending.length ? 'incomplete' : 'complete'
     })
   } catch (error) {
     if (error?.name !== 'AbortError' && error?.code !== 'REQUEST_ABORTED'
         && !controller.signal.aborted && generation === listGeneration) {
+      state.status = 'failed'
+      state.error = error?.message || '评分加载失败'
       ElMessage.warning('评分暂时不可用，可重新切换星期重试')
     }
   } finally {
     if (scoreController === controller) scoreController = undefined
+    if (scoreActiveKey === activeName.value && scoreController === undefined) scoreActiveKey = ''
+    if (scoreStartKey === startKey) scoreStartKey = ''
   }
+}
+
+const retryScores = () => {
+  scoreStartKey = ''
+  void startScores(listGeneration, {force: true})
 }
 
 let list = async (text, body) => {
@@ -288,6 +358,7 @@ let list = async (text, body) => {
   needsListReload = true
   selectName.value = ''
   groups.value = {}
+  scoreStates.value = {}
   const controller = new AbortController()
   listController = controller
   loading.value = true
@@ -382,6 +453,7 @@ let close = () => {
   currentListValid = false
   needsListReload = false
   scoreStartKey = ''
+  scoreStates.value = {}
   dialogVisible.value = false
 }
 
@@ -395,6 +467,7 @@ watch(showScore, value => {
     startScores()
   } else {
     scoreStartKey = ''
+    markScoreIncomplete()
     scoreController?.abort()
   }
 })
@@ -406,6 +479,7 @@ const pauseForLifecycle = () => {
     currentListValid = false
     needsListReload = true
   }
+  markScoreIncomplete()
   cancelListRequests()
   scoreStartKey = ''
 }

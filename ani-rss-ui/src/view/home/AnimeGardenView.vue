@@ -42,6 +42,16 @@
             <el-button :disabled="rssList.length < 1" bg icon="Plus" text @click="batchAddition">批量添加</el-button>
           </div>
         </div>
+        <div v-if="activeEnrichmentState.status !== 'idle' && activeEnrichmentState.status !== 'complete'"
+             class="enrichment-status" data-enrichment-status>
+          <span v-if="activeEnrichmentState.status === 'loading'">封面和评分加载中…</span>
+          <span v-else-if="activeEnrichmentState.status === 'incomplete'">
+            仍有 {{ activeEnrichmentState.pendingIds.length }} 项资源未完成
+          </span>
+          <span v-else>列表补充失败，可重试剩余资源</span>
+          <el-button v-if="activeEnrichmentState.status !== 'loading'" bg text
+                     @click="retryEnrichment">重试剩余资源</el-button>
+        </div>
         <div v-loading="loading" :data-loading="loading" class="scroll-container">
           <el-tabs v-model="activeName" class="week-tabs">
             <el-tab-pane v-for="item in data.items" :key="item.weekLabel"
@@ -134,7 +144,7 @@
 </template>
 
 <script setup>
-import {onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch} from "vue";
+import {computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch} from "vue";
 import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy} from "@element-plus/icons-vue";
 import * as http from "@/js/http.js";
@@ -155,6 +165,13 @@ let enrichmentController
 let groupController
 let groupGeneration = 0
 let enrichmentKey = ''
+let enrichmentStates = ref({})
+let activeEnrichmentState = computed(() => enrichmentStates.value[activeName.value] || {
+  status: 'idle', pendingIds: [], error: ''
+})
+let expiredRecoveryPromise
+let expiredRecoveryAttempted = false
+let expiredRecoveryExhausted = false
 let currentListValid = false
 let needsListReload = false
 let lastListBgmUrl = ''
@@ -163,12 +180,16 @@ let data = ref({
 })
 
 let show = (bgmUrl = '') => {
+  expiredRecoveryPromise = undefined
+  expiredRecoveryAttempted = false
+  expiredRecoveryExhausted = false
   closeRequests()
   listGeneration++
   dialogVisible.value = true
   data.value = {
     'items': []
   }
+  enrichmentStates.value = {}
   rssList.value = []
   list(bgmUrl)
 }
@@ -182,6 +203,8 @@ let list = async (bgmUrl = '') => {
   needsListReload = true
   selectName.value = ''
   groups.value = {}
+  enrichmentStates.value = {}
+  enrichmentKey = ''
   loading.value = true
   return http.animeGardenList(lastListBgmUrl, {signal: controller.signal})
       .then(res => {
@@ -229,39 +252,120 @@ const updateSubjects = subjects => {
   }
 }
 
-const startEnrichment = async (generation = listGeneration) => {
+const enrichmentState = weekName => {
+  if (!enrichmentStates.value[weekName]) {
+    enrichmentStates.value[weekName] = {status: 'idle', pendingIds: [], error: ''}
+  }
+  return enrichmentStates.value[weekName]
+}
+
+const markEnrichmentIncomplete = () => {
+  const state = enrichmentStates.value[activeName.value]
+  if (state?.status === 'loading') {
+    state.status = 'incomplete'
+    state.error = ''
+  }
+}
+
+const recoverExpiredList = async generation => {
+  if (generation !== listGeneration || document.hidden || !dialogVisible.value) return false
+  if (expiredRecoveryPromise) return expiredRecoveryPromise
+  if (expiredRecoveryAttempted || expiredRecoveryExhausted) return false
+
+  expiredRecoveryAttempted = true
+  expiredRecoveryPromise = list(lastListBgmUrl)
+      .then(() => true)
+      .catch(error => {
+        expiredRecoveryExhausted = true
+        if (generation === listGeneration && !controllerIsAborted(error)) {
+          const state = enrichmentState(activeName.value)
+          state.status = 'failed'
+          state.error = error?.message || '列表重新加载失败'
+        }
+        return false
+      })
+      .finally(() => {
+        expiredRecoveryPromise = undefined
+      })
+  return expiredRecoveryPromise
+}
+
+const controllerIsAborted = error => error?.code === 'REQUEST_ABORTED' || error?.name === 'AbortError'
+
+const startEnrichment = async (generation = listGeneration, {force = false} = {}) => {
   if (document.hidden || !dialogVisible.value || generation !== listGeneration) return
   const week = data.value.items?.find(item => item.weekLabel === activeName.value)
-  const ids = (week?.subjects || []).map(subject => String(subject.id)).filter(Boolean)
+  const allIds = (week?.subjects || []).map(subject => String(subject.id)).filter(Boolean)
+  const state = enrichmentState(activeName.value)
+  if (!force && (state.status === 'loading' || state.status === 'complete'
+      || state.status === 'failed')) return
+  const ids = state.status === 'incomplete' || state.status === 'failed'
+    ? state.pendingIds.filter(id => allIds.includes(id))
+    : allIds
   if (!ids.length) return
   const key = `${generation}:${activeName.value}`
-  if (enrichmentKey === key) return
+  if (!force && enrichmentKey === key) return
   enrichmentKey = key
+  state.status = 'loading'
+  state.error = ''
+  state.pendingIds = [...ids]
   enrichmentController?.abort()
   const controller = new AbortController()
   enrichmentController = controller
   try {
     await enrichSubjects({
       ids,
-      fetchSubjects: (subjectIds, options) => http.animeGardenEnrichment(subjectIds, options),
-      onUpdate: payload => {
+      fetchSubjects: (subjectIds, options) =>
+        http.animeGardenEnrichment(subjectIds, {...options, silent: true}),
+      onUpdate: (payload, meta) => {
         if (generation !== listGeneration || controller.signal.aborted) return
         updateSubjects(payload.subjects)
+        if (meta?.batch) {
+          const retryable = new Set(meta.retryable || [])
+          state.pendingIds = state.pendingIds.filter(id =>
+              !meta.batch.includes(id) || retryable.has(id))
+        }
       },
       signal: controller.signal
+    }).then(pending => {
+      if (generation !== listGeneration || controller.signal.aborted) return
+      state.pendingIds = [...pending]
+      state.status = pending.length ? 'incomplete' : 'complete'
     })
   } catch (error) {
-    if (error?.code !== 'REQUEST_ABORTED' && error?.name !== 'AbortError'
-        && generation === listGeneration && !controller.signal.aborted) {
+    if (controllerIsAborted(error) || controller.signal.aborted) {
+      if (generation === listGeneration) {
+        state.status = 'incomplete'
+        state.error = ''
+      }
+    } else if (error?.code === 'ANIME_GARDEN_LIST_EXPIRED'
+        && generation === listGeneration && !document.hidden) {
+      state.status = 'incomplete'
+      state.error = error.message || '列表快照已过期'
+      const reloaded = await recoverExpiredList(generation)
+      if (!reloaded && generation === listGeneration) {
+        state.status = 'failed'
+        state.error = '列表已变化，请重新打开列表'
+      }
+    } else if (generation === listGeneration && !controller.signal.aborted) {
+      state.status = 'failed'
+      state.error = error?.message || '列表补充失败'
       ElMessage.warning('封面或评分暂时不可用，可重新切换星期重试')
     }
   } finally {
     if (enrichmentController === controller) enrichmentController = undefined
+    if (enrichmentKey === key) enrichmentKey = ''
   }
+}
+
+const retryEnrichment = () => {
+  enrichmentKey = ''
+  void startEnrichment(listGeneration, {force: true})
 }
 
 const closeRequests = () => {
   listController?.abort()
+  markEnrichmentIncomplete()
   enrichmentController?.abort()
   groupController?.abort()
   groupGeneration++
@@ -277,6 +381,10 @@ const close = () => {
   listGeneration++
   currentListValid = false
   needsListReload = false
+  expiredRecoveryPromise = undefined
+  expiredRecoveryAttempted = false
+  expiredRecoveryExhausted = false
+  enrichmentStates.value = {}
   closeRequests()
 }
 
@@ -289,6 +397,7 @@ const pauseForLifecycle = () => {
     currentListValid = false
     needsListReload = true
   }
+  markEnrichmentIncomplete()
   closeRequests()
 }
 

@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest'
 import {
   enrichScores,
+  enrichSubjects,
   extractMikanId,
   mergeScores,
   normalizeEnrichmentResponse
@@ -111,6 +112,31 @@ describe('mikan-loader', () => {
     expect(pending).toEqual([])
   })
 
+  it('renders partial AnimeGarden subjects and retries only the remaining ids', async () => {
+    const calls = []
+    const updates = []
+    let attempt = 0
+    const pending = await enrichSubjects({
+      ids: ['1', '2'],
+      fetchSubjects: async ids => {
+        calls.push(ids)
+        attempt++
+        return attempt === 1
+          ? {data: {
+            subjects: {1: {cover: 'cover-1', score: 0}},
+            retryableSubjectIds: ['2']
+          }}
+          : {subjects: {2: {cover: 'cover-2', score: 8}}, retryableSubjectIds: []}
+      },
+      onUpdate: (payload, meta) => updates.push({payload, meta}),
+      sleep: async () => {}
+    })
+    expect(calls).toEqual([['1', '2'], ['2']])
+    expect(updates[0].payload.subjects[1].score).toBe(0)
+    expect(updates[0].meta).toMatchObject({batch: ['1', '2'], retryable: ['2']})
+    expect(pending).toEqual([])
+  })
+
   it('keeps a malformed response retryable instead of treating it as an empty success', async () => {
     let attempt = 0
     const pending = await enrichScores({
@@ -125,6 +151,20 @@ describe('mikan-loader', () => {
     })
     expect(attempt).toBe(2)
     expect(pending).toEqual([])
+  })
+
+  it('propagates an expired AnimeGarden snapshot without retrying it as a timeout', async () => {
+    const error = Object.assign(new Error('列表已过期'), {
+      code: 'ANIME_GARDEN_LIST_EXPIRED',
+      status: 409
+    })
+
+    await expect(enrichSubjects({
+      ids: ['123'],
+      fetchSubjects: async () => { throw error },
+      maxDuration: 100,
+      sleep: async () => {}
+    })).rejects.toMatchObject({code: 'ANIME_GARDEN_LIST_EXPIRED'})
   })
 
   it('gives every 48-id batch an initial attempt before retrying a slow batch', async () => {

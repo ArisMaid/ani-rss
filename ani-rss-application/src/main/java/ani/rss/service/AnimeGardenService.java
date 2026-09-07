@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
+import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -29,7 +30,8 @@ public class AnimeGardenService {
     private static final String HOST = "https://api.animes.garden";
     private static final int ANIME_GARDEN_REQUEST_TIMEOUT_MILLIS = 10_000;
     private static final int MAX_SUBJECT_SNAPSHOTS = 32;
-    private static final int MAX_SUBJECT_IDS_PER_SNAPSHOT = 512;
+    private static final int MAX_SUBJECT_IDS_PER_SNAPSHOT = 10_000;
+    private static final int MAX_SUBJECT_ID_REFERENCES = 100_000;
     private static final long SUBJECT_SNAPSHOT_TTL_MILLIS = 10 * 60 * 1000L;
 
     @Resource
@@ -40,6 +42,7 @@ public class AnimeGardenService {
 
     private final SubjectLoader subjectLoader;
     private final BgmInfoLoader bgmInfoLoader;
+    private final LongSupplier clock;
     /**
      * A list request is a separate authorization snapshot. Keeping a small,
      * expiring history means an enrichment request from one browser tab is
@@ -51,11 +54,12 @@ public class AnimeGardenService {
 
     public AnimeGardenService() {
         this(AnimeGardenService::loadSubjectsFromUpstream, null, null,
-                AnimeGardenService::loadBgmInfoFromUpstream);
+                AnimeGardenService::loadBgmInfoFromUpstream, System::currentTimeMillis);
     }
 
     AnimeGardenService(SubjectLoader subjectLoader) {
-        this(subjectLoader, null, null, AnimeGardenService::loadBgmInfoFromUpstream);
+        this(subjectLoader, null, null, AnimeGardenService::loadBgmInfoFromUpstream,
+                System::currentTimeMillis);
     }
 
     AnimeGardenService(
@@ -64,7 +68,7 @@ public class AnimeGardenService {
             PublicScoreService publicScoreService
     ) {
         this(subjectLoader, cacheService, publicScoreService,
-                AnimeGardenService::loadBgmInfoFromUpstream);
+                AnimeGardenService::loadBgmInfoFromUpstream, System::currentTimeMillis);
     }
 
     AnimeGardenService(
@@ -73,10 +77,22 @@ public class AnimeGardenService {
             PublicScoreService publicScoreService,
             BgmInfoLoader bgmInfoLoader
     ) {
+        this(subjectLoader, cacheService, publicScoreService, bgmInfoLoader,
+                System::currentTimeMillis);
+    }
+
+    AnimeGardenService(
+            SubjectLoader subjectLoader,
+            CacheService cacheService,
+            PublicScoreService publicScoreService,
+            BgmInfoLoader bgmInfoLoader,
+            LongSupplier clock
+    ) {
         this.subjectLoader = subjectLoader;
         this.bgmInfoLoader = bgmInfoLoader;
         this.cacheService = cacheService;
         this.publicScoreService = publicScoreService;
+        this.clock = Objects.requireNonNull(clock);
     }
 
     public List<AnimeGarden.Week> list(String bgmUrl) {
@@ -210,7 +226,12 @@ public class AnimeGardenService {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
 
         if (ids.size() != requested.stream().distinct().count()) {
-            throw new IllegalArgumentException("AnimeGarden subject 不在最近一次有效列表快照中");
+            throw new ani.rss.exception.ApiProblemException(
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    "ANIME_GARDEN_LIST_EXPIRED",
+                    "AnimeGarden 列表快照已过期或已被淘汰，请重新加载列表",
+                    null,
+                    Map.of("reload", "animeGardenList"));
         }
 
         if (ids.isEmpty()) {
@@ -258,25 +279,29 @@ public class AnimeGardenService {
                 .map(String::trim)
                 .filter(AnimeGardenService::isValidSubjectId)
                 .distinct()
-                .limit(MAX_SUBJECT_IDS_PER_SNAPSHOT)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         if (ids.isEmpty()) {
             return;
         }
+        if (ids.size() > MAX_SUBJECT_IDS_PER_SNAPSHOT) {
+            throw new IllegalStateException("AnimeGarden 列表快照超过 "
+                    + MAX_SUBJECT_IDS_PER_SNAPSHOT + " 个 subject，拒绝静默截断");
+        }
         String queryKey = StrUtil.blankToDefault(query, "__default__");
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         synchronized (subjectSnapshotLock) {
             purgeSubjectSnapshots(now);
             String key = queryKey + "#" + (++subjectSnapshotSequence);
             subjectSnapshots.put(key, new SubjectSnapshot(ids, now));
-            while (subjectSnapshots.size() > MAX_SUBJECT_SNAPSHOTS) {
+            while (subjectSnapshots.size() > MAX_SUBJECT_SNAPSHOTS
+                    || totalSubjectIdReferences() > MAX_SUBJECT_ID_REFERENCES) {
                 subjectSnapshots.remove(subjectSnapshots.keySet().iterator().next());
             }
         }
     }
 
     private Set<String> acceptedSubjectIds() {
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         synchronized (subjectSnapshotLock) {
             purgeSubjectSnapshots(now);
             LinkedHashSet<String> accepted = new LinkedHashSet<>();
@@ -288,6 +313,12 @@ public class AnimeGardenService {
     private void purgeSubjectSnapshots(long now) {
         subjectSnapshots.entrySet().removeIf(entry ->
                 now - entry.getValue().createdAt() >= SUBJECT_SNAPSHOT_TTL_MILLIS);
+    }
+
+    private int totalSubjectIdReferences() {
+        return subjectSnapshots.values().stream()
+                .mapToInt(snapshot -> snapshot.ids().size())
+                .sum();
     }
 
     private static List<AnimeGarden.Subject> loadSubjectsFromUpstream() throws Exception {

@@ -8,7 +8,7 @@
     "reason": "The R01/R02 lifecycle repair changes async route module hash references in the shared entry chunk. The measured latest-fork comparison is limited to home JS +1, home CSS +1, and subscriptions JS +1 gzip byte; static entry and login remain unchanged. No player, Markdown, or backup module enters these closures.",
     "measuredOn": "2026-09-07",
     "baselineBuild": "D:/Github/AI/Codex/anirss-w7-baseline-20260907/ani-rss-ui/w7-dist-20260907-baseline",
-    "candidateBuild": "ani-rss-ui/w7-dist-20260907-c"
+    "candidateBuild": "ani-rss-ui/w7-dist-20260907-f"
   },
   "staticEntryClosure": {
     "baselineJsGzipBytes": 105199,

@@ -33,7 +33,7 @@ const completed = new Map()
 // startup page errors and console errors that happen before that attachment.
 const browserProbe = `<script>
 (() => {
-  const probe = window.__w7Probe = {pageErrors: [], consoleErrors: [], chunk404s: []}
+  const probe = window.__w7Probe = {pageErrors: [], consoleErrors: [], chunk404s: [], mediaErrors: []}
   const stringify = value => {
     try { return typeof value === 'string' ? value : JSON.stringify(value) }
     catch { return String(value) }
@@ -44,7 +44,16 @@ const browserProbe = `<script>
       probe.chunk404s.push(target.src || target.href || 'resource')
       return
     }
-    probe.pageErrors.push(String(event.error?.message || event.message || event.error || 'window error'))
+    if (target && ['AUDIO', 'IMG', 'VIDEO'].includes(target.tagName)) {
+      probe.mediaErrors.push(target.tagName + ':' + (target.currentSrc || target.src || 'resource'))
+      return
+    }
+    const message = event.error?.message || event.message
+    if (!message && !event.filename) {
+      probe.mediaErrors.push('WINDOW:unattributed-resource-error')
+      return
+    }
+    probe.pageErrors.push(String(message || event.error || 'window error'))
   }, true)
   window.addEventListener('unhandledrejection', event => {
     probe.pageErrors.push(String(event.reason?.message || event.reason || 'unhandled rejection'))

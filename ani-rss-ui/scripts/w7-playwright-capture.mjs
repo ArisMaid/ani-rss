@@ -14,6 +14,9 @@ async page => {
     if (currentScenario === 'login') {
       return Boolean(document.querySelector('#login-page input[placeholder="用户名"]'))
     }
+    if (currentScenario === 'player') {
+      return Boolean(document.querySelector('.subscription-page'))
+    }
     if (currentScenario === 'home') {
       return Boolean(document.querySelector('.dashboard-page'))
     }
@@ -23,11 +26,21 @@ async page => {
     if (currentScenario === 'settings') {
       return Boolean(document.querySelector('.config-page'))
     }
-    if (currentScenario === 'player') {
-      return Boolean(document.querySelector('.art-app'))
-    }
     return false
   }, readyScenario)
+  if (readyScenario === 'player') {
+    if (!(await page.locator('.art-app').count())) {
+      const cardPlaylistButton = page.locator('.list-card-actions button').first()
+      if (await cardPlaylistButton.count()) {
+        await cardPlaylistButton.click()
+      } else {
+        await page.locator('.cover-action-button').first().click({force: true})
+        await page.getByText('播放列表', {exact: true}).click()
+      }
+      await page.locator('.el-dialog .grid-item button').first().click()
+    }
+    await page.waitForSelector('.art-app')
+  }
   await page.waitForTimeout(500)
 
   const data = await page.evaluate(({scenario, pageErrors, consoleErrors}) => {
@@ -48,6 +61,7 @@ async page => {
     pageErrors: unique([...(probe.pageErrors || []), ...pageErrors]),
     consoleErrors: unique([...(probe.consoleErrors || []), ...consoleErrors]),
     chunk404s: unique(probe.chunk404s || []),
+    mediaErrors: unique(probe.mediaErrors || []),
     resourceEntries: performance.getEntriesByType('resource')
       .filter(entry => /\.(?:js|css)$/.test(new URL(entry.name).pathname))
       .map(entry => ({
@@ -76,6 +90,10 @@ async page => {
     resourceCount: data.resourceEntries.length,
     consoleErrorCount: data.consoleErrors.length,
     pageErrorCount: data.pageErrors.length,
-    chunk404Count: data.chunk404s.length
+    chunk404Count: data.chunk404s.length,
+    pageErrors: data.pageErrors,
+    consoleErrors: data.consoleErrors,
+    chunk404s: data.chunk404s,
+    mediaErrors: data.mediaErrors
   }
 }

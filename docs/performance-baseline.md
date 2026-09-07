@@ -35,7 +35,7 @@
 | home | 192,168 B | 61,822 B | 通过 |
 | subscriptions | 185,246 B | 63,645 B | 通过 |
 
-所有场景都没有播放器、Markdown 或备份模块；首页和订阅场景增加的共享入口引用已写入 [`ani-rss-ui/scripts/bundle-budget.json`](../ani-rss-ui/scripts/bundle-budget.json)，并保留原因、旧值和新值。历史 `562454f2` 的 431,801 B 首入口数字只作为旧口径说明，不推导本轮真实首屏下降比例。
+所有场景都没有播放器、Markdown 或备份模块；首页和订阅场景增加的共享入口引用已写入 [`ani-rss-ui/scripts/bundle-budget.json`](../ani-rss-ui/scripts/bundle-budget.json)，并保留原因、旧值和新值。GitHub Actions Ubuntu build-test `34077134774` 的静态 JS 为 `105,201 B`，本地 Windows 为 `105,194 B`；门禁上限仅增加到该已观测值 `105,201 B`，这是跨平台构建输出差异，不作为性能增长结论。历史 `562454f2` 的 431,801 B 首入口数字只作为旧口径说明，不推导本轮真实首屏下降比例。
 
 ## W7 浏览器资源
 

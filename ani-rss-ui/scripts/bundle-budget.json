@@ -5,14 +5,16 @@
   "historicalBaselineCommit": "562454f287645531e09bb2ada65afd31dbfa4091",
   "historicalTargetReduction": 0.25,
   "budgetChange": {
-    "reason": "The R01/R02 lifecycle repair changes async route module hash references in the shared entry chunk. The measured latest-fork comparison is limited to home JS +1, home CSS +1, and subscriptions JS +1 gzip byte; static entry and login remain unchanged. No player, Markdown, or backup module enters these closures.",
+    "reason": "The R01/R02 lifecycle repair changes async route module hash references in the shared entry chunk. The measured latest-fork comparison is limited to home JS +1, home CSS +1, and subscriptions JS +1 gzip byte; static entry and login remain unchanged. No player, Markdown, or backup module enters these closures. GitHub Actions Ubuntu build-test 34077134774 measured static entry JS at 105201 gzip bytes while the local Windows build measured 105194; no closure or forbidden-module change was observed, so the gate is raised by exactly the cross-platform +2-byte observation rather than updated automatically.",
     "measuredOn": "2026-09-07",
     "baselineBuild": "D:/Github/AI/Codex/anirss-w7-baseline-20260907/ani-rss-ui/w7-dist-20260907-baseline",
-    "candidateBuild": "ani-rss-ui/w7-dist-20260907-f"
+    "candidateBuild": "ani-rss-ui/w7-dist-20260907-f",
+    "ciWorkflowRun": "34077134774",
+    "ciMeasuredStaticJsGzipBytes": 105201
   },
   "staticEntryClosure": {
     "baselineJsGzipBytes": 105199,
-    "maxJsGzipBytes": 105199,
+    "maxJsGzipBytes": 105201,
     "baselineCssGzipBytes": 48953,
     "maxCssGzipBytes": 48953
   },

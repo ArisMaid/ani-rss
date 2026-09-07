@@ -7,7 +7,7 @@
 - 代码基线：行为与测试提交 `19dfaf3a`，版本提交 `674f7b55`，最终浏览器证据提交 `4df5e7e2`。
 - 前端 Vitest：4 个测试文件、27/27 通过，覆盖批量边界、部分对象、retryable、取消/恢复/重新查询和播放/恢复组件契约。
 - 前端生产构建：使用唯一输出目录 `ani-rss-ui/w7-dist-20260907-f`，未运行 `clean`，构建通过。
-- 静态 bundle 门禁：`staticEntryClosure` JS `105,194`、CSS `48,953` gzip bytes；登录 `201,949/63,229`，首页 `192,168/61,822`，订阅 `185,246/63,645`，均在预算内；播放器、Markdown、备份模块未进入三条首屏闭包。
+- 静态 bundle 门禁：本地 Windows 构建的 `staticEntryClosure` JS `105,194`、CSS `48,953` gzip bytes；登录 `201,949/63,229`，首页 `192,168/61,822`，订阅 `185,246/63,645`，均在预算内。GitHub Actions Ubuntu run `34077134774` 观测到静态 JS `105,201`，因此门禁上限仅按该跨平台差异调整到 `105,201`；没有新增闭包或禁用模块。播放器、Markdown、备份模块未进入三条首屏闭包。
 - Java 完整门禁：`mvn -B -Pci -Dskip.frontend=true verify`；302 tests、0 failures、0 errors、4 skipped，JaCoCo 达标，SpotBugs `BugInstance size is 0`，SBOM 生成成功。
 - W6 Service fixture：96 条 Mikan、2 周、最大组 64；AnimeGarden 默认/搜索消费者可独立补载；50 个逻辑图片引用、25 个共享 URL；同 key 版本替换和 lease 流读取通过。
 - W6 热列表：冷 `137.579ms`，30 次进程内热调用 p95 `0.0598ms`，重启持久缓存 `0.801ms`；这是 Service 计时，不是端到端 HTTP 延迟。

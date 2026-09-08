@@ -26,11 +26,7 @@
       </el-radio-group>
     </div>
     <div class="dialog-footer">
-      <el-button icon="Check" @click="async ()=>{
-          emit('callback', addAni)
-          dialogVisible = false
-          matchDialogVisible = false
-      }" text bg>确定
+      <el-button icon="Check" @click="confirmMatch" text bg>确定
       </el-button>
     </div>
   </el-dialog>
@@ -242,6 +238,7 @@ const resetSnapshotInteraction = () => {
   enrichmentStates.value = {}
   enrichmentKey = ''
   rssList.value = []
+  resetMatchInteraction()
 }
 
 let list = async (bgmUrl = '', {
@@ -435,6 +432,7 @@ const startEnrichment = async (generation = listGeneration, {force = false} = {}
         error: state.error,
         generation
       }
+      resetMatchInteraction()
       ElMessage.warning(state.error)
     } else if (isCurrentEnrichmentActivation(activation)) {
       state.status = 'failed'
@@ -488,6 +486,7 @@ const close = () => {
   needsListReload = false
   listRecoveryState.value = {status: 'idle', error: '', generation: listGeneration}
   enrichmentStates.value = {}
+  resetMatchInteraction()
   closeRequests()
 }
 
@@ -584,9 +583,30 @@ let addAni = ref({
 
 let regexList = ref([])
 
+const resetMatchInteraction = () => {
+  matchDialogVisible.value = false
+  addAni.value = {
+    'bgmUrl': '',
+    'url': '',
+    'match': '',
+    'group': ''
+  }
+  regexList.value = []
+}
+
+const currentListActionIsAllowed = () => dialogVisible.value
+  && currentListValid
+  && !needsListReload
+  && !listRequest
+
+const rejectStaleListAction = () => {
+  resetMatchInteraction()
+  ElMessage.warning('列表已变化，请重新加载后选择')
+}
+
 let callback = v => {
-  if (!currentListValid) {
-    ElMessage.warning('列表已过期，请重新加载')
+  if (!currentListActionIsAllowed()) {
+    rejectStaleListAction()
     return
   }
   let {bgmId, rss, name} = v
@@ -599,6 +619,17 @@ let callback = v => {
 
   regexList.value.push([])
   matchDialogVisible.value = true
+}
+
+const confirmMatch = () => {
+  if (!currentListActionIsAllowed() || !matchDialogVisible.value) {
+    rejectStaleListAction()
+    return
+  }
+  const selection = {...addAni.value}
+  emit('callback', selection)
+  dialogVisible.value = false
+  resetMatchInteraction()
 }
 
 
@@ -619,12 +650,21 @@ let batchAdditionNum = ref(0)
 let batchAdditionDialogVisible = ref(false)
 
 let batchAddition = async () => {
+  if (!currentListActionIsAllowed()) {
+    rejectStaleListAction()
+    return
+  }
+  if (rssList.value.length < 1) {
+    ElMessage.warning('请先选择要添加的条目')
+    return
+  }
+  const selectedItems = [...rssList.value]
   batchAdditionNum.value = 0
   batchAdditionDialogVisible.value = true
 
   try {
     ElMessage.success("添加中....")
-    let map = rssList.value.reduce((acc, item) => {
+    let map = selectedItems.reduce((acc, item) => {
       let parsedItem = JSON.parse(item);
       let bgmId = parsedItem['bgmId'];
       if (!acc[bgmId]) {

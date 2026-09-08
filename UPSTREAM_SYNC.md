@@ -1,6 +1,6 @@
 # Fork 上游同步规则
 
-本 fork 当前发布版本为 `3.2.28.66`（发布 tag 与精确提交见本轮记录；上一版 `v3.2.28.65` 精确指向 `fa32cb97e74b207b163e902483663e8b10137f12`），上游前三段基线仍为 `v3.2.28`；本轮修复提交为 `25b3a05c`、`30cdda4d`，版本与文档提交将在发布前固化。本轮没有引入新的上游版本同步，所有差异均为 fork-local 修复与验收；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
+本 fork 当前发布版本为 `3.2.28.66`，tag `v3.2.28.66` 精确指向 `7110dbc3fb8c2c61a9aed10b25179d5eb3d2d628`（上一版 `v3.2.28.65` 精确指向 `fa32cb97e74b207b163e902483663e8b10137f12`），上游前三段基线仍为 `v3.2.28`；本轮修复提交为 `25b3a05c`、`30cdda4d`，版本与验收文档已固化。本轮没有引入新的上游版本同步，所有差异均为 fork-local 修复与验收；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
 
 同步时必须保留以下本地合同：
 
@@ -35,7 +35,7 @@
 - 修复：AnimeGarden 匹配确认和批量入口在交付前再次校验当前列表快照，失效时清理匹配交互；ImageCache 将 pending 预留、发布和本次失败撤销收进现有 key lock；维护暂停保持到重启，暂停时先允许热缓存读取并停止后续淘汰、pending 清理和新持久化。
 - 明确保留边界：不新增恢复事务、状态枚举、管理 API、并发注入框架或浏览器矩阵；pending 交错只做静态锁序复核，异常文件按管理员 SOP 处理，代理不执行批量/递归删除。
 - 待确认：真实外部源/下载器/账号/媒体/数据库费用、生产浏览器完整交互、删除失败故障注入、Docker Desktop/Linux engine 本地构建，以及强杀/断电/系统 I/O 阻塞下的缓存索引一致性。
-- 证据：本地 Java 319 tests、0 failures、0 errors、4 skipped；ImageCacheServiceTest 19/19；前端 35/35；唯一目录生产 UI build 与 bundle gate 通过。远端 build-test、tag build、Release 与 GHCR 证据在发布后回填。
+- 证据：本地 Java 319 tests、0 failures、0 errors、4 skipped；ImageCacheServiceTest 19/19；前端 35/35；唯一目录生产 UI build 与 bundle gate 通过。远端 [`build-test` run 34217520584](https://github.com/ArisMaid/ani-rss/actions/runs/34217520584) 与 [`v3.2.28.66` tag build run 34218050737](https://github.com/ArisMaid/ani-rss/actions/runs/34218050737) 成功；Release 附件和 GHCR manifest digest 已回填到 [`docs/verification.md`](docs/verification.md) 与 [`docs/performance-baseline.md`](docs/performance-baseline.md)。
 
 ## 3.2.28.65 本轮审计记录
 

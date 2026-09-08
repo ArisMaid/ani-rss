@@ -6,7 +6,7 @@
 
 | 项目 | 实际值 |
 | --- | --- |
-| 版本/标签 | `3.2.28.66`；tag workflow 发布后回填精确 tag 提交 |
+| 版本/标签 | `3.2.28.66` / `v3.2.28.66`；精确指向 `7110dbc3fb8c2c61a9aed10b25179d5eb3d2d628` |
 | 修复提交 | `25b3a05c`（AnimeGarden）、`30cdda4d`（ImageCache） |
 | Node / pnpm | Node `v24.16.0` / pnpm `11.19.0` |
 | Java / Maven | Temurin `25.0.4.1` / Apache Maven `3.9.11`，项目按 Java 17 release 编译 |
@@ -28,7 +28,15 @@
 
 ### 当前发布产物
 
-tag workflow、GitHub Release 附件和 GHCR manifest digest 在发布后回填；Docker Hub 是否发布仍按 workflow 凭据条件记录。
+GitHub Actions [`build-test` run 34217520584](https://github.com/ArisMaid/ani-rss/actions/runs/34217520584) 与 tag build [`34218050737`](https://github.com/ArisMaid/ani-rss/actions/runs/34218050737) 均成功；[GitHub Release v3.2.28.66](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.66) 已上传 `ani-rss.jar`（SHA-256 `d4cec166687140c1dbaf9fb9080f84bc834497804b7ed04f9c4e8b5d1a1d0c93`）和 `ani-rss.exe`（SHA-256 `eed79eb382704aa3a351f158a0bcf842f2a9f43ba089da65eb473af4a618cf28`）。
+
+| 镜像 tag | manifest index digest | 平台 |
+| --- | --- | --- |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.66` | `sha256:e07a41a796cf18d945426abfb3401d733feb0b0454fba1eb71ce60374d50cc0e` | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.66-openj9` | `sha256:968509e112362318f1e596362391d14dc7e9d62e878203c3ab4d84f955f6bb00` | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.66-arm32v7` | `sha256:752e2b60fd23a78486ee17b95eda17339eca04ee2e1230875dc86082c6873742` | `linux/arm/v7` |
+
+Docker Hub 登录因 secrets 未配置而按 workflow 条件跳过；GHCR 三组镜像已成功发布。
 
 ## 历史对照：v3.2.28.65
 

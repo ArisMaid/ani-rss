@@ -18,7 +18,7 @@
 | P2-01 AnimeGarden 匹配最终确认 | 通过 | `25b3a05c`；确认入口复核主列表/快照/请求状态，失效时关闭并清空匹配选择；批量入口校验并复制提交快照；前端 35/35 |
 | P2-02 pending 预留临界区 | 通过 | `30cdda4d`；预留、move、entry 替换和本次失败撤销在同一 key lock 内排序，既有 pending 不会被失败清理移除；静态交错复核，未故障注入；ImageCache 19/19 |
 | P2-03 维护暂停 SOP | 通过 | `30cdda4d`；暂停保持到重启，无关 pending 删除不解除；暂停时先允许热缓存读取，再阻止过期删除/新 fetch，维护只裁剪失败记录；日志和三份合同/SOP 说明已更新 |
-| 版本与本地发布门禁 | 通过 | 版本 `3.2.28.66`；本地完整 Java、前端、生产 UI 和 bundle 门禁均通过；远端 tag workflow/Release/GHCR 证据在发布后回填 |
+| 版本与本地发布门禁 | 通过 | 版本 `3.2.28.66`；本地完整 Java、前端、生产 UI 和 bundle 门禁均通过；远端 tag workflow、Release 与 GHCR 证据已核验 |
 
 ### 人工检查与边界
 
@@ -29,7 +29,10 @@
 
 ### 发布状态
 
-- 远端 `build-test`、tag build、Release 附件和 GHCR manifest digest 在 tag 发布后回填；Docker Hub 仍按未配置凭据的 workflow 条件处理。
+- `build-test` run [`34217520584`](https://github.com/ArisMaid/ani-rss/actions/runs/34217520584) 成功；tag `v3.2.28.66` 精确指向 `7110dbc3fb8c2c61a9aed10b25179d5eb3d2d628`，正式 build run [`34218050737`](https://github.com/ArisMaid/ani-rss/actions/runs/34218050737) 成功；[GitHub Release v3.2.28.66](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.66) 已发布。
+- Release 附件：`ani-rss.jar` SHA-256 `d4cec166687140c1dbaf9fb9080f84bc834497804b7ed04f9c4e8b5d1a1d0c93`；`ani-rss.exe` SHA-256 `eed79eb382704aa3a351f158a0bcf842f2a9f43ba089da65eb473af4a618cf28`。
+- GHCR 已核验 manifest index：temurin `ghcr.io/arismaid/ani-rss:v3.2.28.66` / `sha256:e07a41a796cf18d945426abfb3401d733feb0b0454fba1eb71ce60374d50cc0e`（linux/amd64、linux/arm64）；openj9 `ghcr.io/arismaid/ani-rss:v3.2.28.66-openj9` / `sha256:968509e112362318f1e596362391d14dc7e9d62e878203c3ab4d84f955f6bb00`（linux/amd64、linux/arm64）；arm32v7 `ghcr.io/arismaid/ani-rss:v3.2.28.66-arm32v7` / `sha256:752e2b60fd23a78486ee17b95eda17339eca04ee2e1230875dc86082c6873742`（linux/arm/v7）。
+- Docker Hub 登录按 workflow 条件跳过（未配置 `DOCKER_USERNAME`/`DOCKER_PASSWORD`）；GHCR 三组镜像均已成功发布。
 
 ## 历史 v3.2.28.65 验收记录
 

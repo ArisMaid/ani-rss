@@ -1,39 +1,37 @@
-# Fork v3.2.28.65 验证记录
+# Fork v3.2.28.66 验证记录
 
-本记录严格按 `FORK_V3.2.28.64_REVIEW_AND_REPAIR_PLAN.md` 执行；附带开发书是验收规范，不是额外的生产授权。v3.2.28.65 保持 v3.2.28 的上游前三段和本地第四段递增规则；真实账号、生产下载器、用户媒体和外部数据未连接，合成 fixture 不冒充生产验证。
+本记录严格按 `FORK_V3.2.28.65_REVIEW_AND_REPAIR_PLAN.md` 执行；附带开发书是验收规范，不是额外的生产授权。v3.2.28.66 保持 v3.2.28 的上游前三段和本地第四段递增规则；真实账号、生产下载器、用户媒体和外部数据未连接，合成 fixture 不冒充生产验证。
 
-## 当前发布单元：3.2.28.65
+## 当前发布单元：3.2.28.66
 
 ### 门禁与构建
 
-- 前端 Vitest：5 个测试文件、35/35 通过；`list-lifecycle.test.js` 覆盖 AnimeGarden 列表过期人工入口、失败重载和生命周期恢复边界。
-- 生产 UI 构建：`pnpm exec vite build --outDir target/release-65-dist-20260908 --emptyOutDir false`，使用唯一输出目录且未清理既有输出；构建通过。
-- bundle 门禁：static entry JS/CSS gzip 为 `105,197/48,953 B`；login `201,952/63,229 B`；home `192,170/61,822 B`；subscriptions `185,249/63,645 B`，均通过既有预算；`forbiddenModules=[]`。
+- 前端 Vitest：5 个测试文件、35/35 通过；现有 `list-lifecycle.test.js` 保持 AnimeGarden 列表过期人工入口、失败重载和生命周期恢复边界。
+- 生产 UI 构建：`pnpm exec vite build --outDir target/release-66-dist-20260908 --emptyOutDir false`，使用唯一输出目录且未清理既有输出；构建通过。
+- bundle 门禁：static entry JS/CSS gzip 为 `105,198/48,953 B`；login `201,952/63,229 B`；home `192,171/61,822 B`；subscriptions `185,252/63,645 B`，均通过既有预算；`forbiddenModules=[]`。
 - Java 完整门禁：`mvn -B -Pci -Dskip.frontend=true verify`；319 tests、0 failures、0 errors、4 skipped；JaCoCo 达标，SpotBugs `BugInstance size is 0`，CycloneDX SBOM 生成成功；`ImageCacheServiceTest` 定向 19/19。
 
-### v3.2.28.64 审查修复验收矩阵
+### v3.2.28.65 审查修复验收矩阵
 
 | 工作包 | 状态 | 实现与证据 |
 | --- | --- | --- |
-| A/B AnimeGarden 新快照与人工恢复 | 通过 | `2d248fb2`；成功重载清除旧补载/分组/选择状态，过期不再自动 list；前端 35/35 通过 |
-| C/D 图片准入与 pending 上限 | 通过 | `6fb81a17`；按实际 bytes 和临时文件预留后写入，先有限淘汰；pending 预留失败暂停新增并保留 manifest 追踪；`ImageCacheServiceTest` 19/19 |
-| E 关闭尽力保存 | 通过 | `6abdd335`；final flush 排入已有 manifest executor，清理延迟重试，close 最多等待 5 秒；success 仅表示本次快照写成功 |
-| 版本与发布门禁 | 通过 | 版本 `3.2.28.65`；tag `v3.2.28.65` 精确指向 `fa32cb97e74b207b163e902483663e8b10137f12`；正式 build workflow 已完成 |
+| P2-01 AnimeGarden 匹配最终确认 | 通过 | `25b3a05c`；确认入口复核主列表/快照/请求状态，失效时关闭并清空匹配选择；批量入口校验并复制提交快照；前端 35/35 |
+| P2-02 pending 预留临界区 | 通过 | `30cdda4d`；预留、move、entry 替换和本次失败撤销在同一 key lock 内排序，既有 pending 不会被失败清理移除；静态交错复核，未故障注入；ImageCache 19/19 |
+| P2-03 维护暂停 SOP | 通过 | `30cdda4d`；暂停保持到重启，无关 pending 删除不解除；暂停时先允许热缓存读取，再阻止过期删除/新 fetch，维护只裁剪失败记录；日志和三份合同/SOP 说明已更新 |
+| 版本与本地发布门禁 | 通过 | 版本 `3.2.28.66`；本地完整 Java、前端、生产 UI 和 bundle 门禁均通过；远端 tag workflow/Release/GHCR 证据在发布后回填 |
 
-### 发布状态
+### 人工检查与边界
 
-- `build-test` run [`34193929884`](https://github.com/ArisMaid/ani-rss/actions/runs/34193929884) 与正式 build run [`34194388721`](https://github.com/ArisMaid/ani-rss/actions/runs/34194388721) 均成功；[GitHub Release v3.2.28.65](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.65) 为非 draft、非 prerelease。
-- Release 附件：`ani-rss.jar` SHA-256 `1d0864f0322596e9b87e6211b09b8a248c31b6146e48d2a67d9672fc47ab4427`；`ani-rss.exe` SHA-256 `6f458fdccd567fb7e2f7ed8b137514146d1eb41b98734338b8332f23b9485100`。
-- GHCR 已核验 manifest index：`ghcr.io/arismaid/ani-rss:v3.2.28.65` / `sha256:df45b9b853cd84d2ce81215de36a58ee00d5d250bc21b724b10c842e8fcc8331`（linux/amd64、linux/arm64）；`ghcr.io/arismaid/ani-rss:v3.2.28.65-openj9` / `sha256:0d3cec909ba03616b51169303c8132224fe32a528396c0e62934719d94cbf4ee`（linux/amd64、linux/arm64）；`ghcr.io/arismaid/ani-rss:v3.2.28.65-arm32v7` / `sha256:382c7ddb2101bfa15ca6723d5266d1aff197121a59881c3a2e5fa071329fe9be`（linux/arm/v7）。
-- Docker Hub 登录按 workflow 条件跳过（未配置 `DOCKER_USERNAME`/`DOCKER_PASSWORD`）；GHCR 三组镜像已成功发布。
-
-### 本轮未验证边界
-
-- 未新增浏览器矩阵；W7/N08 只作为既有发布门禁，不能证明 AnimeGarden 过期人工交互的完整生产流程。
+- 人工路径检查：匹配弹窗确认入口只调用 `confirmMatch`，列表失效路径调用 `resetMatchInteraction`；有效列表确认复制 payload 后 emit，避免清理状态覆盖已提交选择。未新增永久测试文件或浏览器矩阵。
+- pending 交错验收为代码锁序静态复核，未注入删除失败或并发屏障；现有 19 项测试通过不能宣称新交错已动态覆盖。
 - 真实 Mikan、Bangumi、AnimeGarden、图片代理和下载器的外网波动、认证、429/5xx、生产媒体和数据库/文件费用仍未连接。
 - Docker Desktop/Linux engine 本地构建、强杀/断电/系统 I/O 阻塞下的 manifest 零丢失未验证；近期封面缓存按方案允许重建，异常清理由维护 SOP 处理。
 
-## 历史 v3.2.28.64 验收记录
+### 发布状态
+
+- 远端 `build-test`、tag build、Release 附件和 GHCR manifest digest 在 tag 发布后回填；Docker Hub 仍按未配置凭据的 workflow 条件处理。
+
+## 历史 v3.2.28.65 验收记录
 
 ### 门禁与构建
 

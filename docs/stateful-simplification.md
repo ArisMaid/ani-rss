@@ -1,13 +1,15 @@
-# 有状态模块依赖与本次决策（v3.2.28.65）
+# 有状态模块依赖与本次决策（v3.2.28.66）
 
-本文件按开发书 T7 建立依赖清单。`3.2.28.65` 在既有状态链合同上收敛 AnimeGarden 快照代际、公共图片缓存准入/维护暂停和关闭尽力保存语义；真实数据库、文件系统和外部下载器成本仍明确后置。
+本文件按开发书 T7 建立依赖清单。`3.2.28.66` 在既有状态链合同上收敛 AnimeGarden 匹配交付、公共图片 pending 临界区和维护暂停恢复语义；真实数据库、文件系统和外部下载器成本仍明确后置。
 
-## v3.2.28.65 新增状态验证
+## v3.2.28.66 新增状态验证
 
+- AnimeGarden 匹配弹窗是当前列表快照的临时交互状态：确认前再次检查主列表、有效性、待重载、列表请求和弹窗可见性；列表失效/关闭/重载会立即关闭并清空匹配选择。批量添加在入口取得选择快照，后续列表补载失败不回滚已开始提交。
 - AnimeGarden 列表成功重载建立新的快照代际：请求等待时可继续展示旧列表，成功后清除 enrichment、group、selectName 和未提交选择；过期/失败快照只保留人工重新加载入口，不因隐藏恢复自动重试。
 - ImageCache 生命周期明确为 `OPEN → CLOSING → CLOSED`；进入 CLOSING 后拒绝新下载，final flush 排入现有单 writer，close 最多等待 5 秒；success 只表示该次快照写成功，近期封面索引允许重建。
 - manifest 的 revision、entry/pending 快照、dirty 和 persistedRevision 在同一状态锁下捕获；不会在快照内容与 revision 之间留下可观察窗口。
-- pending deletion 以规范化路径做并集计费，active entry 与同路径 pending 不重复计数；reserved bytes/files 参加准入。新图片先按实际 bytes 与一个临时文件申请预算，失败时先做有限淘汰；pending 达 1024 或历史 manifest 超限则进入维护暂停，停止新增持久缓存和 manifest 重写。
+- pending deletion 以规范化路径做并集计费，active entry 与同路径 pending 不重复计数；reserved bytes/files 参加准入。新图片先按实际 bytes 与一个临时文件申请预算；旧路径 pending 预留、move、entry 替换和本次失败撤销均在同一 key lock 内完成。
+- 维护暂停是进程内保持到重启的管理员信号，不因无关 pending 删除自动解除。暂停时仍允许返回可用热缓存，随后阻止过期 entry 删除、新 fetch、公共 entry 淘汰和 pending 重试；维护线程只裁剪失败记录，处理残留由 SOP 完成后重启。
 - `ImageCacheServiceTest` 定向 19/19、Java 完整门禁 319/0/0/4 skipped、前端 35/35 通过；上述是状态不变量证据，不是生产吞吐、文件系统故障率或浏览器交互测量。
 
 ## 依赖地图
@@ -50,4 +52,4 @@ W6 hot-list 报告 [`w6-hot-list-v3.2.28.63-20260907.json`](performance-data/w6-
 - DB 查询次数、全局锁等待、文件 walk 次数、快照 dirty 写路径和断电续跑成本。
 - 完整 RSS 场景中的缺集恢复、洗版、多文件 torrent、备用 RSS 和完结迁移。
 
-`DownloaderDeleteContractTest`、`DownloaderFailureContractTest`、`QBittorrentAuthenticationContractTest`、`TransmissionContractTest`、`OpenListWorkflowTest`、`MissingEpisodeRecoveryServiceTest`、`OwnershipServiceMoveTest` 和 `SubscriptionDeletionServiceTest` 继续作为行为门禁；本轮完整回归为 311/0/0/4 skipped。4 个 skipped 的名称和原因见 [`docs/verification.md`](verification.md)。
+`DownloaderDeleteContractTest`、`DownloaderFailureContractTest`、`QBittorrentAuthenticationContractTest`、`TransmissionContractTest`、`OpenListWorkflowTest`、`MissingEpisodeRecoveryServiceTest`、`OwnershipServiceMoveTest` 和 `SubscriptionDeletionServiceTest` 继续作为行为门禁；当前完整回归为 319/0/0/4 skipped。4 个 skipped 的名称和原因见 [`docs/verification.md`](verification.md)。

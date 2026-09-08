@@ -1,8 +1,32 @@
 # Fork 性能基线与验收记录
 
-本文件只记录实际执行结果。静态 bundle、浏览器启动资源和 Java Service fixture 分开统计；合成边界不冒充真实外部服务性能。当前发布单元为 `v3.2.28.64`，历史版本仅作对照，不把旧版更早的首入口数字当作本轮下降结论。
+本文件只记录实际执行结果。静态 bundle、浏览器启动资源和 Java Service fixture 分开统计；合成边界不冒充真实外部服务性能。当前发布单元为 `v3.2.28.65`，历史版本仅作对照，不把旧版更早的首入口数字当作本轮下降结论。
 
-## 当前发布单元：v3.2.28.64
+## 当前发布单元：v3.2.28.65
+
+| 项目 | 实际值 |
+| --- | --- |
+| 版本/标签 | `3.2.28.65`；版本已固化，精确 tag workflow 待发布后回填 |
+| 修复提交 | `2d248fb2`（AnimeGarden）、`6fb81a17`（ImageCache）、`6abdd335`（close） |
+| Node / pnpm | Node `v24.16.0` / pnpm `11.19.0` |
+| Java / Maven | Temurin `25.0.4.1` / Apache Maven `3.9.11`，项目按 Java 17 release 编译 |
+| 外部边界 | 本地测试与 `127.0.0.1` 合成 fixture；不读取生产账号或文件 |
+
+### 本轮实际测量
+
+- 前端 Vitest：5 个文件、35/35；Java 完整门禁 319/0/0/4 skipped；ImageCacheService 定向回归 19/19。
+- 生产 UI 使用唯一目录 `ani-rss-ui/target/release-65-dist-20260908` 构建，未清理既有输出；bundle gate 通过。
+
+| 场景 | JS gzip | CSS gzip | 预算结果 |
+| --- | ---: | ---: | --- |
+| `staticEntryClosure` | 105,197 B | 48,953 B | 通过 |
+| login | 201,952 B | 63,229 B | 通过 |
+| home | 192,170 B | 61,822 B | 通过 |
+| subscriptions | 185,249 B | 63,645 B | 通过 |
+
+本轮没有新增 W6/W7 性能报告，不能从状态修复或单元测试推导生产吞吐、真实浏览器首屏或外部源延迟提升。镜像、Release 附件和远端 workflow digest 在精确 tag 发布后记录。
+
+## 历史对照：v3.2.28.64
 
 | 项目 | 实际值 |
 | --- | --- |

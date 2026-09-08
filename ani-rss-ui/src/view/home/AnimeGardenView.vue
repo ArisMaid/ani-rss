@@ -246,8 +246,6 @@ const resetSnapshotInteraction = () => {
 
 let list = async (bgmUrl = '', {
   generation = listGeneration,
-  preserveCurrent = false,
-  recovery = false,
   preferredWeek = activeName.value
 } = {}) => {
   if (generation !== listGeneration || document.hidden || !dialogVisible.value) {
@@ -268,17 +266,13 @@ let list = async (bgmUrl = '', {
   currentListValid = false
   needsListReload = true
   loading.value = true
-  if (recovery) {
+  if (listRecoveryState.value.status !== 'idle') {
     listRecoveryState.value = {
       status: 'reloading',
       error: '',
       generation
     }
   }
-  if (!preserveCurrent) {
-    data.value.items = []
-  }
-
   let startAfterList = false
   try {
     const res = await http.animeGardenList(lastListBgmUrl, {signal: controller.signal})
@@ -469,8 +463,6 @@ const retryList = () => {
   const generation = listGeneration
   void list(lastListBgmUrl, {
     generation,
-    preserveCurrent: true,
-    recovery: true,
     preferredWeek: activeName.value
   })
 }
@@ -517,8 +509,6 @@ const resumeFromLifecycle = () => {
     if (listRecoveryState.value.status === 'failed') return
     void list(lastListBgmUrl, {
       generation: listGeneration,
-      preserveCurrent: true,
-      recovery: listRecoveryState.value.status === 'reloading',
       preferredWeek: activeName.value
     })
     return

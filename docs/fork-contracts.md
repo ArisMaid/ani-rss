@@ -31,10 +31,22 @@
 | ID | 合同 | 主要证据 |
 | --- | --- | --- |
 | F30 | Mikan 补载请求必须绑定 query generation/group context；切组、取消、恢复和 finally 不能回写其他组状态，失败只归属自己的请求 | `MikanView.vue`、`list-lifecycle.test.js`、前端 35/35 |
-| F31 | AnimeGarden 列表层显式返回 success/failed/aborted/stale；列表恢复不能被 enrichment 失败吞掉；过期只允许一次受控自动 reload，并提供手动 retry | `AnimeGardenView.vue`、`list-lifecycle.test.js`、W7 production fixture |
-| F32 | ImageCache manifest 快照、revision 捕获和 dirty/persisted 状态由同一状态锁协调；单 writer 负责正常写与 close 最终 flush，生命周期为 OPEN/CLOSING/CLOSED | `ImageCacheServiceTest` manifest/close/timeout 用例 |
-| F33 | pending deletion 按规范化路径去重并计入 tracked/reserved bytes/files；准入、轮转维护、attempts/nextRetryAt 和 bounded retry 不得耗尽关闭预算 | `ImageCacheServiceTest` union-budget、pending、capacity、shutdown 用例 |
+| F31 | AnimeGarden 列表层显式返回 success/failed/aborted/stale；列表恢复不能被 enrichment 失败吞掉；（v3.2.28.64 历史合同：过期曾允许一次受控自动 reload，已由 v3.2.28.65 的 F35/F36 替代） | `AnimeGardenView.vue`、`list-lifecycle.test.js`、W7 production fixture |
+| F32 | ImageCache manifest 快照、revision 捕获和 dirty/persisted 状态由同一状态锁协调；单 writer 负责正常写与 close 的有界尽力 flush，生命周期为 OPEN/CLOSING/CLOSED | `ImageCacheServiceTest` manifest/close/timeout 用例 |
+| F33 | pending deletion 按规范化路径去重并计入 tracked/reserved bytes/files；准入、轮转维护、attempts/nextRetryAt 和 bounded retry 不得耗尽关闭预算，达到维护上限时暂停新增持久缓存 | `ImageCacheServiceTest` union-budget、pending、capacity、shutdown 用例 |
 | F34 | CI 的 W7/N08 必须使用同一个唯一生产 dist，报告路径/构建目录隔离，报告上传 always，超时失败不得被 continue-on-error 隐藏 | `.github/workflows/build-test.yml`、W7/N08 raw reports |
+
+## 3.2.28.65 增量合同
+
+| ID | 合同 | 主要证据 |
+| --- | --- | --- |
+| F35 | AnimeGarden 成功重载以新列表快照重建补载、分组和未提交选择；请求等待期间可保留旧展示，但不合并旧快照状态；失败显示“列表未更新”并使旧快照失效 | `AnimeGardenView.vue`、`list-lifecycle.test.js`、前端 35/35 |
+| F36 | AnimeGarden 遇到 `ANIME_GARDEN_LIST_EXPIRED` 后只显示人工“重新加载列表”入口；不自动恢复、不因隐藏/恢复触发重载；无效列表禁止补载、切组和批量操作 | `AnimeGardenView.vue`、`list-lifecycle.test.js` |
+| F37 | 公共图片缓存按新图片实际字节和一个临时文件做准入；准入失败前不创建/写入临时文件，先按有限旧条目回收，容量忙不写入源站失败负缓存 | `ImageCacheService`、`ImageCacheServiceTest` |
+| F38 | pending deletion 在切换正式索引前必须预留；达到 1024 或历史 manifest 超限时保留追踪、暂停新增持久缓存和 manifest 重写，并由管理员 SOP 处理 | `ImageCacheService`、`ImageCacheServiceTest` |
+| F39 | ImageCache 进入 CLOSING 后拒绝新下载；最终 manifest 写入排入已有单 writer，close 最多等待 5 秒，success 仅代表本次快照写成功，不保证临近关闭变化永久落盘 | `ImageCacheService`、`ImageCacheServiceTest` close/timeout 用例 |
+
+本版本的 F35–F39 优先采用人工产品入口、有限资源边界和缓存维护 SOP；不承诺强杀、断电、系统 I/O 阻塞下的近期封面索引零丢失。封面缓存可重建，维护时不得由代理执行批量或递归删除。
 
 ## 3.2.28.63 增量合同
 

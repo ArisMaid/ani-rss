@@ -1,8 +1,32 @@
-# Fork v3.2.28.64 验证记录
+# Fork v3.2.28.65 验证记录
 
-本记录严格按 `FORK_V3.2.28.63_OPTIMIZATION_PLAN.md` 执行；附带开发书是验收规范，不是额外的生产授权。v3.2.28.64 的行为提交为 `bff06cb0618be5d77c7185f7dd09c6dc5cd0ebb0`，实现提交为 `da4a0c23`，版本提交为 `21048e34`。真实账号、生产下载器、用户媒体和外部数据未连接；合成 fixture 不冒充生产验证。
+本记录严格按 `FORK_V3.2.28.64_REVIEW_AND_REPAIR_PLAN.md` 执行；附带开发书是验收规范，不是额外的生产授权。v3.2.28.65 保持 v3.2.28 的上游前三段和本地第四段递增规则；真实账号、生产下载器、用户媒体和外部数据未连接，合成 fixture 不冒充生产验证。
 
-## 当前发布单元：3.2.28.64
+## 当前发布单元：3.2.28.65
+
+### 门禁与构建
+
+- 前端 Vitest：5 个测试文件、35/35 通过；`list-lifecycle.test.js` 覆盖 AnimeGarden 列表过期人工入口、失败重载和生命周期恢复边界。
+- 生产 UI 构建：`pnpm exec vite build --outDir target/release-65-dist-20260908 --emptyOutDir false`，使用唯一输出目录且未清理既有输出；构建通过。
+- bundle 门禁：static entry JS/CSS gzip 为 `105,197/48,953 B`；login `201,952/63,229 B`；home `192,170/61,822 B`；subscriptions `185,249/63,645 B`，均通过既有预算；`forbiddenModules=[]`。
+- Java 完整门禁：`mvn -B -Pci -Dskip.frontend=true verify`；319 tests、0 failures、0 errors、4 skipped；JaCoCo 达标，SpotBugs `BugInstance size is 0`，CycloneDX SBOM 生成成功；`ImageCacheServiceTest` 定向 19/19。
+
+### v3.2.28.64 审查修复验收矩阵
+
+| 工作包 | 状态 | 实现与证据 |
+| --- | --- | --- |
+| A/B AnimeGarden 新快照与人工恢复 | 通过 | `2d248fb2`；成功重载清除旧补载/分组/选择状态，过期不再自动 list；前端 35/35 通过 |
+| C/D 图片准入与 pending 上限 | 通过 | `6fb81a17`；按实际 bytes 和临时文件预留后写入，先有限淘汰；pending 预留失败暂停新增并保留 manifest 追踪；`ImageCacheServiceTest` 19/19 |
+| E 关闭尽力保存 | 通过 | `6abdd335`；final flush 排入已有 manifest executor，清理延迟重试，close 最多等待 5 秒；success 仅表示本次快照写成功 |
+| 版本与发布门禁 | 待远端 tag workflow | 本地版本已固化为 `3.2.28.65`；精确 tag、GitHub Release、GHCR 多架构 digest 待发布后回填 |
+
+### 本轮未验证边界
+
+- 未新增浏览器矩阵；W7/N08 只作为既有发布门禁，不能证明 AnimeGarden 过期人工交互的完整生产流程。
+- 真实 Mikan、Bangumi、AnimeGarden、图片代理和下载器的外网波动、认证、429/5xx、生产媒体和数据库/文件费用仍未连接。
+- Docker Desktop/Linux engine 本地构建、强杀/断电/系统 I/O 阻塞下的 manifest 零丢失未验证；近期封面缓存按方案允许重建，异常清理由维护 SOP 处理。
+
+## 历史 v3.2.28.64 验收记录
 
 ### 门禁与构建
 

@@ -1,13 +1,14 @@
-# 有状态模块依赖与本次决策（v3.2.28.64）
+# 有状态模块依赖与本次决策（v3.2.28.65）
 
-本文件按开发书 T7 建立依赖清单。`3.2.28.64` 在既有状态链合同上补齐 ImageCache manifest、关闭和 pending deletion 的状态/预算边界；真实数据库、文件系统和外部下载器成本仍明确后置。
+本文件按开发书 T7 建立依赖清单。`3.2.28.65` 在既有状态链合同上收敛 AnimeGarden 快照代际、公共图片缓存准入/维护暂停和关闭尽力保存语义；真实数据库、文件系统和外部下载器成本仍明确后置。
 
-## v3.2.28.64 新增状态验证
+## v3.2.28.65 新增状态验证
 
-- ImageCache 生命周期明确为 `OPEN → CLOSING → CLOSED`；close 使用共享有界 deadline，完成排队 flight 后由同一 writer 执行最后一次 manifest flush，并记录 success/failure/timeout 诊断。
+- AnimeGarden 列表成功重载建立新的快照代际：请求等待时可继续展示旧列表，成功后清除 enrichment、group、selectName 和未提交选择；过期/失败快照只保留人工重新加载入口，不因隐藏恢复自动重试。
+- ImageCache 生命周期明确为 `OPEN → CLOSING → CLOSED`；进入 CLOSING 后拒绝新下载，final flush 排入现有单 writer，close 最多等待 5 秒；success 只表示该次快照写成功，近期封面索引允许重建。
 - manifest 的 revision、entry/pending 快照、dirty 和 persistedRevision 在同一状态锁下捕获；不会在快照内容与 revision 之间留下可观察窗口。
-- pending deletion 以规范化路径做并集计费，active entry 与同路径 pending 不重复计数；reserved bytes/files 参加准入，维护按 bounded scan、轮转和指数退避推进。
-- `ImageCacheServiceTest` 定向 19/19、Java 完整门禁 319/0/0/4 skipped 通过。上述是状态不变量证据，不是生产吞吐或文件系统故障率测量。
+- pending deletion 以规范化路径做并集计费，active entry 与同路径 pending 不重复计数；reserved bytes/files 参加准入。新图片先按实际 bytes 与一个临时文件申请预算，失败时先做有限淘汰；pending 达 1024 或历史 manifest 超限则进入维护暂停，停止新增持久缓存和 manifest 重写。
+- `ImageCacheServiceTest` 定向 19/19、Java 完整门禁 319/0/0/4 skipped、前端 35/35 通过；上述是状态不变量证据，不是生产吞吐、文件系统故障率或浏览器交互测量。
 
 ## 依赖地图
 

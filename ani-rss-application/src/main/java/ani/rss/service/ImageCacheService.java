@@ -68,6 +68,7 @@ public class ImageCacheService {
     private static final int PUBLIC_PENDING_SCAN_LIMIT = 32;
     private static final long PUBLIC_PENDING_RETRY_INITIAL_MILLIS = Duration.ofSeconds(30).toMillis();
     private static final long PUBLIC_PENDING_RETRY_MAX_MILLIS = Duration.ofMinutes(10).toMillis();
+    private static final long PUBLIC_MAINTENANCE_WARNING_INTERVAL_MILLIS = Duration.ofMinutes(1).toMillis();
     private static final String PUBLIC_MANIFEST = "public-manifest.json";
     private static final SecureRandom RANDOM = new SecureRandom();
     private final Map<String, Entry> entries = new ConcurrentHashMap<>();
@@ -94,6 +95,8 @@ public class ImageCacheService {
     private final AtomicInteger publicReservedFiles = new AtomicInteger();
     private final AtomicLong publicPendingDeletionBytes = new AtomicLong();
     private final AtomicInteger publicPendingDeletionFiles = new AtomicInteger();
+    private final AtomicBoolean publicCacheMaintenancePaused = new AtomicBoolean();
+    private final AtomicLong publicCacheMaintenanceWarningAt = new AtomicLong();
     private final ExecutorService publicExecutor = new ThreadPoolExecutor(
             PUBLIC_WORKERS,
             PUBLIC_WORKERS,
@@ -190,6 +193,11 @@ public class ImageCacheService {
         if (cached != null) {
             removePublicEntry(cached);
         }
+        if (isPublicCacheAdmissionPaused()) {
+            throw new UpstreamServiceException(
+                    "image cache maintenance is paused; check cache permissions or disk",
+                    null, PUBLIC_BUSY_RETRY_SECONDS);
+        }
 
         CompletableFuture<PublicEntry> created = new CompletableFuture<>();
         CompletableFuture<PublicEntry> shared = publicFlights.putIfAbsent(key, created);
@@ -232,6 +240,7 @@ public class ImageCacheService {
         int trackedFiles = publicTrackedFiles();
         return new PublicCacheDiagnostics(
                 publicLifecycle.get().name(),
+                publicCacheMaintenancePaused.get(),
                 publicManifestRevision.get(),
                 publicManifestPersistedRevision,
                 publicManifestWriteScheduled.get(),
@@ -321,23 +330,45 @@ public class ImageCacheService {
             verifyCacheRoot(root);
             String extension = extension(fetched.contentType());
             Path target = root.resolve(key + extension).normalize();
-            Path temporary = Files.createTempFile(root, ".public-image-", ".part");
+            byte[] bytes = fetched.bytes();
+            long now = System.currentTimeMillis();
+            PublicEntry entry = new PublicEntry(
+                    key,
+                    canonical,
+                    target,
+                    fetched.contentType(),
+                    etag(bytes),
+                    now,
+                    now + PUBLIC_TTL,
+                    bytes.length);
+            PublicEntry previous = publicEntries.get(key);
+            if (previous != null && previous.activeReaders().get() > 0) {
+                throw new PublicImageBusyException();
+            }
             boolean reservation = false;
+            if (!ensurePublicCapacity(previous, entry.length(), key)) {
+                publicCapacityRejections.incrementAndGet();
+                throw new PublicCacheCapacityException();
+            }
+            reservation = true;
+            PendingDeletionReservation pendingReservation = PendingDeletionReservation.none();
+            if (previous != null && !previous.path().equals(entry.path())) {
+                pendingReservation = reservePendingDeletion(key, previous.path(), previous.length());
+                if (!pendingReservation.admitted()) {
+                    releasePublicReservation(entry.length());
+                    reservation = false;
+                    throw publicCacheMaintenancePausedException();
+                }
+                if (pendingReservation.added()) markPublicManifestDirty();
+            }
+            Path temporary = null;
             boolean published = false;
             try {
+                if (publicCacheMaintenancePaused.get()) {
+                    throw publicCacheMaintenancePausedException();
+                }
+                temporary = Files.createTempFile(root, ".public-image-", ".part");
                 fetched.writeTo(temporary);
-                long now = System.currentTimeMillis();
-                byte[] bytes = fetched.bytes();
-                PublicEntry entry = new PublicEntry(
-                        key,
-                        canonical,
-                        target,
-                        fetched.contentType(),
-                        etag(bytes),
-                        now,
-                        now + PUBLIC_TTL,
-                        bytes.length);
-                trimPublicEntries();
                 // A stale maintenance pass and a new publisher must serialize
                 // around both the target move and the map replacement. If the
                 // move happened before this lock, the stale pass could delete
@@ -346,7 +377,6 @@ public class ImageCacheService {
                     if (closed) {
                         throw new ImageCacheClosedException();
                     }
-                    PublicEntry previous;
                     synchronized (publicManifestStateLock) {
                         if (publicLifecycle.get() != PublicLifecycle.OPEN) {
                             throw new ImageCacheClosedException();
@@ -355,12 +385,8 @@ public class ImageCacheService {
                         if (previous != null && previous.activeReaders().get() > 0) {
                             throw new PublicImageBusyException();
                         }
-                        if (!reservePublicCapacity(previous, entry.length())) {
-                            publicCapacityRejections.incrementAndGet();
-                            throw new PublicCacheCapacityException();
-                        }
-                        reservation = true;
                     }
+                    reservation = true;
                     try {
                         Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE,
                                 StandardCopyOption.REPLACE_EXISTING);
@@ -373,10 +399,19 @@ public class ImageCacheService {
                     if (previous != null && !previous.path().equals(entry.path())) {
                         try {
                             Files.deleteIfExists(previous.path());
-                        } catch (IOException ignored) {
-                            // The old exact path is no longer reachable from
-                            // the manifest and must be retried by maintenance.
-                            rememberPendingDeletion(key, previous.path(), previous.length());
+                            if (pendingReservation.admitted()) {
+                                if (removePendingDeletion(pendingReservation.identity(),
+                                        pendingReservation.pending())) {
+                                    markPublicManifestDirty();
+                                }
+                            }
+                        } catch (IOException e) {
+                            // The pre-admitted old path remains tracked and is
+                            // retried by maintenance; do not drop it at the
+                            // replacement boundary.
+                            org.slf4j.LoggerFactory.getLogger(ImageCacheService.class)
+                                    .warn("public image cleanup deferred for {}: {}",
+                                            previous.path(), e.getMessage());
                         }
                     }
                     published = true;
@@ -389,11 +424,26 @@ public class ImageCacheService {
                 future.complete(entry);
             } finally {
                 if (reservation && !published) releasePublicReservation(fetched.bytes().length);
-                Files.deleteIfExists(temporary);
+                if (!published && pendingReservation.added()
+                        && removePendingDeletion(pendingReservation.identity(), pendingReservation.pending())) {
+                    markPublicManifestDirty();
+                }
+                if (temporary != null) {
+                    try {
+                        Files.deleteIfExists(temporary);
+                    } catch (IOException e) {
+                        publicCacheMaintenancePaused.set(true);
+                        warnPublicCacheMaintenancePaused();
+                    }
+                }
             }
         } catch (PublicImageBusyException e) {
             future.completeExceptionally(new UpstreamServiceException(
                     "image cache entry is being read; retry later", e, PUBLIC_BUSY_RETRY_SECONDS));
+        } catch (PublicCacheMaintenancePausedException e) {
+            future.completeExceptionally(new UpstreamServiceException(
+                    "image cache maintenance is paused; check cache permissions or disk",
+                    e, PUBLIC_BUSY_RETRY_SECONDS));
         } catch (PublicCacheCapacityException e) {
             future.completeExceptionally(new UpstreamServiceException(
                     "image cache capacity reached; retry later", e, PUBLIC_BUSY_RETRY_SECONDS));
@@ -513,8 +563,13 @@ public class ImageCacheService {
                                     item.fetchedAt(), item.expiresAt(), item.length()));
                         }
                     }
-                    for (PendingDeletion item : value == null || value.pendingDeletions() == null
-                            ? List.<PendingDeletion>of() : value.pendingDeletions()) {
+                    List<PendingDeletion> pendingItems = value == null || value.pendingDeletions() == null
+                            ? List.of() : value.pendingDeletions();
+                    if (pendingItems.size() >= PUBLIC_PENDING_MAX_FILES) {
+                        publicCacheMaintenancePaused.set(true);
+                        warnPublicCacheMaintenancePaused();
+                    }
+                    for (PendingDeletion item : pendingItems) {
                         if (item == null || item.key() == null || item.path() == null) {
                             needsRepair = true;
                             continue;
@@ -548,8 +603,6 @@ public class ImageCacheService {
                         synchronized (publicManifestStateLock) {
                             if (publicPendingDeletions.containsKey(identity)) {
                                 needsRepair = true;
-                            } else if (publicPendingDeletionFiles.get() >= PUBLIC_PENDING_MAX_FILES) {
-                                needsRepair = true;
                             } else {
                                 publicPendingDeletions.put(identity, pending);
                                 publicPendingDeletionFiles.incrementAndGet();
@@ -557,9 +610,13 @@ public class ImageCacheService {
                             }
                         }
                     }
-                    if (trimPublicEntries()) needsRepair = true;
+                    if (publicPendingDeletionFiles.get() >= PUBLIC_PENDING_MAX_FILES) {
+                        publicCacheMaintenancePaused.set(true);
+                        warnPublicCacheMaintenancePaused();
+                    }
+                    if (!publicCacheMaintenancePaused.get() && trimPublicEntries()) needsRepair = true;
                 }
-                if (needsRepair) markPublicManifestDirty();
+                if (needsRepair && !publicCacheMaintenancePaused.get()) markPublicManifestDirty();
             } catch (IOException | RuntimeException ignored) {
                 // A corrupt optional image manifest must never prevent startup.
                 synchronized (publicManifestStateLock) {
@@ -579,11 +636,12 @@ public class ImageCacheService {
             publicManifestDirty = true;
             publicManifestRevision.incrementAndGet();
         }
-        scheduleManifestWriter();
+        if (!publicCacheMaintenancePaused.get()) scheduleManifestWriter();
     }
 
     private void scheduleManifestWriter() {
-        if (publicLifecycle.get() != PublicLifecycle.OPEN || publicManifestWriteScheduled.get()) return;
+        if (publicLifecycle.get() != PublicLifecycle.OPEN
+                || publicCacheMaintenancePaused.get() || publicManifestWriteScheduled.get()) return;
         if (!publicManifestWriteScheduled.compareAndSet(false, true)) return;
         try {
             publicManifestExecutor.execute(() -> runManifestWriter(MANIFEST_RETRY_INITIAL_MILLIS));
@@ -602,7 +660,11 @@ public class ImageCacheService {
         }
         publicManifestWriterRunning.set(true);
         try {
-            if (publicLifecycle.get() == PublicLifecycle.CLOSED) return;
+            if (publicLifecycle.get() == PublicLifecycle.CLOSED
+                    || publicCacheMaintenancePaused.get()) {
+                publicManifestWriteScheduled.set(false);
+                return;
+            }
             ManifestWriteResult result = writeManifestPass();
             if (!result.success()) {
                 long nextDelay = Math.min(MANIFEST_RETRY_MAX_MILLIS,
@@ -697,7 +759,7 @@ public class ImageCacheService {
     }
 
     private void submitManifestWriter(long delayMillis) {
-        if (publicLifecycle.get() != PublicLifecycle.OPEN) {
+        if (publicLifecycle.get() != PublicLifecycle.OPEN || publicCacheMaintenancePaused.get()) {
             publicManifestWriteScheduled.set(false);
             return;
         }
@@ -731,6 +793,10 @@ public class ImageCacheService {
             }
             locked = true;
             publicManifestWriterRunning.set(true);
+            if (publicCacheMaintenancePaused.get()) {
+                publicManifestLastFinalFlushStatus = "paused";
+                return;
+            }
             if (!manifestNeedsWrite()) {
                 publicManifestLastFinalFlushStatus = "success";
                 return;
@@ -762,29 +828,58 @@ public class ImageCacheService {
     }
 
     private boolean trimPublicEntries() {
+        return trimPublicEntries(0, null, false);
+    }
+
+    private boolean trimPublicEntries(long incomingLength, String protectedKey) {
+        return trimPublicEntries(incomingLength, protectedKey, true);
+    }
+
+    private boolean trimPublicEntries(long incomingLength, String protectedKey, boolean incomingFile) {
         if (publicLifecycle.get() != PublicLifecycle.OPEN) return false;
         boolean changed = false;
         long now = System.currentTimeMillis();
         for (PublicEntry entry : List.copyOf(publicEntries.values())) {
+            if (protectedKey != null && protectedKey.equals(entry.key())) continue;
             if (entry.expiresAt() > now) continue;
             changed |= removePublicEntry(entry);
         }
-        if (publicTrackedFiles() <= PUBLIC_MAX_ENTRIES
-                && publicTrackedBytes() <= PUBLIC_MAX_BYTES) return changed;
+        if (hasPublicCapacity(incomingLength, incomingFile)) return changed;
         List<PublicEntry> oldest = publicEntries.values().stream()
+                .filter(entry -> protectedKey == null || !protectedKey.equals(entry.key()))
                 .sorted(Comparator.comparingLong(PublicEntry::fetchedAt))
                 .toList();
         for (PublicEntry entry : oldest) {
-            if (publicTrackedFiles() <= PUBLIC_MAX_ENTRIES
-                    && publicTrackedBytes() <= PUBLIC_MAX_BYTES) break;
+            if (hasPublicCapacity(incomingLength, incomingFile)) break;
             changed |= removePublicEntry(entry);
         }
         return changed;
     }
 
+    private boolean hasPublicCapacity(long incomingLength, boolean incomingFile) {
+        synchronized (publicManifestStateLock) {
+            return trackedBytesLocked() + Math.max(0, incomingLength) <= PUBLIC_MAX_BYTES
+                    && trackedFilesLocked() + (incomingFile ? 1 : 0) <= PUBLIC_MAX_ENTRIES;
+        }
+    }
+
+    private boolean ensurePublicCapacity(PublicEntry replacing, long incomingLength, String protectedKey) {
+        if (publicCacheMaintenancePaused.get()) return false;
+        if (reservePublicCapacity(replacing, incomingLength)) return true;
+        if (publicCacheMaintenancePaused.get()) return false;
+        trimPublicEntries(incomingLength, protectedKey);
+        return reservePublicCapacity(replacing, incomingLength);
+    }
+
     private boolean reservePublicCapacity(PublicEntry replacing, long incomingLength) {
         if (incomingLength < 0 || incomingLength > PUBLIC_MAX_BYTES) return false;
         synchronized (publicManifestStateLock) {
+            if (publicCacheMaintenancePaused.get()
+                    || publicPendingDeletionFiles.get() >= PUBLIC_PENDING_MAX_FILES) {
+                publicCacheMaintenancePaused.set(true);
+                warnPublicCacheMaintenancePaused();
+                return false;
+            }
             long trackedBytes = trackedBytesLocked();
             int trackedFiles = trackedFilesLocked();
             if (trackedBytes + incomingLength > PUBLIC_MAX_BYTES
@@ -795,6 +890,30 @@ public class ImageCacheService {
             publicReservedFiles.incrementAndGet();
             return true;
         }
+    }
+
+    private boolean isPublicCacheAdmissionPaused() {
+        if (publicCacheMaintenancePaused.get()) return true;
+        synchronized (publicManifestStateLock) {
+            if (publicPendingDeletionFiles.get() < PUBLIC_PENDING_MAX_FILES) return false;
+            publicCacheMaintenancePaused.set(true);
+            warnPublicCacheMaintenancePaused();
+            return true;
+        }
+    }
+
+    private void warnPublicCacheMaintenancePaused() {
+        long now = System.currentTimeMillis();
+        long previous = publicCacheMaintenanceWarningAt.get();
+        if (now - previous < PUBLIC_MAINTENANCE_WARNING_INTERVAL_MILLIS
+                || !publicCacheMaintenanceWarningAt.compareAndSet(previous, now)) return;
+        org.slf4j.LoggerFactory.getLogger(ImageCacheService.class)
+                .warn("public image cache maintenance is paused; pending cleanup reached its limit; "
+                        + "check cache permissions, disk space, and open file handles");
+    }
+
+    private static PublicCacheMaintenancePausedException publicCacheMaintenancePausedException() {
+        return new PublicCacheMaintenancePausedException();
     }
 
     private void releasePublicReservation(long length) {
@@ -876,26 +995,38 @@ public class ImageCacheService {
         }
     }
 
-    private boolean rememberPendingDeletion(String key, Path path, long length) {
+    private PendingDeletionReservation reservePendingDeletion(String key, Path path, long length) {
         Path normalized = path.toAbsolutePath().normalize();
         Path root = publicRoot();
         if (!normalized.startsWith(root) || normalized.equals(root.resolve(PUBLIC_MANIFEST))) {
-            return false;
+            return PendingDeletionReservation.none();
         }
         String identity = pendingDeletionKey(key, normalized);
-        boolean added = false;
+        PendingDeletion pending;
         synchronized (publicManifestStateLock) {
-            if (publicPendingDeletions.containsKey(identity)) return true;
-            if (publicPendingDeletionFiles.get() >= PUBLIC_PENDING_MAX_FILES) return false;
-            PendingDeletion pending = new PendingDeletion(key, normalized.toString(),
+            PendingDeletion existing = publicPendingDeletions.get(identity);
+            if (existing != null) {
+                return new PendingDeletionReservation(true, false, identity, existing);
+            }
+            if (publicCacheMaintenancePaused.get()
+                    || publicPendingDeletionFiles.get() >= PUBLIC_PENDING_MAX_FILES) {
+                publicCacheMaintenancePaused.set(true);
+                warnPublicCacheMaintenancePaused();
+                return PendingDeletionReservation.none();
+            }
+            pending = new PendingDeletion(key, normalized.toString(),
                     Math.max(0, length), 0, 0);
             publicPendingDeletions.put(identity, pending);
             publicPendingDeletionFiles.incrementAndGet();
             publicPendingDeletionBytes.addAndGet(pending.length());
-            added = true;
         }
-        if (added) markPublicManifestDirty();
-        return true;
+        return new PendingDeletionReservation(true, true, identity, pending);
+    }
+
+    private boolean rememberPendingDeletion(String key, Path path, long length) {
+        PendingDeletionReservation reservation = reservePendingDeletion(key, path, length);
+        if (reservation.added()) markPublicManifestDirty();
+        return reservation.admitted();
     }
 
     private boolean retryPendingDeletions() {
@@ -963,6 +1094,9 @@ public class ImageCacheService {
             if (!publicPendingDeletions.remove(identity, pending)) return false;
             publicPendingDeletionFiles.updateAndGet(value -> Math.max(0, value - 1));
             publicPendingDeletionBytes.addAndGet(-pending.length());
+            if (publicPendingDeletionFiles.get() < PUBLIC_PENDING_MAX_FILES) {
+                publicCacheMaintenancePaused.set(false);
+            }
             return true;
         }
     }
@@ -1183,6 +1317,7 @@ public class ImageCacheService {
 
     public record PublicCacheDiagnostics(
             String lifecycle,
+            boolean maintenancePaused,
             long currentRevision,
             long persistedRevision,
             boolean writerScheduled,
@@ -1272,6 +1407,13 @@ public class ImageCacheService {
                                    int attempts, long nextRetryAt) {
     }
 
+    private record PendingDeletionReservation(boolean admitted, boolean added,
+                                              String identity, PendingDeletion pending) {
+        private static PendingDeletionReservation none() {
+            return new PendingDeletionReservation(false, false, "", null);
+        }
+    }
+
     private record ManifestSnapshot(long revision,
                                     List<PublicManifestEntry> entries,
                                     List<PendingDeletion> pendingDeletions) {
@@ -1295,6 +1437,9 @@ public class ImageCacheService {
     }
 
     private static final class PublicCacheCapacityException extends RuntimeException {
+    }
+
+    private static final class PublicCacheMaintenancePausedException extends RuntimeException {
     }
 
     private static final class ImageCacheClosedException extends RuntimeException {

@@ -153,7 +153,6 @@ public class ImageCacheService {
             publicFlights.remove(key, future);
         });
         maintenanceExecutor.shutdownNow();
-        publicManifestExecutor.shutdownNow();
         flushPublicManifestOnClose();
         publicLifecycle.set(PublicLifecycle.CLOSED);
         SafeImageFetcher.closeCachedClients();
@@ -784,44 +783,84 @@ public class ImageCacheService {
     private void flushPublicManifestOnClose() {
         long started = System.nanoTime();
         long deadline = started + TimeUnit.MILLISECONDS.toNanos(MANIFEST_CLOSE_TIMEOUT_MILLIS);
-        boolean locked = false;
+        CompletableFuture<String> finalFlush = new CompletableFuture<>();
+        publicManifestLastFinalFlushStatus = "pending";
         try {
+            if (publicManifestExecutor instanceof java.util.concurrent.ScheduledThreadPoolExecutor executor) {
+                // A delayed retry must not make shutdown wait for the entire
+                // backoff period. The current writer, if any, is left alone;
+                // the immediate final task runs after it on the same executor.
+                executor.getQueue().clear();
+            }
+            publicManifestExecutor.execute(() -> runFinalManifestFlush(finalFlush, deadline));
+            publicManifestExecutor.shutdown();
             long remaining = deadline - System.nanoTime();
-            if (remaining <= 0 || !publicManifestWriterLock.tryLock(remaining, TimeUnit.NANOSECONDS)) {
+            if (remaining <= 0) {
                 publicManifestLastFinalFlushStatus = "timeout";
-                return;
-            }
-            locked = true;
-            publicManifestWriterRunning.set(true);
-            if (publicCacheMaintenancePaused.get()) {
-                publicManifestLastFinalFlushStatus = "paused";
-                return;
-            }
-            if (!manifestNeedsWrite()) {
-                publicManifestLastFinalFlushStatus = "success";
-                return;
-            }
-            while (manifestNeedsWrite()) {
-                if (System.nanoTime() >= deadline) {
-                    publicManifestLastFinalFlushStatus = "timeout";
-                    break;
-                }
-                ManifestWriteResult result = writeManifestPass();
-                if (!result.success()) {
-                    publicManifestLastFinalFlushStatus = "failed";
-                    break;
-                }
-            }
-            if (!manifestNeedsWrite()) {
-                publicManifestLastFinalFlushStatus = "success";
+            } else {
+                finalFlush.get(remaining, TimeUnit.NANOSECONDS);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             publicManifestLastFinalFlushStatus = "timeout";
+        } catch (java.util.concurrent.TimeoutException e) {
+            publicManifestLastFinalFlushStatus = "timeout";
+        } catch (ExecutionException | RejectedExecutionException e) {
+            publicManifestLastFinalFlushStatus = "failed";
         } finally {
             publicManifestLastFinalFlushDurationMillis = TimeUnit.NANOSECONDS.toMillis(
                     System.nanoTime() - started);
             publicManifestWriteScheduled.set(false);
+        }
+    }
+
+    private void runFinalManifestFlush(CompletableFuture<String> result, long deadline) {
+        boolean locked = false;
+        try {
+            if (publicLifecycle.get() == PublicLifecycle.CLOSED) {
+                publicManifestLastFinalFlushStatus = "timeout";
+                result.complete("timeout");
+                return;
+            }
+            if (publicCacheMaintenancePaused.get()) {
+                publicManifestLastFinalFlushStatus = "paused";
+                result.complete("paused");
+                return;
+            }
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0 || !publicManifestWriterLock.tryLock(remaining, TimeUnit.NANOSECONDS)) {
+                publicManifestLastFinalFlushStatus = "timeout";
+                result.complete("timeout");
+                return;
+            }
+            locked = true;
+            publicManifestWriterRunning.set(true);
+            if (!manifestNeedsWrite()) {
+                publicManifestLastFinalFlushStatus = "success";
+                result.complete("success");
+                return;
+            }
+            if (System.nanoTime() >= deadline) {
+                publicManifestLastFinalFlushStatus = "timeout";
+                result.complete("timeout");
+                return;
+            }
+            ManifestWriteResult write = writeManifestPass();
+            if (System.nanoTime() >= deadline || publicLifecycle.get() == PublicLifecycle.CLOSED) {
+                publicManifestLastFinalFlushStatus = "timeout";
+                result.complete("timeout");
+            } else {
+                publicManifestLastFinalFlushStatus = write.success() ? "success" : "failed";
+                result.complete(publicManifestLastFinalFlushStatus);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            publicManifestLastFinalFlushStatus = "timeout";
+            result.complete("timeout");
+        } catch (RuntimeException e) {
+            publicManifestLastFinalFlushStatus = "failed";
+            result.complete("failed");
+        } finally {
             publicManifestWriterRunning.set(false);
             if (locked) publicManifestWriterLock.unlock();
         }

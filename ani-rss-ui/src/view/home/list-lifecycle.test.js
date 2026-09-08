@@ -344,16 +344,14 @@ describe('list view lifecycle', () => {
     expect(wrapper.vm.data.items[0].subjects[0].score).toBe(0)
   })
 
-  it('reloads AnimeGarden exactly once when enrichment reports an expired list', async () => {
+  it('keeps an expired AnimeGarden list behind the manual reload entry point', async () => {
     const expired = Object.assign(new Error('列表已过期'), {
       code: 'ANIME_GARDEN_LIST_EXPIRED', status: 409
     })
     http.animeGardenList
       .mockResolvedValueOnce(validAnimeGardenList('旧列表'))
-      .mockResolvedValueOnce(validAnimeGardenList('受控重载列表'))
     http.animeGardenEnrichment
       .mockRejectedValueOnce(expired)
-      .mockResolvedValueOnce({data: {subjects: {}, retryableSubjectIds: []}})
 
     wrapper = mount(AnimeGardenView, {
       global: {stubs, directives: {loading: {}}}
@@ -361,18 +359,19 @@ describe('list view lifecycle', () => {
     wrapper.vm.show()
     for (let index = 0; index < 6; index++) await tick()
 
-    expect(http.animeGardenList).toHaveBeenCalledTimes(2)
-    expect(http.animeGardenEnrichment).toHaveBeenCalledTimes(2)
-    expect(wrapper.text()).toContain('受控重载列表')
+    expect(http.animeGardenList).toHaveBeenCalledTimes(1)
+    expect(http.animeGardenEnrichment).toHaveBeenCalledTimes(1)
+    expect(wrapper.vm.listRecoveryState.status).toBe('failed')
+    expect(wrapper.text()).toContain('列表已过期，请重新加载')
+    expect(wrapper.text()).toContain('重新加载列表')
   })
 
-  it('keeps AnimeGarden list recovery failed when the controlled reload fails', async () => {
+  it('does not restart an expired AnimeGarden list on lifecycle resume', async () => {
     const expired = Object.assign(new Error('列表已过期'), {
       code: 'ANIME_GARDEN_LIST_EXPIRED', status: 409
     })
     http.animeGardenList.mockReset()
       .mockResolvedValueOnce(validAnimeGardenList('旧列表'))
-      .mockRejectedValueOnce(new Error('重载服务不可用'))
     http.animeGardenEnrichment.mockReset().mockRejectedValueOnce(expired)
 
     wrapper = mount(AnimeGardenView, {
@@ -381,10 +380,14 @@ describe('list view lifecycle', () => {
     wrapper.vm.show()
     for (let index = 0; index < 8; index++) await tick()
 
-    expect(http.animeGardenList).toHaveBeenCalledTimes(2)
+    setHidden(true)
+    await tick()
+    setHidden(false)
+    await tick()
+
+    expect(http.animeGardenList).toHaveBeenCalledTimes(1)
     expect(wrapper.vm.listRecoveryState.status).toBe('failed')
     expect(wrapper.find('[data-list-recovery-status]').text()).toContain('重新加载列表')
-    expect(wrapper.text()).toContain('重载服务不可用')
   })
 
   it('keeps an unknown AnimeGarden score unknown instead of converting it to zero', async () => {

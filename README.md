@@ -11,6 +11,8 @@
 |
 [Docker部署](https://docs.wushuo.top/deploy/docker)
 |
+[公共封面缓存维护](docs/stateful-simplification.md#公共封面缓存维护)
+|
 [常见问题](https://docs.wushuo.top/faq)
 |
 [参与开发](https://docs.wushuo.top/dev/basic)

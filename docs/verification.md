@@ -38,40 +38,32 @@
 
 ### 门禁与构建
 
-- 前端 Vitest：5 个测试文件、35/35 通过；其中 `list-lifecycle.test.js` 覆盖 Mikan 查询世代切换、取消、恢复以及 AnimeGarden 列表恢复。
-- 生产 UI 构建：使用唯一临时 dist，未清理既有输出；构建通过。
-- bundle 门禁：static entry JS/CSS gzip 为 `105,197/48,953 B`；login `201,953/63,229 B`；home `192,172/61,822 B`；subscriptions `185,251/63,645 B`，均通过现有预算；`forbiddenModules=[]`。
-- Java 完整门禁：`mvn -B -Pci -Dskip.frontend=true verify`；319 tests、0 failures、0 errors、4 skipped；JaCoCo 达标，SpotBugs `BugInstance size is 0`，CycloneDX SBOM 生成成功。
+- 前端 Vitest：5 个测试文件、35/35 通过；`list-lifecycle.test.js` 覆盖 AnimeGarden 列表过期人工入口、失败重载和生命周期恢复边界。
+- 生产 UI 构建：`pnpm exec vite build --outDir target/release-65-dist-20260908 --emptyOutDir false`，使用唯一输出目录且未清理既有输出；构建通过。
+- bundle 门禁：static entry JS/CSS gzip 为 `105,197/48,953 B`；login `201,952/63,229 B`；home `192,170/61,822 B`；subscriptions `185,249/63,645 B`，均通过既有预算；`forbiddenModules=[]`。
+- Java 完整门禁：`mvn -B -Pci -Dskip.frontend=true verify`；319 tests、0 failures、0 errors、4 skipped；JaCoCo 达标，SpotBugs `BugInstance size is 0`，CycloneDX SBOM 生成成功；`ImageCacheServiceTest` 定向 19/19。
 
-### R63 开发方案验收矩阵
+### v3.2.28.64 审查修复验收矩阵
 
 | 工作包 | 状态 | 实现与证据 |
 | --- | --- | --- |
-| R63-01 Mikan 查询上下文/取消/恢复 | 通过 | `da4a0c23`；Mikan generation、groupKey、AbortController 和 finally 归属检查；A→B→A 回归与 35 项前端全量通过 |
-| R63-02 AnimeGarden 列表级恢复 | 通过 | `da4a0c23`；list 结果显式区分成功/失败/中止/过期，列表恢复与 enrichment 解耦，一次受控 reload 和手动 retry；失败恢复用例通过 |
-| R63-03 manifest 单 writer 与 revision | 通过 | `bff06cb0`；manifest revision/dirty/persistedRevision、同锁快照和写入 owner；`ImageCacheServiceTest` 19/19 通过 |
-| R63-04 close 最终 flush | 通过 | `bff06cb0`；OPEN/CLOSING/CLOSED、共享有界 deadline、最终 flush 与诊断状态；成功、失败、超时和幂等关闭用例通过 |
-| R63-05 pending deletion 全预算 | 通过 | `bff06cb0`；路径并集计费、reserved/tracked bytes/files、准入、轮转扫描、退避和 bounded maintenance；同路径 entry+pending 并集计费回归通过 |
-| R63-06 CI N08 门禁 | 通过 | `da4a0c23`；W7/N08 使用同一唯一生产 dist、独立报告、always artifact upload、超时门禁；本地与远端 `build-test` run `34109933350` 均通过 |
-
-### W7/N08 原始证据
-
-- W7：[`w7-browser-v3.2.28.64-20260907.json`](performance-data/w7-browser-v3.2.28.64-20260907.json)，`commit=bff06cb...`、`dirty=false`；login/home/subscriptions cold 三场景均 `pageErrors=0`、`consoleErrors=0`、`chunk404s=0`、`mediaErrors=0`。
-- N08：[`n08-browser-v3.2.28.64-20260907.json`](performance-data/n08-browser-v3.2.28.64-20260907.json)，`pageDwellMs=39,036`、总请求 3、`maxInFlight=1`、hidden 请求 1；手动刷新与可见恢复均已观察，四类错误均为 0。
-- 这组报告使用同一生产 dist，raw JSON 保留 CPU、Node、请求时间线、资源和未跟踪开发书文件清单；未把 untracked 开发书误记为 tracked dirty。
+| A/B AnimeGarden 新快照与人工恢复 | 通过 | `2d248fb2`；成功重载清除旧补载/分组/选择状态，过期不再自动 list；前端 35/35 通过 |
+| C/D 图片准入与 pending 上限 | 通过 | `6fb81a17`；按实际 bytes 和临时文件预留后写入，先有限淘汰；pending 预留失败暂停新增并保留 manifest 追踪；`ImageCacheServiceTest` 19/19 |
+| E 关闭尽力保存 | 通过 | `6abdd335`；final flush 排入已有 manifest executor，清理延迟重试，close 最多等待 5 秒；success 仅表示本次快照写成功 |
+| 版本与发布门禁 | 通过 | 版本 `3.2.28.65`；tag `v3.2.28.65` 精确指向 `fa32cb97e74b207b163e902483663e8b10137f12`；正式 build workflow 已完成 |
 
 ### 发布状态
 
-- 版本已固化为 `3.2.28.64`；`build-test` run [`34109933350`](https://github.com/ArisMaid/ani-rss/actions/runs/34109933350) 与正式 build run [`34110438143`](https://github.com/ArisMaid/ani-rss/actions/runs/34110438143) 均成功。tag `v3.2.28.64` 精确指向 `6fd88343bbdb3ef4b16500693496907356f72f5f`；[GitHub Release v3.2.28.64](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.64) 已发布。
-- Release 附件：`ani-rss.jar` SHA-256 `1b9fbb12ae6381bac8b2c721561b2c1d7ed6f6ecfe67d4a6afda9a9fe48057e5`；`ani-rss.exe` SHA-256 `51c947ecc7e2594b788cdd2df5bbfe3a1d68a08995b3bcbe6037dace375854ec`。
-- GHCR 已核验 manifest index：`ghcr.io/arismaid/ani-rss:v3.2.28.64` / `sha256:6ec394b5ec4040b06f839d5708a21e59a99354a9a8fd10877f9c253ba5edc89f`（linux/amd64、linux/arm64）；`ghcr.io/arismaid/ani-rss:v3.2.28.64-openj9` / `sha256:36119d0eed47d1eeb455e0aed8112397511a58bf3421f421eceb2797ea41ef31`（linux/amd64、linux/arm64）；`ghcr.io/arismaid/ani-rss:v3.2.28.64-arm32v7` / `sha256:0bcff0e023167e6c54dad5750ff6c95e6d05b871ffa86b19dc92eb1383d9dc4d`（linux/arm/v7）。
-- Docker Hub 登录按 workflow 条件跳过（未配置 `DOCKER_USERNAME`/`DOCKER_PASSWORD`）；GHCR 三组镜像均已成功发布。
+- `build-test` run [`34193929884`](https://github.com/ArisMaid/ani-rss/actions/runs/34193929884) 与正式 build run [`34194388721`](https://github.com/ArisMaid/ani-rss/actions/runs/34194388721) 均成功；[GitHub Release v3.2.28.65](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.65) 为非 draft、非 prerelease。
+- Release 附件：`ani-rss.jar` SHA-256 `1d0864f0322596e9b87e6211b09b8a248c31b6146e48d2a67d9672fc47ab4427`；`ani-rss.exe` SHA-256 `6f458fdccd567fb7e2f7ed8b137514146d1eb41b98734338b8332f23b9485100`。
+- GHCR 已核验 manifest index：`ghcr.io/arismaid/ani-rss:v3.2.28.65` / `sha256:df45b9b853cd84d2ce81215de36a58ee00d5d250bc21b724b10c842e8fcc8331`（linux/amd64、linux/arm64）；`ghcr.io/arismaid/ani-rss:v3.2.28.65-openj9` / `sha256:0d3cec909ba03616b51169303c8132224fe32a528396c0e62934719d94cbf4ee`（linux/amd64、linux/arm64）；`ghcr.io/arismaid/ani-rss:v3.2.28.65-arm32v7` / `sha256:382c7ddb2101bfa15ca6723d5266d1aff197121a59881c3a2e5fa071329fe9be`（linux/arm/v7）。
+- Docker Hub 登录按 workflow 条件跳过（未配置 `DOCKER_USERNAME`/`DOCKER_PASSWORD`）；GHCR 三组镜像已成功发布。
 
 ### 当前未验证边界
 
-- 真实 Mikan、Bangumi、AnimeGarden、图片代理和下载器的外网波动、认证、429/5xx、生产首屏和真实媒体解码。
-- 真实账号、生产数据库锁/查询、用户媒体目录、文件 walk、下载器 files/move/rename/delete 和完整缺集恢复成本。
-- Docker Desktop/Linux engine 本地构建，以及 ImageCache 在生产负载下的吞吐百分比；本轮只验证状态、预算、关闭和恢复不变量。
+- 未新增浏览器矩阵；W7/N08 只作为既有发布门禁，不能证明 AnimeGarden 过期人工交互的完整生产流程。
+- 真实 Mikan、Bangumi、AnimeGarden、图片代理和下载器的外网波动、认证、429/5xx、生产媒体和数据库/文件费用仍未连接。
+- Docker Desktop/Linux engine 本地构建、强杀/断电/系统 I/O 阻塞下的 manifest 零丢失未验证；近期封面缓存按方案允许重建，异常清理由维护 SOP 处理。
 
 ## 历史 v3.2.28.63 验收记录
 

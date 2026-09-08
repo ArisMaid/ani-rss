@@ -2,6 +2,10 @@
 
 这些合同是本地 fork 相对上游必须长期保留的边界。后续同步上游时，先检查合同，再处理实现差异；附加开发书只定义验收边界，不改变用户授权范围。
 
+## 当前合同优先级
+
+同一行为若历史合同与较新的明确增量合同冲突，以最新增量合同为准；历史合同仅供追溯，不得据此恢复已被替代的行为。当前尤其要遵守 F36 对旧自动重载约定的替代、F39 对关闭保存边界的明确化，以及 F42 对维护暂停恢复方式的明确化。
+
 | ID | 合同 | 主要证据 |
 | --- | --- | --- |
 | F01 | 缺集恢复、SQLite 归属记录和旧备份迁移不能被 UI/性能改动绕过 | `recovery/`、`persistence/`、`backup/` 测试 |
@@ -32,7 +36,7 @@
 | --- | --- | --- |
 | F30 | Mikan 补载请求必须绑定 query generation/group context；切组、取消、恢复和 finally 不能回写其他组状态，失败只归属自己的请求 | `MikanView.vue`、`list-lifecycle.test.js`、前端 35/35 |
 | F31 | AnimeGarden 列表层显式返回 success/failed/aborted/stale；列表恢复不能被 enrichment 失败吞掉；（v3.2.28.64 历史合同：过期曾允许一次受控自动 reload，已由 v3.2.28.65 的 F35/F36 替代） | `AnimeGardenView.vue`、`list-lifecycle.test.js`、W7 production fixture |
-| F32 | ImageCache manifest 快照、revision 捕获和 dirty/persisted 状态由同一状态锁协调；单 writer 负责正常写与 close 的有界尽力 flush，生命周期为 OPEN/CLOSING/CLOSED | `ImageCacheServiceTest` manifest/close/timeout 用例 |
+| F32 | ImageCache manifest 快照、revision 捕获和 dirty/persisted 状态由同一状态锁协调；单 writer 负责正常写与 close 的有界尽力 flush，生命周期为 OPEN/CLOSING/CLOSED；关闭保存语义以 F39 为准 | `ImageCacheServiceTest` manifest/close/timeout 用例 |
 | F33 | pending deletion 按规范化路径去重并计入 tracked/reserved bytes/files；准入、轮转维护、attempts/nextRetryAt 和 bounded retry 不得耗尽关闭预算，达到维护上限时暂停新增持久缓存 | `ImageCacheServiceTest` union-budget、pending、capacity、shutdown 用例 |
 | F34 | CI 的 W7/N08 必须使用同一个唯一生产 dist，报告路径/构建目录隔离，报告上传 always，超时失败不得被 continue-on-error 隐藏 | `.github/workflows/build-test.yml`、W7/N08 raw reports |
 
@@ -54,7 +58,7 @@
 | --- | --- | --- |
 | F40 | AnimeGarden 匹配确认入口必须再次确认主列表仍打开、快照有效、无待重载/列表请求且匹配弹窗仍打开；失效时关闭并清空匹配交互，不向父级 emit；批量添加入口同样校验并提交选择快照 | `AnimeGardenView.vue`、`list-lifecycle.test.js`、前端 35/35 |
 | F41 | 公共图片旧路径 pending 预留、正式 move、entry 替换和本次失败撤销必须在同一个 key lock 内排序；维护线程不能在发布前移除仍被当前 entry 使用的预留；失败只撤销本次新增记录 | `ImageCacheService`、`ImageCacheServiceTest` 定向 19/19；静态交错复核，未故障注入 |
-| F42 | 公共图片维护暂停在当前进程内保持到重启；无关 pending 删除不得自动解除；暂停时仍可读可用热缓存，但不得先删过期 entry、发起新 fetch、淘汰 entry 或重试 pending；恢复由管理员 SOP 处理后重启 | `ImageCacheService`、维护日志与 SOP；定向 19/19 |
+| F42 | 公共图片维护暂停在当前进程内保持到重启；无关 pending 删除不得自动解除；暂停时仍可读可用热缓存，但不得先删过期 entry、发起新 fetch、淘汰 entry 或重试 pending；恢复由管理员 SOP 处理后重启 | `ImageCacheService`、维护日志与 [公共封面缓存维护 SOP](stateful-simplification.md#公共封面缓存维护)；定向 19/19 |
 
 F40–F42 不增加线程池、状态枚举、事务或管理 API；pending 预留复用现有 key lock，维护暂停只使用现有布尔诊断状态，并明确不执行批量/递归删除。
 
@@ -64,10 +68,10 @@ F40–F42 不增加线程池、状态枚举、事务或管理 API；pending 预�
 | --- | --- | --- |
 | F22 | 评分内部负缓存不得使用 NaN；公开响应只返回有限数值、合法 `0` 或 `null`，无评分已终结项不进入 retryable，网络失败仍可重试 | `PublicScoreServiceTest`、`MikanServiceTest`、`BgmInfoJsonTest` |
 | F23 | Mikan/AnimeGarden 补载在当前查询世代内显式维护 `pending/loading/complete/incomplete/failed`；用户可重试剩余 ID，双击不重复启动，取消不伪装失败 | `mikan-loader.test.js`、`list-lifecycle.test.js`、`MikanView.vue`、`AnimeGardenView.vue` |
-| F24 | AnimeGarden 合法但不在当前上下文的 ID 使用机器码 `ANIME_GARDEN_LIST_EXPIRED` 和 HTTP 409；快照最多登记 10,000 ID、总引用最多 100,000，前端一次受控重载后停止循环 | `AnimeGardenServiceTest`、Controller 测试、513 条列表测试、View lifecycle 测试 |
+| F24 | AnimeGarden 合法但不在当前上下文的 ID 使用机器码 `ANIME_GARDEN_LIST_EXPIRED` 和 HTTP 409；快照最多登记 10,000 ID、总引用最多 100,000；前端恢复仅提供人工重新加载入口，历史“一次受控自动重载后停止循环”约定已由 F36 替代 | `AnimeGardenServiceTest`、Controller 测试、513 条列表测试、View lifecycle 测试 |
 | F25 | 图片本地 reader/队列争用返回短 Retry-After 且不写入源站 30s failure cache；源站失败与本地内容错误保留独立类别 | `ImageCacheServiceTest`、`ImageController` |
 | F26 | 同 key miss 在取得 flight 后必须二次检查缓存/冷却；同一外部加载只允许一个生产者，所有 Future 都在成功、失败、取消和关闭路径完成 | `ImageCacheServiceTest` 并发 barrier、shutdown 用例 |
-| F27 | manifest 通过单 writer/revision/dirty 合并写入；旧路径删除失败进入 bounded pending deletion，维护重试且不丢计数；关闭完成 queued flights 和最后一次有界 flush | `ImageCacheServiceTest` manifest、pending deletion、shutdown 用例 |
+| F27 | manifest 通过单 writer/revision/dirty 合并写入；旧路径删除失败进入 bounded pending deletion，维护重试且不丢计数；关闭仅完成 queued flights 和最后一次有界尽力 flush，语义以 F39 为准 | `ImageCacheServiceTest` manifest、pending deletion、shutdown 用例 |
 | F28 | RSS snapshot 的年龄和 500ms sleep 由同一个 monotonic clock 推进；`age >= 5s` 过期，add/delete 等 mutation dirty 后立即重读，不跨线程虚构失效 | `TorrentSnapshotCycleTest`、`RssApplicationChainPerformanceTest`、W6 raw reports |
 | F29 | 生产页面下载器轮询在 8s 响应下始终 `maxInFlight=1`；hidden 不启动下一次，visible 可恢复，手动刷新不并发第二个请求且取消不报错 | `dashboard-polling.test.js`、N08 slow-polling raw report |
 

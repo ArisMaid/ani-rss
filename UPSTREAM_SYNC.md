@@ -1,6 +1,6 @@
 # Fork 上游同步规则
 
-本 fork 当前发布版本为 `3.2.28.65`（精确 tag workflow 待发布；上一版 `v3.2.28.64` 精确指向 `6fd88343bbdb3ef4b16500693496907356f72f5f`），上游前三段基线仍为 `v3.2.28`；本轮修复提交为 `2d248fb2`、`6fb81a17`、`6abdd335`。本轮没有引入新的上游版本同步，所有差异均为 fork-local 修复与验收；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
+本 fork 当前发布版本为 `3.2.28.65`（标签精确指向 `fa32cb97e74b207b163e902483663e8b10137f12`；上一版 `v3.2.28.64` 精确指向 `6fd88343bbdb3ef4b16500693496907356f72f5f`），上游前三段基线仍为 `v3.2.28`；本轮修复提交为 `2d248fb2`、`6fb81a17`、`6abdd335`。本轮没有引入新的上游版本同步，所有差异均为 fork-local 修复与验收；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
 
 同步时必须保留以下本地合同：
 
@@ -35,7 +35,7 @@
 - 修复：AnimeGarden 成功重载不再迁移旧 enrichment/group/selection；`ANIME_GARDEN_LIST_EXPIRED` 只进入人工重新加载入口；ImageCache 先按实际新 bytes/临时文件准入并有限淘汰，pending 达上限或历史 manifest 超限时暂停新增与重写；close final flush 排入既有单 writer，最多等待 5 秒。
 - 明确淘汰：v3.2.28.64 中“过期一次受控自动 reload”和“close 最终严格追平”的表述；近期封面缓存允许重建，清理积压由维护 SOP 处理。
 - 待确认：真实外部源/下载器/账号/媒体/数据库费用、生产浏览器完整交互、Docker Desktop/Linux engine 本地构建，以及强杀/断电/系统 I/O 阻塞下的缓存索引一致性。
-- 证据：Java 319 tests、0 failures、0 errors、4 skipped；ImageCacheServiceTest 19/19；前端 35/35；bundle gate 通过。精确 tag workflow、GitHub Release 和 GHCR digest 在发布后回填到验收记录。
+- 证据：Java 319 tests、0 failures、0 errors、4 skipped；ImageCacheServiceTest 19/19；前端 35/35；bundle gate 通过。`build-test` run `34193929884` 与 tag build run `34194388721` 成功；Release 附件和 GHCR digest 已回填到 [`docs/verification.md`](docs/verification.md) 与 [`docs/performance-baseline.md`](docs/performance-baseline.md)。
 
 ## 3.2.28.64 本轮审计记录
 

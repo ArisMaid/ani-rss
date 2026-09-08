@@ -18,7 +18,14 @@
 | A/B AnimeGarden 新快照与人工恢复 | 通过 | `2d248fb2`；成功重载清除旧补载/分组/选择状态，过期不再自动 list；前端 35/35 通过 |
 | C/D 图片准入与 pending 上限 | 通过 | `6fb81a17`；按实际 bytes 和临时文件预留后写入，先有限淘汰；pending 预留失败暂停新增并保留 manifest 追踪；`ImageCacheServiceTest` 19/19 |
 | E 关闭尽力保存 | 通过 | `6abdd335`；final flush 排入已有 manifest executor，清理延迟重试，close 最多等待 5 秒；success 仅表示本次快照写成功 |
-| 版本与发布门禁 | 待远端 tag workflow | 本地版本已固化为 `3.2.28.65`；精确 tag、GitHub Release、GHCR 多架构 digest 待发布后回填 |
+| 版本与发布门禁 | 通过 | 版本 `3.2.28.65`；tag `v3.2.28.65` 精确指向 `fa32cb97e74b207b163e902483663e8b10137f12`；正式 build workflow 已完成 |
+
+### 发布状态
+
+- `build-test` run [`34193929884`](https://github.com/ArisMaid/ani-rss/actions/runs/34193929884) 与正式 build run [`34194388721`](https://github.com/ArisMaid/ani-rss/actions/runs/34194388721) 均成功；[GitHub Release v3.2.28.65](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.65) 为非 draft、非 prerelease。
+- Release 附件：`ani-rss.jar` SHA-256 `1d0864f0322596e9b87e6211b09b8a248c31b6146e48d2a67d9672fc47ab4427`；`ani-rss.exe` SHA-256 `6f458fdccd567fb7e2f7ed8b137514146d1eb41b98734338b8332f23b9485100`。
+- GHCR 已核验 manifest index：`ghcr.io/arismaid/ani-rss:v3.2.28.65` / `sha256:df45b9b853cd84d2ce81215de36a58ee00d5d250bc21b724b10c842e8fcc8331`（linux/amd64、linux/arm64）；`ghcr.io/arismaid/ani-rss:v3.2.28.65-openj9` / `sha256:0d3cec909ba03616b51169303c8132224fe32a528396c0e62934719d94cbf4ee`（linux/amd64、linux/arm64）；`ghcr.io/arismaid/ani-rss:v3.2.28.65-arm32v7` / `sha256:382c7ddb2101bfa15ca6723d5266d1aff197121a59881c3a2e5fa071329fe9be`（linux/arm/v7）。
+- Docker Hub 登录按 workflow 条件跳过（未配置 `DOCKER_USERNAME`/`DOCKER_PASSWORD`）；GHCR 三组镜像已成功发布。
 
 ### 本轮未验证边界
 

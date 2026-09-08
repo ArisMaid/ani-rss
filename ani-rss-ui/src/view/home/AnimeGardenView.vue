@@ -574,23 +574,13 @@ let collapseChange = (v) => {
 
 let matchDialogVisible = ref(false)
 
-let addAni = ref({
-  'bgmUrl': '',
-  'url': '',
-  'match': '',
-  'group': ''
-})
+let addAni = ref({})
 
 let regexList = ref([])
 
 const resetMatchInteraction = () => {
   matchDialogVisible.value = false
-  addAni.value = {
-    'bgmUrl': '',
-    'url': '',
-    'match': '',
-    'group': ''
-  }
+  addAni.value = {}
   regexList.value = []
 }
 

@@ -168,6 +168,8 @@ import {formatDate, fromNow} from "@/js/format.js";
 import * as http from "@/js/http.js";
 import PageHeaderView from "@/view/custom/PageHeaderView.vue";
 
+const AniCoverView = defineAsyncComponent(() => import('@/view/home/AniCoverView.vue'))
+
 const EditAniView = defineAsyncComponent(() => import('@/view/home/EditAniView.vue'))
 const PlayListView = defineAsyncComponent(() => import('@/view/play/PlayListView.vue'))
 const CoverView = defineAsyncComponent(() => import('@/view/home/CoverView.vue'))
@@ -204,7 +206,8 @@ let pollGeneration = 0
 let torrentsRequest
 let torrentsController
 
-const todayLabel = computed(() => weekLabels[new Date().getDay()])
+const currentTime = ref(Date.now())
+const todayLabel = computed(() => weekLabels[new Date(currentTime.value).getDay()])
 const flatAnis = computed(() => weekList.value.flatMap(week => week.items || []))
 const enabledAnis = computed(() => flatAnis.value.filter(item => item.enable))
 const subscriptionTotal = computed(() => subscriptionTotalValue.value || flatAnis.value.length)
@@ -224,7 +227,7 @@ const procrastinatingList = computed(() => {
       .filter(item => !item.totalEpisodeNumber || item.currentEpisodeNumber < item.totalEpisodeNumber)
       .map(item => {
         const time = getCompareTime(item)
-        const procrastinatingDays = time ? Math.floor((Date.now() - time) / dayMs) : 0
+        const procrastinatingDays = time ? Math.floor((currentTime.value - time) / dayMs) : 0
         return {
           ...item,
           procrastinatingDays
@@ -288,6 +291,8 @@ const loadConfig = async () => {
 }
 
 const loadTorrents = () => {
+  // Reuse the existing refresh/visibility polling cycle for the local date.
+  currentTime.value = Date.now()
   if (torrentsRequest && !torrentsController?.signal.aborted) return torrentsRequest
   if (torrentsRequest) {
     // A hidden-tab cancellation must not poison the next visible refresh with

@@ -45,7 +45,7 @@
                      @change="colorChange(color)"
                      @active-change="colorChange"/>
   </SettingsItem>
-  <SettingsItem label="排序">
+  <SettingsItem label="订阅排序">
     <el-select v-model="props.config['sortType']" class="width-150">
       <el-option value="SCORE" label="评分"/>
       <el-option value="PINYIN" label="拼音"/>

@@ -70,12 +70,12 @@
         </div>
         <div v-loading="loading" :data-loading="loading" class="scroll-container">
           <el-tabs v-model="activeName" class="week-tabs">
-            <el-tab-pane v-for="week in data.weeks" :key="week.weekLabel"
+            <el-tab-pane v-for="week in displayWeeks" :key="week.weekLabel"
                          :label="week.weekLabel" :name="week.weekLabel" lazy>
               <el-scrollbar class="week-pane-scrollbar">
                 <div class="collapse-content">
                   <el-collapse accordion @change="collapseChange">
-                    <el-collapse-item v-for="it in week.items" :name="it.url">
+                    <el-collapse-item v-for="it in week.items" :key="it.url" :name="it.url">
                       <template #title>
                         <div class="flex collapse-title">
                           <SafeImageView :src-url="it.cover" :lazy="true" class="cover"
@@ -180,6 +180,15 @@ let data = ref({
   'weeks': []
 })
 let scoreStates = ref({})
+// Scores arrive in batches after the list. Sort a display copy so updates
+// cannot leave the visible order tied to the initial cache snapshot.
+const displayWeeks = computed(() => data.value.weeks.map(week => ({
+  ...week,
+  items: [...(week.items || [])].sort((a, b) => {
+    const score = item => Number.isFinite(item.score) && item.score >= 0 ? item.score : -1
+    return score(b) - score(a)
+  })
+})))
 let activeScoreState = computed(() => scoreStates.value[activeName.value] || {
   status: 'idle', pendingIds: [], error: ''
 })

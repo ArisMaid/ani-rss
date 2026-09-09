@@ -1,6 +1,6 @@
 # Fork 上游同步规则
 
-本 fork 当前发布版本为 `3.2.28.67`（tag 与精确提交在本轮发布记录中回填；上一版 `v3.2.28.66` 精确指向 `7110dbc3fb8c2c61a9aed10b25179d5eb3d2d628`），上游前三段基线仍为 `v3.2.28`；本轮修复为 Mikan 异步评分排序、首页订阅卡片按需注册、跨天日期响应式刷新和设置项命名澄清，详细实施记录见 [`FUNCTIONAL_BUGFIX_20260909.md`](FUNCTIONAL_BUGFIX_20260909.md)。本轮没有引入新的上游版本同步，所有差异均为 fork-local 修复与验收；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
+本 fork 当前发布版本为 `3.2.28.67`（tag `v3.2.28.67` 精确指向 `7dfa07a5cce27d92330dc3562fc2b887b755e7d3`；上一版 `v3.2.28.66` 精确指向 `7110dbc3fb8c2c61a9aed10b25179d5eb3d2d628`），上游前三段基线仍为 `v3.2.28`；本轮修复为 Mikan 异步评分排序、首页订阅卡片按需注册、跨天日期响应式刷新和设置项命名澄清，详细实施记录见 [`FUNCTIONAL_BUGFIX_20260909.md`](FUNCTIONAL_BUGFIX_20260909.md)。本轮没有引入新的上游版本同步，所有差异均为 fork-local 修复与验收；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
 
 同步时必须保留以下本地合同：
 
@@ -35,7 +35,7 @@
 - 修复：Mikan 评分批次更新后，展示副本按最新有限评分降序重排，未知评分置后并使用稳定 URL key；首页显式按需注册 `AniCoverView`，非空当天订阅才加载卡片；首页日期与停更天数读取轮询/刷新周期更新的响应式时间；设置项改名为“订阅排序”。
 - 明确边界：不增加评分等待、排序服务、轮询线程、后端接口、订阅数据迁移或新的长期测试矩阵；本轮真实页面检查使用隔离 HTTP fixture，不代表真实下载器、账号或外部源验证。
 - 本地证据：前端 35/35；生产 UI 唯一目录 `ani-rss-ui/target/release-67-dist-20260909` 构建通过；bundle gate static `105227/48953`、login `202044/63229`、home `192264/61822`、subscriptions `186271/63912`（JS/CSS gzip），`forbiddenModules=[]`。
-- 远端 build-test、tag build、Release 与 GHCR 证据将在发布后回填。
+- 远端 [`build-test` run 34341684631](https://github.com/ArisMaid/ani-rss/actions/runs/34341684631) 与 [`v3.2.28.67` tag build run 34342179506](https://github.com/ArisMaid/ani-rss/actions/runs/34342179506) 均成功；[GitHub Release v3.2.28.67](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.67) 已发布且为非 draft、非 prerelease。Release 附件 `ani-rss.jar` SHA-256 为 `bf14c585b45ef6e1dc3eb4cf5e383fed9df0b19ba5b127df5ed11de3b8e8b646`，`ani-rss.exe` SHA-256 为 `4fb6b1c7d43ca21e6055b94e0b28d508d5a8e949ebcbed6a6a349b46d0d09548`；GHCR manifest index 为 temurin `sha256:d207f3ce31dbab4e7702d4dc6df55cd7c19bf4e9b72feb4702b85cf7f1d4e4fd`（linux/amd64、linux/arm64）、openj9 `sha256:159b37df9b99bf6479f08f9918f76ffcfa992be2d3c1006f5c36219e2b34f2ef`（linux/amd64、linux/arm64）和 arm32v7 `sha256:2f09c2cb6c5fafaa723acded7b369fd4f301373f2e1ac76fb87da307838f4c8f`（linux/arm/v7）。Docker Hub 登录因未配置凭据按 workflow 条件跳过；GHCR 三组镜像已成功发布。
 
 ## 3.2.28.66 本轮审计记录
 

@@ -312,7 +312,7 @@ public class ImageCacheService {
         entry.activeReaders().decrementAndGet();
     }
 
-    private void loadPublicImage(String canonical, String key, CompletableFuture<PublicEntry> future) {
+    void loadPublicImage(String canonical, String key, CompletableFuture<PublicEntry> future) {
         long enqueuedAt = System.nanoTime();
         loadPublicImage(canonical, key, new PublicFlight(
                 key,

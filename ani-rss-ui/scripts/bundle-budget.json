@@ -12,6 +12,16 @@
     "measuredJsGzipBytes": {"static": 105227, "login": 202044, "home": 192264, "subscriptions": 186271},
     "measuredSubscriptionsCssGzipBytes": 63912
   },
+  "resourceLoadingOptimization": {
+    "date": "2026-09-14",
+    "baseCommit": "724c2ade116ab31e902ad8b9e15cf23b72b07921",
+    "reason": "Bound private-image POST loading with per-consumer cancellation, queue and total deadlines; add SafeImageView lifecycle pause/resume and retry placeholder; add native lazy/async subscription covers; and remove the subscription filter deep copy. The gzip increase is an explicit cost of the lifecycle/queue behavior and is measured separately from the historical functional-repair baseline.",
+    "report": "../../RESOURCE_LOADING_OPTIMIZATION_REPORT_20260914.md",
+    "measuredJsGzipBytes": {"static": 105229, "login": 202916, "home": 193135, "subscriptions": 187368},
+    "measuredCssGzipBytes": {"static": 48953, "login": 63229, "home": 61822, "subscriptions": 63970},
+    "forbiddenModules": [],
+    "budgetHeadroomBytes": {"login": 184, "home": 215, "subscriptions": 232}
+  },
   "budgetChange": {
     "reason": "The R01/R02 lifecycle repair changes async route module hash references in the shared entry chunk. The measured latest-fork comparison is limited to home JS +1, home CSS +1, and subscriptions JS +1 gzip byte; static entry and login remain unchanged. No player, Markdown, or backup module enters these closures. GitHub Actions Ubuntu build-test 34077134774 measured static entry JS at 105201 gzip bytes while the local Windows build measured 105194; no closure or forbidden-module change was observed, so the gate is raised by exactly the cross-platform +2-byte observation rather than updated automatically.",
     "measuredOn": "2026-09-07",
@@ -29,18 +39,18 @@
   "scenarios": {
     "login": {
       "baselineJsGzipBytes": 201956,
-      "maxJsGzipBytes": 202500,
+      "maxJsGzipBytes": 203100,
       "baselineCssGzipBytes": 63229
     },
     "home": {
       "baselineJsGzipBytes": 192173,
-      "maxJsGzipBytes": 192500,
+      "maxJsGzipBytes": 193350,
       "baselineCssGzipBytes": 61821,
       "maxCssGzipBytes": 61822
     },
     "subscriptions": {
       "baselineJsGzipBytes": 185254,
-      "maxJsGzipBytes": 186500,
+      "maxJsGzipBytes": 187600,
       "baselineCssGzipBytes": 63645,
       "maxCssGzipBytes": 64000
     }

@@ -3,14 +3,19 @@
     <div class="cover-image-container"
          :class="{'is-disabled': !item.enable}"
          @click="emit('cover', item)">
-      <img v-if="item.cover"
+      <img v-if="item.cover && !coverFailed"
            :src="toApiFile(item.cover)"
            :alt="item.title"
+           loading="lazy"
+           decoding="async"
+           @load="coverFailed = false"
+           @error="coverFailed = true"
            class="cover-image">
       <div v-else class="cover-image cover-empty">
         <el-icon>
           <Picture/>
         </el-icon>
+        <span v-if="coverFailed">图片暂未加载</span>
       </div>
       <button v-if="scoreText" class="cover-score" type="button" @click.stop="emit('rate', item)">
         <span>{{ scoreText }}</span>
@@ -89,13 +94,18 @@
 </template>
 
 <script setup>
-import {computed, ref} from "vue";
+import {computed, ref, watch} from "vue";
 import {Delete, Edit as EditIcon, Files, Fold, Picture, Star} from "@element-plus/icons-vue";
 import {showLastDownloadTime, showPlaylist, showScore, toApiFile} from "@/js/global.js";
 import {fromNow} from "@/js/format.js";
 
 const actionsVisible = ref(false)
+const coverFailed = ref(false)
 const props = defineProps(["item"])
+
+watch(() => props.item.cover, () => {
+  coverFailed.value = false
+})
 
 const hasStandbyRss = computed(() => (props.item.standbyRssList || []).length > 0)
 const subgroupText = computed(() => props.item.subgroup || '未知字幕组')
@@ -185,10 +195,16 @@ const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
 
 .cover-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   color: var(--el-text-color-secondary);
   font-size: 28px;
+}
+
+.cover-empty span {
+  font-size: 11px;
 }
 
 .cover-score {

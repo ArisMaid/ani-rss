@@ -1,6 +1,6 @@
 # Fork 上游同步规则
 
-本 fork 当前发布版本为 `3.2.28.67`（tag `v3.2.28.67` 精确指向 `7dfa07a5cce27d92330dc3562fc2b887b755e7d3`；上一版 `v3.2.28.66` 精确指向 `7110dbc3fb8c2c61a9aed10b25179d5eb3d2d628`），上游前三段基线仍为 `v3.2.28`；本轮修复为 Mikan 异步评分排序、首页订阅卡片按需注册、跨天日期响应式刷新和设置项命名澄清，详细实施记录见 [`FUNCTIONAL_BUGFIX_20260909.md`](FUNCTIONAL_BUGFIX_20260909.md)。本轮没有引入新的上游版本同步，所有差异均为 fork-local 修复与验收；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
+本 fork 当前发布版本为 `3.2.28.68`（tag `v3.2.28.68` 精确锁定本轮资源加载优化提交；上一版 `v3.2.28.67` 精确指向 `7dfa07a5cce27d92330dc3562fc2b887b755e7d3`），上游前三段基线仍为 `v3.2.28`；本轮严格落实 [`RESOURCE_LOADING_OPTIMIZATION_PLAN_20260914.md`](RESOURCE_LOADING_OPTIMIZATION_PLAN_20260914.md)，实施记录见 [`RESOURCE_LOADING_OPTIMIZATION_REPORT_20260914.md`](RESOURCE_LOADING_OPTIMIZATION_REPORT_20260914.md)。本轮没有引入新的上游版本同步，所有差异均为 fork-local 性能与生命周期修复；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
 
 同步时必须保留以下本地合同：
 
@@ -28,6 +28,13 @@
 6. 同步构建时比较首屏模块图、每场景包体预算和生产浏览器冒烟，保留 pageerror、console error、chunk 404 回归。
 7. 版本沿用四段编号；同步上游前三段时第四段本地修订号递增一次，不夹带无关新功能。
 8. 每次同步提交附一页验收记录，至少包含功能、网络次数、首屏包、已验证项目和未验证项目。
+
+## 3.2.28.68 本轮资源加载优化记录
+
+- 保留：`.67` 已交付的功能修复、懒路由/静态缓存合同、唯一生产 dist 门禁、W7/N08 浏览器证据和精确 tag 发布流程。
+- 修复：`SafeImageView` 增加 active 生命周期、取消与 generation 保护；私有图片请求实现有界队列、同 URL 独立消费者取消、等待/总超时与底层 finally 归还；公共图片任务增加有界等待和启动截止时间；封面启用 lazy/async 与失败占位；订阅过滤移除整表 JSON 深拷贝。
+- 本地证据：前端 35/35；生产 UI 构建 `target/resource-optimization-20260914` 通过；bundle gate static `105229/48953`、login `202916/63229`、home `193135/61822`、subscriptions `187368/63970`（JS/CSS gzip），`forbiddenModules=[]`；W7/N08 fixture 浏览器 smoke 错误计数均为 0。
+- 后端与发布证据：本机未安装 Maven，Java 编译、SpotBugs、后端回归与镜像构建由精确 tag workflow 执行；远端 Release、附件校验和 GHCR manifest digest 在 tag workflow 成功后回填。
 
 ## 3.2.28.67 本轮功能修复记录
 

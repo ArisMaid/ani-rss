@@ -78,7 +78,7 @@
                     <el-collapse-item v-for="it in week.items" :key="it.url" :name="it.url">
                       <template #title>
                         <div class="flex collapse-title">
-                          <SafeImageView :src-url="it.cover" :lazy="true" class="cover"
+                          <SafeImageView :src-url="it.cover" :lazy="true" :active="dialogVisible" class="cover"
                                          @click.stop="open(it.url)"/>
                           <div class="flex collapse-title">
                             <el-text :truncated="false" line-clamp="1" size="small"

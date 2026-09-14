@@ -15,6 +15,7 @@
         <el-table-column label="封面" width="120">
           <template #default="it">
             <SafeImageView :src-url="list[it.$index]['images']['large']"
+                           :active="dialogVisible"
                            :alt="list[it.$index]['name']" height="100px" width="78px"/>
           </template>
         </el-table-column>

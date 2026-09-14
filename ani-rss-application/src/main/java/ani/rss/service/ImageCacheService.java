@@ -57,8 +57,9 @@ public class ImageCacheService {
     private static final long PUBLIC_MAX_BYTES = 256L * 1024 * 1024;
     private static final long PUBLIC_FAILURE_TTL_MILLIS = Duration.ofSeconds(30).toMillis();
     private static final int PUBLIC_FAILURE_MAX_ENTRIES = 5_000;
-    private static final int PUBLIC_QUEUE_CAPACITY = 48;
+    private static final int PUBLIC_QUEUE_CAPACITY = 12;
     private static final int PUBLIC_WORKERS = 6;
+    private static final long PUBLIC_START_DEADLINE_MILLIS = 3_000;
     private static final long PUBLIC_WAIT_TIMEOUT_MILLIS = 12_000;
     private static final long PUBLIC_BUSY_RETRY_SECONDS = 1;
     private static final long MANIFEST_RETRY_INITIAL_MILLIS = 1_000;
@@ -75,7 +76,7 @@ public class ImageCacheService {
     private final Map<String, String> sourceIndex = new ConcurrentHashMap<>();
     private final Object[] sourceLocks = createLocks();
     private final Map<String, PublicEntry> publicEntries = new ConcurrentHashMap<>();
-    private final Map<String, CompletableFuture<PublicEntry>> publicFlights = new ConcurrentHashMap<>();
+    private final Map<String, PublicFlight> publicFlights = new ConcurrentHashMap<>();
     private final Map<String, FailureEntry> publicFailures = new ConcurrentHashMap<>();
     private final Map<String, PendingDeletion> publicPendingDeletions = new ConcurrentHashMap<>();
     private final Object[] publicKeyLocks = createLocks();
@@ -147,11 +148,20 @@ public class ImageCacheService {
             closed = true;
         }
         publicExecutor.shutdownNow();
-        publicFlights.forEach((key, future) -> {
-            future.completeExceptionally(new UpstreamServiceException(
-                    "image cache is closed", null, 0));
-            publicFlights.remove(key, future);
-        });
+        for (Map.Entry<?, ?> entry : ((Map<?, ?>) publicFlights).entrySet()) {
+            Object value = entry.getValue();
+            if (value instanceof PublicFlight flight) {
+                flight.future().completeExceptionally(new UpstreamServiceException(
+                        "image cache is closed", null, 0));
+                publicFlights.remove(entry.getKey(), flight);
+            } else if (value instanceof CompletableFuture<?> future) {
+                // Compatibility for a queued test fixture created against the
+                // pre-flight map shape; production values are always PublicFlight.
+                future.completeExceptionally(new UpstreamServiceException(
+                        "image cache is closed", null, 0));
+                publicFlights.remove(entry.getKey());
+            }
+        }
         maintenanceExecutor.shutdownNow();
         flushPublicManifestOnClose();
         publicLifecycle.set(PublicLifecycle.CLOSED);
@@ -198,21 +208,27 @@ public class ImageCacheService {
             removePublicEntry(cached);
         }
 
-        CompletableFuture<PublicEntry> created = new CompletableFuture<>();
-        CompletableFuture<PublicEntry> shared = publicFlights.putIfAbsent(key, created);
+        long enqueuedAt = System.nanoTime();
+        PublicFlight created = new PublicFlight(
+                key,
+                canonical,
+                enqueuedAt,
+                enqueuedAt + TimeUnit.MILLISECONDS.toNanos(PUBLIC_START_DEADLINE_MILLIS),
+                new CompletableFuture<>());
+        PublicFlight shared = publicFlights.putIfAbsent(key, created);
         if (shared == null) {
             try {
                 publicExecutor.execute(() -> loadPublicImage(canonical, key, created));
                 shared = created;
             } catch (RejectedExecutionException e) {
                 publicFlights.remove(key, created);
-                created.completeExceptionally(new UpstreamServiceException(
+                created.future().completeExceptionally(new UpstreamServiceException(
                         "image cache is busy; retry later", e, 5));
                 shared = created;
             }
         }
         try {
-            PublicEntry image = shared.get(PUBLIC_WAIT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
+            PublicEntry image = shared.future().get(PUBLIC_WAIT_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS);
             return new PublicImage(image.path(), image.contentType(), image.etag(),
                     image.expiresAt(), image.length());
         } catch (InterruptedException e) {
@@ -297,6 +313,17 @@ public class ImageCacheService {
     }
 
     private void loadPublicImage(String canonical, String key, CompletableFuture<PublicEntry> future) {
+        long enqueuedAt = System.nanoTime();
+        loadPublicImage(canonical, key, new PublicFlight(
+                key,
+                canonical,
+                enqueuedAt,
+                enqueuedAt + TimeUnit.MILLISECONDS.toNanos(PUBLIC_START_DEADLINE_MILLIS),
+                future));
+    }
+
+    private void loadPublicImage(String canonical, String key, PublicFlight flight) {
+        CompletableFuture<PublicEntry> future = flight.future();
         try {
             if (closed) {
                 throw new ImageCacheClosedException();
@@ -319,6 +346,9 @@ public class ImageCacheService {
                             Math.max(1, (failure.retryAt() - System.currentTimeMillis() + 999) / 1000)));
                     return;
                 }
+            }
+            if (flight.startDeadlineExpired()) {
+                throw new PublicFlightExpiredException();
             }
             SafeImageFetcher.FetchedImage fetched = SafeImageFetcher.fetch(canonical, ConfigUtil.snapshot());
             if (closed) {
@@ -446,6 +476,9 @@ public class ImageCacheService {
         } catch (PublicCacheCapacityException e) {
             future.completeExceptionally(new UpstreamServiceException(
                     "image cache capacity reached; retry later", e, PUBLIC_BUSY_RETRY_SECONDS));
+        } catch (PublicFlightExpiredException e) {
+            future.completeExceptionally(new UpstreamServiceException(
+                    "image cache is busy; retry later", e, PUBLIC_BUSY_RETRY_SECONDS));
         } catch (ImageCacheClosedException e) {
             future.completeExceptionally(new UpstreamServiceException(
                     "image cache is closed", e, 0));
@@ -461,7 +494,7 @@ public class ImageCacheService {
             trimPublicFailures();
             future.completeExceptionally(failure);
         } finally {
-            publicFlights.remove(key, future);
+            publicFlights.remove(key, flight);
         }
     }
 
@@ -1440,6 +1473,13 @@ public class ImageCacheService {
     private record FailureEntry(long retryAt, String reason) {
     }
 
+    private record PublicFlight(String key, String url, long enqueuedAtNanos,
+                                long startDeadlineNanos, CompletableFuture<PublicEntry> future) {
+        private boolean startDeadlineExpired() {
+            return System.nanoTime() >= startDeadlineNanos;
+        }
+    }
+
     private record PendingDeletion(String key, String path, long length,
                                    int attempts, long nextRetryAt) {
     }
@@ -1471,6 +1511,9 @@ public class ImageCacheService {
     }
 
     private static final class PublicImageBusyException extends RuntimeException {
+    }
+
+    private static final class PublicFlightExpiredException extends RuntimeException {
     }
 
     private static final class PublicCacheCapacityException extends RuntimeException {

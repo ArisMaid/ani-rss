@@ -373,50 +373,213 @@ export let bgmOAuthState = () => api.post('api/v2/auth/oauth-state/bgm')
 export let logout = () => api.post('api/v2/auth/logout')
 
 const MAX_CONCURRENT_IMAGE_REQUESTS = 6
+const IMAGE_QUEUE_CAPACITY = 12
+const IMAGE_QUEUE_WAIT_TIMEOUT_MILLIS = 3_000
+const IMAGE_REQUEST_TIMEOUT_MILLIS = 15_000
 const imageRequests = new Map()
 const imageQueue = []
 let activeImageRequests = 0
 
-const runImageQueue = () => {
-    while (activeImageRequests < MAX_CONCURRENT_IMAGE_REQUESTS && imageQueue.length) {
-        const item = imageQueue.shift()
-        activeImageRequests++
-        const finish = () => {
-            activeImageRequests--
-            runImageQueue()
-        }
-        try {
-            Promise.resolve(item.task()).then(value => {
-                item.resolve(value)
-                finish()
-            }, error => {
-                item.reject(error)
-                finish()
-            })
-        } catch (error) {
-            item.reject(error)
-            finish()
-        }
+const monotonicNow = () => {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+        return performance.now()
+    }
+    return Date.now()
+}
+
+const imageError = (code, message) => {
+    const error = new Error(message)
+    error.code = code
+    error.status = 0
+    return error
+}
+
+const abortedImageError = () => imageError('REQUEST_ABORTED', '图片请求已取消')
+const busyImageError = () => imageError('IMAGE_QUEUE_BUSY', '图片加载繁忙，请稍后重试')
+const queueTimeoutImageError = () => imageError('IMAGE_QUEUE_TIMEOUT', '图片加载排队超时，请稍后重试')
+const requestTimeoutImageError = () => imageError('IMAGE_REQUEST_TIMEOUT', '图片加载超时，请稍后重试')
+
+const clearTimer = timer => {
+    if (timer !== undefined) clearTimeout(timer)
+}
+
+const removeMappedTask = task => {
+    if (imageRequests.get(task.url) === task) imageRequests.delete(task.url)
+}
+
+const removeQueuedTask = task => {
+    const index = imageQueue.indexOf(task)
+    if (index >= 0) imageQueue.splice(index, 1)
+}
+
+const settleConsumer = (task, consumer, error, value) => {
+    if (consumer.settled) return
+    consumer.settled = true
+    task.consumers.delete(consumer)
+    consumer.signal?.removeEventListener('abort', consumer.onAbort)
+    if (error) consumer.reject(error)
+    else consumer.resolve(value)
+}
+
+const settleConsumers = (task, error, value) => {
+    for (const consumer of [...task.consumers]) {
+        settleConsumer(task, consumer, error, value)
     }
 }
 
-const scheduleImageRequest = task => new Promise((resolve, reject) => {
-    imageQueue.push({task, resolve, reject})
+const abortOrphanedTask = task => {
+    if (task.consumers.size > 0 || task.status === 'done') return
+    clearTimer(task.waitTimer)
+    clearTimer(task.totalTimer)
+    removeMappedTask(task)
+    task.controller.abort()
+    if (task.status === 'queued') {
+        task.status = 'cancelled'
+        removeQueuedTask(task)
+    } else if (task.status === 'running') task.orphaned = true
+}
+
+const expireQueuedTask = task => {
+    if (task.status !== 'queued') return
+    if (monotonicNow() < task.waitDeadlineAt) {
+        task.waitTimer = setTimeout(() => expireQueuedTask(task),
+            Math.max(1, task.waitDeadlineAt - monotonicNow()))
+        return
+    }
+    task.status = 'expired'
+    clearTimer(task.waitTimer)
+    removeQueuedTask(task)
+    removeMappedTask(task)
+    task.controller.abort()
+    settleConsumers(task, queueTimeoutImageError())
     runImageQueue()
+}
+
+const expireRunningTask = task => {
+    if (task.status !== 'running') return
+    if (monotonicNow() < task.totalDeadlineAt) {
+        task.totalTimer = setTimeout(() => expireRunningTask(task),
+            Math.max(1, task.totalDeadlineAt - monotonicNow()))
+        return
+    }
+    task.timedOut = true
+    clearTimer(task.totalTimer)
+    removeMappedTask(task)
+    task.controller.abort()
+    settleConsumers(task, requestTimeoutImageError())
+}
+
+const finishImageTask = (task, error, value) => {
+    if (task.status === 'done') return
+    task.status = 'done'
+    clearTimer(task.waitTimer)
+    clearTimer(task.totalTimer)
+    removeMappedTask(task)
+    if (!task.timedOut && !task.orphaned) settleConsumers(task, error, value)
+    activeImageRequests--
+    runImageQueue()
+}
+
+const executeImageTask = task => {
+    let value
+    let error
+    Promise.resolve()
+        .then(() => api.post('api/v2/images', {url: task.url}, {
+            silent: true,
+            signal: task.controller.signal
+        }))
+        .then(result => {
+            value = result
+        }, cause => {
+            error = cause
+        })
+        .finally(() => finishImageTask(task, error, value))
+}
+
+const runImageQueue = () => {
+    while (activeImageRequests < MAX_CONCURRENT_IMAGE_REQUESTS && imageQueue.length) {
+        const task = imageQueue.shift()
+        if (task.status !== 'queued' || task.consumers.size === 0) continue
+        if (monotonicNow() >= task.waitDeadlineAt || monotonicNow() >= task.totalDeadlineAt) {
+            expireQueuedTask(task)
+            continue
+        }
+        task.status = 'running'
+        clearTimer(task.waitTimer)
+        task.totalTimer = setTimeout(() => expireRunningTask(task),
+            Math.max(1, task.totalDeadlineAt - monotonicNow()))
+        activeImageRequests++
+        executeImageTask(task)
+    }
+}
+
+const queuedTaskCount = () => imageQueue.reduce((count, task) =>
+    count + (task.status === 'queued' ? 1 : 0), 0)
+
+const refreshTaskDeadline = task => {
+    if (!task || task.status === 'done') return undefined
+    const now = monotonicNow()
+    if (task.status === 'queued' && now >= task.waitDeadlineAt) expireQueuedTask(task)
+    if (task.status === 'running' && now >= task.totalDeadlineAt) expireRunningTask(task)
+    return task.status === 'done' || task.status === 'cancelled' || task.status === 'expired'
+        ? undefined : task
+}
+
+const subscribeToImageTask = (task, signal) => new Promise((resolve, reject) => {
+    const consumer = {
+        resolve,
+        reject,
+        signal,
+        settled: false,
+        onAbort: undefined
+    }
+    consumer.onAbort = () => {
+        settleConsumer(task, consumer, abortedImageError())
+        abortOrphanedTask(task)
+        runImageQueue()
+    }
+    task.consumers.add(consumer)
+    if (signal) {
+        if (signal.aborted) {
+            consumer.onAbort()
+            return
+        }
+        signal.addEventListener('abort', consumer.onAbort, {once: true})
+    }
 })
 
-export let cacheImage = (url) => {
-    const existing = imageRequests.get(url)
-    if (existing) return existing
+export let cacheImage = (url, {signal} = {}) => {
+    if (signal?.aborted) return Promise.reject(abortedImageError())
 
-    const request = scheduleImageRequest(() =>
-        api.post('api/v2/images', {url}, {silent: true}))
-    imageRequests.set(url, request)
-    const clear = () => {
-        if (imageRequests.get(url) === request) imageRequests.delete(url)
+    runImageQueue()
+    let task = refreshTaskDeadline(imageRequests.get(url))
+    if (!task) {
+        if (queuedTaskCount() >= IMAGE_QUEUE_CAPACITY) {
+            return Promise.reject(busyImageError())
+        }
+        const enqueuedAt = monotonicNow()
+        task = {
+            url,
+            controller: new AbortController(),
+            consumers: new Set(),
+            status: 'queued',
+            orphaned: false,
+            timedOut: false,
+            enqueuedAt,
+            waitDeadlineAt: enqueuedAt + IMAGE_QUEUE_WAIT_TIMEOUT_MILLIS,
+            totalDeadlineAt: enqueuedAt + IMAGE_REQUEST_TIMEOUT_MILLIS,
+            waitTimer: undefined,
+            totalTimer: undefined
+        }
+        imageRequests.set(url, task)
+        imageQueue.push(task)
+        task.waitTimer = setTimeout(() => expireQueuedTask(task),
+            IMAGE_QUEUE_WAIT_TIMEOUT_MILLIS)
     }
-    request.then(clear, clear)
-    return request
+
+    const promise = subscribeToImageTask(task, signal)
+    runImageQueue()
+    return promise
 }
 
 /**

@@ -2,10 +2,19 @@
   <el-card shadow="never">
     <div class="list-card-content">
       <div class="list-card-image-container">
-        <img :src="toApiFile(item['cover'])"
+        <img v-if="item['cover'] && !coverFailed"
+             :src="toApiFile(item['cover'])"
              :alt="item.title"
+             loading="lazy"
+             decoding="async"
              class="list-card-image"
+             @load="coverFailed = false"
+             @error="coverFailed = true"
              @click="openBgmUrl(item)"/>
+        <div v-else class="list-card-image list-card-image-placeholder">
+          <el-icon><Picture/></el-icon>
+          <span v-if="coverFailed">图片暂未加载</span>
+        </div>
       </div>
       <div class="list-card-info">
         <div class="list-card-info-inner">
@@ -98,7 +107,14 @@
 
 <script setup>
 import {showLastDownloadTime, showPlaylist, showScore, toApiFile} from "@/js/global.js";
+import {ref, watch} from "vue";
 import {Delete, Edit as EditIcon, Files, Picture} from "@element-plus/icons-vue";
+
+const props = defineProps(["item"])
+const coverFailed = ref(false)
+watch(() => props.item.cover, () => {
+  coverFailed.value = false
+})
 
 let openBgmUrl = (it) => {
   if (it.bgmUrl?.length) {
@@ -117,7 +133,6 @@ let decodeURLComponentSafe = (str) => {
 }
 
 const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
-let props = defineProps(["item"])
 </script>
 
 <style scoped>
@@ -137,6 +152,21 @@ let props = defineProps(["item"])
   cursor: pointer;
   height: 130px;
   width: 92px;
+}
+
+.list-card-image-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--el-text-color-secondary);
+  font-size: 24px;
+  text-align: center;
+}
+
+.list-card-image-placeholder span {
+  font-size: 11px;
 }
 
 .list-card-info {

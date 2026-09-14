@@ -122,9 +122,6 @@ const openDialog = (name, payload) => {
 }
 
 const changeFilterList = (text = '') => {
-  let tempList = weekList.value;
-  tempList = JSON.parse(JSON.stringify(tempList))
-
   const filter = item => {
     if (text.length < 1) {
       return true
@@ -135,10 +132,9 @@ const changeFilterList = (text = '') => {
         pinyinInitials.indexOf(text) > -1;
   }
 
-  filterList.value = tempList
+  filterList.value = weekList.value
       .map(it => {
-        let items = it.items;
-        items = items
+        const items = it.items
             .filter(props.filter)
             .filter(filter)
             .map(it => {

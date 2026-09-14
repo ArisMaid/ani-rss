@@ -68,7 +68,8 @@
                     <el-collapse-item v-for="anime in item.subjects" :name="anime.id">
                       <template #title>
                         <div class="flex collapse-title">
-                          <SafeImageView v-if="anime.cover" :src-url="anime.cover" :lazy="true" class="cover"
+                          <SafeImageView v-if="anime.cover" :src-url="anime.cover" :lazy="true"
+                                         :active="dialogVisible" class="cover"
                                          @click.stop="open(`https://animes.garden/subject/${anime.id}`)"/>
                           <div class="flex collapse-title">
                             <el-text :truncated="false" line-clamp="1" size="small"

@@ -1,8 +1,30 @@
-# Fork v3.2.28.67 验证记录
+# Fork v3.2.28.68 验证记录
 
-本记录覆盖 `FUNCTIONAL_BUGFIX_20260909.md` 的功能修复交付；开发书和修复说明是验收规范，不是额外的生产授权。v3.2.28.67 保持 v3.2.28 的上游前三段和本地第四段递增规则；真实账号、生产下载器、用户媒体和外部数据未连接，合成 fixture 不冒充生产验证。
+本记录覆盖 `RESOURCE_LOADING_OPTIMIZATION_PLAN_20260914.md` 的资源加载优化交付；开发书和修复说明是验收规范，不是额外的生产授权。v3.2.28.68 保持 v3.2.28 的上游前三段和本地第四段递增规则；真实账号、生产下载器、用户媒体和外部数据未连接，合成 fixture 不冒充生产验证。
 
-## 当前发布单元：3.2.28.67
+## 当前发布单元：3.2.28.68
+
+### 本轮优化验收矩阵
+
+| 项目 | 状态 | 证据与边界 |
+| --- | --- | --- |
+| 私有图片生命周期 | 通过 | `http.js` 有界队列、同 URL 独立消费者取消、等待/总超时、底层 finally 归还与 stale generation 保护 |
+| SafeImageView 生命周期 | 通过 | active 停用/恢复、IntersectionObserver 懒加载、失败占位与人工重试；W7/N08 fixture smoke 错误计数为 0 |
+| 公共图片队列 | 通过 | `ImageCacheService` 等待容量 12、启动截止时间 3s；过期任务以可重试忙碌结果结束且不污染失败缓存 |
+| 封面和订阅列表 | 通过 | `loading=lazy`、`decoding=async`、失败占位；过滤路径移除整表 JSON 深拷贝 |
+
+### 门禁与构建
+
+- 前端 Vitest：5 个测试文件、35/35 通过。
+- 生产 UI 构建：`ani-rss-ui/target/resource-optimization-20260914`，3499 modules transformed，成功。
+- bundle 门禁：static `105,229/48,953 B`；login `202,916/63,229 B`；home `193,135/61,822 B`；subscriptions `187,368/63,970 B`（JS/CSS gzip），`forbiddenModules=[]`。
+- 本机未安装 Maven；Java 编译、SpotBugs、后端回归和镜像构建由 GitHub Actions 精确 tag workflow 执行。
+
+### 发布状态
+
+- `v3.2.28.68` 的 GitHub Release、附件 SHA-256、CI run 和 GHCR manifest digest 将在 tag workflow 成功后回填；当前文档不把本地 fixture 证据冒充生产外部链路验证。
+
+## 历史 v3.2.28.67 验收记录
 
 ### 功能修复验收矩阵
 

@@ -2,7 +2,7 @@
 
 日期：2026-09-14
 
-基准：`724c2ade116ab31e902ad8b9e15cf23b72b07921`（v3.2.28.67 发布记录）。目标发布版本为 `3.2.28.68`；本记录描述当前工作区对 `RESOURCE_LOADING_OPTIMIZATION_PLAN_20260914.md` 的实施，正式发布状态以精确 commit 的 `v3.2.28.68` tag workflow 为准。
+基准：`724c2ade116ab31e902ad8b9e15cf23b72b07921`（v3.2.28.67 发布记录）。目标发布版本为 `3.2.28.68`；本记录描述当前工作区对 `RESOURCE_LOADING_OPTIMIZATION_PLAN_20260914.md` 的实施，正式发布已由精确 commit `2587e9bcae147022c7a4b8d2c03c715f83e33bf3` 的 tag workflow 完成。
 
 ## 已实施
 
@@ -19,6 +19,12 @@
 - `git diff --check` 通过。
 - 现有 W7 fixture 浏览器 smoke：`target/resource-optimization-20260914/w7-browser-report-final-20260914.json`；login/home/subscriptions 冷启动均页面错误、控制台错误、chunk 404、媒体错误为 0。
 - 现有 N08 慢轮询 fixture：`target/resource-optimization-20260914/n08-browser-report-final-20260914.json`；停留 `39036ms`，`maxInFlight=1`，总请求 3，隐藏期间请求 1，手动刷新后可见恢复，错误计数均为 0。
+
+## 发布结果
+
+- [`build-test` run 34815224498](https://github.com/ArisMaid/ani-rss/actions/runs/34815224498) 与精确 tag [`build` run 34815586170](https://github.com/ArisMaid/ani-rss/actions/runs/34815586170) 成功；[GitHub Release v3.2.28.68](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.68) 已发布且为非 draft、非 prerelease。
+- Release 附件 SHA-256：`ani-rss.jar` 为 `8e57ac08b8ff843b8cb58f124f7d56a2eebfd47bd0175544f67a6cd312b3ae96`；`ani-rss.exe` 为 `e2cf1ecc5a87637a16ca32e9f01d2b0e1e1c09ff1cd839122186e8e8986b92de`。
+- GHCR manifest index：temurin `sha256:2ea6dcbec150464a178fc417bf44069de98e4a90a1e278d78ea2d70c5c86b2ff`（linux/amd64、linux/arm64）；openj9 `sha256:369b31be9eaa498dbe781366f85498bccbb66122e188054d42f349e401c50aed`（linux/amd64、linux/arm64）；arm32v7 `sha256:3cc683d09611227aa19fe77388be0c6bedeb74d10324b3432ca4faa793c21cbe`（linux/arm/v7）。Docker Hub 因未配置凭据按 workflow 条件跳过；GHCR 三组镜像均已成功发布。
 
 ## 尚未在本机完成的边界
 

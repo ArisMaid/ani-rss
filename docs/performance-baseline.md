@@ -6,7 +6,7 @@
 
 | 项目 | 实际值 |
 | --- | --- |
-| 版本/标签 | `3.2.28.68` / `v3.2.28.68`；精确提交由 tag workflow 锁定 |
+| 版本/标签 | `3.2.28.68` / `v3.2.28.68`；精确提交 `2587e9bcae147022c7a4b8d2c03c715f83e33bf3` |
 | 优化范围 | 私有/公开图片队列、SafeImageView 生命周期、封面懒加载、订阅过滤路径 |
 | Node / pnpm | Node `v24.16.0` / pnpm `11.19.0` |
 | 外部边界 | 隔离 HTTP fixture 和本地浏览器检查；不读取生产账号或文件 |
@@ -26,7 +26,15 @@ W7 fixture 登录/首页/订阅冷启动与 N08 慢轮询 smoke 的页面、控�
 
 ### 当前发布产物
 
-`v3.2.28.68` 的远端 workflow、Release 附件和 GHCR manifest digest 将在 tag workflow 成功后回填。
+[`build-test` run 34815224498](https://github.com/ArisMaid/ani-rss/actions/runs/34815224498) 与 [`v3.2.28.68` tag build run 34815586170](https://github.com/ArisMaid/ani-rss/actions/runs/34815586170) 均成功；[GitHub Release v3.2.28.68](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.68) 已发布。`ani-rss.jar` SHA-256 为 `8e57ac08b8ff843b8cb58f124f7d56a2eebfd47bd0175544f67a6cd312b3ae96`，`ani-rss.exe` SHA-256 为 `e2cf1ecc5a87637a16ca32e9f01d2b0e1e1c09ff1cd839122186e8e8986b92de`。
+
+| 镜像 tag | manifest index digest | 平台 |
+| --- | --- | --- |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.68` | `sha256:2ea6dcbec150464a178fc417bf44069de98e4a90a1e278d78ea2d70c5c86b2ff` | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.68-openj9` | `sha256:369b31be9eaa498dbe781366f85498bccbb66122e188054d42f349e401c50aed` | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/arismaid/ani-rss:v3.2.28.68-arm32v7` | `sha256:3cc683d09611227aa19fe77388be0c6bedeb74d10324b3432ca4faa793c21cbe` | `linux/arm/v7` |
+
+Docker Hub 登录因未配置凭据按 workflow 条件跳过；GHCR 三组镜像已成功发布。本轮不重建 `v3.2.28.67`。
 
 ## 历史对照：v3.2.28.67
 

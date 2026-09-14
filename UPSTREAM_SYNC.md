@@ -1,6 +1,6 @@
 # Fork 上游同步规则
 
-本 fork 当前发布版本为 `3.2.28.68`（tag `v3.2.28.68` 精确锁定本轮资源加载优化提交；上一版 `v3.2.28.67` 精确指向 `7dfa07a5cce27d92330dc3562fc2b887b755e7d3`），上游前三段基线仍为 `v3.2.28`；本轮严格落实 [`RESOURCE_LOADING_OPTIMIZATION_PLAN_20260914.md`](RESOURCE_LOADING_OPTIMIZATION_PLAN_20260914.md)，实施记录见 [`RESOURCE_LOADING_OPTIMIZATION_REPORT_20260914.md`](RESOURCE_LOADING_OPTIMIZATION_REPORT_20260914.md)。本轮没有引入新的上游版本同步，所有差异均为 fork-local 性能与生命周期修复；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
+本 fork 当前发布版本为 `3.2.28.68`（tag `v3.2.28.68` 精确指向 `2587e9bcae147022c7a4b8d2c03c715f83e33bf3`；上一版 `v3.2.28.67` 精确指向 `7dfa07a5cce27d92330dc3562fc2b887b755e7d3`），上游前三段基线仍为 `v3.2.28`；本轮严格落实 [`RESOURCE_LOADING_OPTIMIZATION_PLAN_20260914.md`](RESOURCE_LOADING_OPTIMIZATION_PLAN_20260914.md)，实施记录见 [`RESOURCE_LOADING_OPTIMIZATION_REPORT_20260914.md`](RESOURCE_LOADING_OPTIMIZATION_REPORT_20260914.md)。本轮没有引入新的上游版本同步，所有差异均为 fork-local 性能与生命周期修复；后续同步只审阅当前基线标签到目标标签之间的上游提交，不重复引入更早历史。
 
 同步时必须保留以下本地合同：
 
@@ -34,7 +34,7 @@
 - 保留：`.67` 已交付的功能修复、懒路由/静态缓存合同、唯一生产 dist 门禁、W7/N08 浏览器证据和精确 tag 发布流程。
 - 修复：`SafeImageView` 增加 active 生命周期、取消与 generation 保护；私有图片请求实现有界队列、同 URL 独立消费者取消、等待/总超时与底层 finally 归还；公共图片任务增加有界等待和启动截止时间；封面启用 lazy/async 与失败占位；订阅过滤移除整表 JSON 深拷贝。
 - 本地证据：前端 35/35；生产 UI 构建 `target/resource-optimization-20260914` 通过；bundle gate static `105229/48953`、login `202916/63229`、home `193135/61822`、subscriptions `187368/63970`（JS/CSS gzip），`forbiddenModules=[]`；W7/N08 fixture 浏览器 smoke 错误计数均为 0。
-- 后端与发布证据：本机未安装 Maven，Java 编译、SpotBugs、后端回归与镜像构建由精确 tag workflow 执行；远端 Release、附件校验和 GHCR manifest digest 在 tag workflow 成功后回填。
+- 后端与发布证据：本机未安装 Maven；[`build-test` run 34815224498](https://github.com/ArisMaid/ani-rss/actions/runs/34815224498) 与精确 tag [`build` run 34815586170](https://github.com/ArisMaid/ani-rss/actions/runs/34815586170) 均成功，分别完成 319 项后端测试（0 failures）及 Release/镜像发布。[GitHub Release v3.2.28.68](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.28.68) 为非 draft、非 prerelease；`ani-rss.jar` SHA-256 为 `8e57ac08b8ff843b8cb58f124f7d56a2eebfd47bd0175544f67a6cd312b3ae96`，`ani-rss.exe` SHA-256 为 `e2cf1ecc5a87637a16ca32e9f01d2b0e1e1c09ff1cd839122186e8e8986b92de`。GHCR manifest index 为 temurin `sha256:2ea6dcbec150464a178fc417bf44069de98e4a90a1e278d78ea2d70c5c86b2ff`（linux/amd64、linux/arm64）、openj9 `sha256:369b31be9eaa498dbe781366f85498bccbb66122e188054d42f349e401c50aed`（linux/amd64、linux/arm64）和 arm32v7 `sha256:3cc683d09611227aa19fe77388be0c6bedeb74d10324b3432ca4faa793c21cbe`（linux/arm/v7）。Docker Hub 因未配置凭据按 workflow 条件跳过；GHCR 三组镜像均已成功发布。
 
 ## 3.2.28.67 本轮功能修复记录
 

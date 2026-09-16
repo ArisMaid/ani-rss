@@ -22,6 +22,17 @@
     "forbiddenModules": [],
     "budgetHeadroomBytes": {"login": 184, "home": 215, "subscriptions": 232}
   },
+  "syncAndScrollOptimization": {
+    "date": "2026-09-17",
+    "baseCommit": "3de618d9",
+    "reason": "The v3.2.32 upstream synchronization adds cover-click actions, torrent fallback handling, the WebFilter/static-cache repair, manifest credentials, and subscription pagination, sorting, filter, scroll, and refresh lifecycle safeguards. The Vite 8.3.0 toolchain also changes shared chunk compression. GitHub Actions Ubuntu build-test 35124151832 measured the closures below; limits retain narrow explicit headroom and forbidden-module checks remain unchanged.",
+    "report": "../../FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md",
+    "ciWorkflowRun": "35124151832",
+    "measuredJsGzipBytes": {"static": 105473, "login": 203162, "home": 193408, "subscriptions": 192403},
+    "measuredCssGzipBytes": {"static": 48953, "login": 63229, "home": 61822, "subscriptions": 65174},
+    "forbiddenModules": [],
+    "budgetHeadroomBytes": {"login": 188, "home": 242, "subscriptions": 247, "subscriptionsCss": 226}
+  },
   "budgetChange": {
     "reason": "The R01/R02 lifecycle repair changes async route module hash references in the shared entry chunk. The measured latest-fork comparison is limited to home JS +1, home CSS +1, and subscriptions JS +1 gzip byte; static entry and login remain unchanged. No player, Markdown, or backup module enters these closures. GitHub Actions Ubuntu build-test 34077134774 measured static entry JS at 105201 gzip bytes while the local Windows build measured 105194; no closure or forbidden-module change was observed, so the gate is raised by exactly the cross-platform +2-byte observation rather than updated automatically.",
     "measuredOn": "2026-09-07",
@@ -39,20 +50,20 @@
   "scenarios": {
     "login": {
       "baselineJsGzipBytes": 201956,
-      "maxJsGzipBytes": 203100,
+      "maxJsGzipBytes": 203350,
       "baselineCssGzipBytes": 63229
     },
     "home": {
       "baselineJsGzipBytes": 192173,
-      "maxJsGzipBytes": 193350,
+      "maxJsGzipBytes": 193650,
       "baselineCssGzipBytes": 61821,
       "maxCssGzipBytes": 61822
     },
     "subscriptions": {
       "baselineJsGzipBytes": 185254,
-      "maxJsGzipBytes": 187600,
+      "maxJsGzipBytes": 192650,
       "baselineCssGzipBytes": 63645,
-      "maxCssGzipBytes": 64000
+      "maxCssGzipBytes": 65400
     }
   }
 }

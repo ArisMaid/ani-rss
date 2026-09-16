@@ -1,6 +1,22 @@
 # Fork 性能基线与验收记录
 
-本文件只记录实际执行结果。静态 bundle、浏览器启动资源和 Java Service fixture 分开统计；合成边界不冒充真实外部服务性能。当前发布单元为 `v3.2.28.68`，历史版本仅作对照，不把旧版更早的首入口数字当作本轮下降结论。
+本文件只记录实际执行结果。静态 bundle、浏览器启动资源和 Java Service fixture 分开统计；合成边界不冒充真实外部服务性能。当前发布单元为 `v3.2.32.69`，历史版本仅作对照，不把旧版更早的首入口数字当作本轮下降结论。
+
+## 当前发布单元：v3.2.32.69
+
+| 项目 | 实际值 |
+| --- | --- |
+| 版本/标签 | `3.2.32.69` / `v3.2.32.69`（tag workflow 待本轮精确 commit 推送后完成） |
+| 对照上游 | `v3.2.32` / `b29bd244a082e8f16de57103af388893dbb526f6`；未整体合并 |
+| Node / pnpm | 本机 Node `v24.16.0`，使用 `corepack pnpm@12.3.4` 冻结安装；CI 声明 Node `v26.8.1` |
+| UI 构建 | Vite `8.3.0` 生产构建通过 |
+| 外部边界 | 隔离 HTTP fixture 和本地真实浏览器；不读取生产账号、下载器、媒体或用户文件 |
+
+### 订阅长列表浏览器实测
+
+使用同一 Windows 主机、同一默认 Playwright 窗口、同一 Chrome for Testing `154.0.8037.0` 和同一份 fixture，修改前后各测 60/300/1000 条。优化后每页挂载卡片均为 60，列表滚动拥有者均为 1；冷/热滚轮各约 10 秒、约 108 个滚轮事件，未发现 page error。优化后 DOM 节点数（`.subscription-page *`）为 1,655/1,655/1,657；基线旧版本卡片 DOM 为 60/300/1000，滚动条带 `hide-scrollbar`。详细原始观察、滚动高度和分页/筛选结果见 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md`](../FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md)。
+
+本次没有采集 Performance 面板 FPS、长任务、Layout/Paint，也没有把空 cover fixture 当作真实图片冷网；真实后台刷新、Maven、外部 SSO、下载器和 Docker/Linux engine 仍待远端或真实环境验证。
 
 ## 当前发布单元：v3.2.28.68
 

@@ -1,4 +1,28 @@
-# Fork v3.2.28.68 验证记录
+# Fork v3.2.32.69 验证记录
+
+本节覆盖 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_PLAN.md`](../FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_PLAN.md) 的 U01–U08、S01–S04 实施；上游 `v3.2.32` 仅作局部对照，没有整体覆盖 fork。本轮精确 tag workflow 尚未执行，Release、后端完整门禁和镜像证据待推送后回填。
+
+## 当前发布单元：3.2.32.69
+
+### 验收矩阵
+
+| 项目 | 状态 | 证据与边界 |
+| --- | --- | --- |
+| 封面动作 U01 | 通过 | `cover-click-action` 受限归一化、两种布局、失败占位、键盘焦点和标题/评分/菜单冒泡边界已实现；真实 fixture 页面可见动作按钮 |
+| 种子缓存 U03 | 通过 | `TorrentUtilTest` 覆盖 `.txt` 优先、`.torrent` 次选、txt fallback、torrent fallback；`saveTorrent`/`getMagnet` 未改 |
+| 内网限制 U04 | 通过 | `WebFilterTest` 覆盖 v2 Problem JSON、legacy JSON、静态/index 403/no-store 和允许的 hash 长缓存；真实可信代理/IPv6 仍需远端环境 |
+| manifest U05 | 通过 | `index.html` 使用 `crossorigin="use-credentials"`；真实 SSO 未连接 |
+| lock/toolchain U06/U07 | 通过 | pnpm `12.3.4` frozen install；jsoup/markdown-it/Vue/terser/Vite 与 Node/CI 声明按方案同步 |
+| 分页与滚动 S01–S03 | 通过 | 同一 Chrome fixture 对 60/300/1000 条修改前后实测；优化后挂载卡片均 60、滚动拥有者 1；详见性能报告 |
+| 刷新生命周期 S04 | 代码审查通过 | 单一 5 秒客户端跟踪、120 秒累计预算、generation 和 deactivated/activated 边界已实现；真实后端慢刷新由远端/真实环境验证 |
+
+### 本地门禁
+
+- 前端 Vitest：5 个测试文件、35/35 通过。
+- 生产 UI：Vite `8.3.0` build 通过；`corepack pnpm@12.3.4 install --frozen-lockfile` 通过。
+- 本机没有 Maven；Java 完整回归、SpotBugs、打包、GitHub Release 和 GHCR 镜像必须以本轮 tag workflow 结果为准。
+
+## 历史发布单元：v3.2.28.68
 
 本记录覆盖 `RESOURCE_LOADING_OPTIMIZATION_PLAN_20260914.md` 的资源加载优化交付；开发书和修复说明是验收规范，不是额外的生产授权。v3.2.28.68 保持 v3.2.28 的上游前三段和本地第四段递增规则；真实账号、生产下载器、用户媒体和外部数据未连接，合成 fixture 不冒充生产验证。
 

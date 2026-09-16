@@ -9,12 +9,17 @@
              decoding="async"
              class="list-card-image"
              @load="coverFailed = false"
-             @error="coverFailed = true"
-             @click="openBgmUrl(item)"/>
+             @error="coverFailed = true"/>
         <div v-else class="list-card-image list-card-image-placeholder">
           <el-icon><Picture/></el-icon>
           <span v-if="coverFailed">图片暂未加载</span>
         </div>
+        <button
+            type="button"
+            class="list-card-cover-click-target"
+            :aria-label="coverActionLabel"
+            @click="handleCoverClick"
+        ></button>
       </div>
       <div class="list-card-info">
         <div class="list-card-info-inner">
@@ -49,12 +54,10 @@
             <el-tag type="info" v-else>
               未启用
             </el-tag>
-            <el-tag type="info">
-              <el-tooltip :content="item['subgroup']">
-                <el-text line-clamp="1" size="small" class="list-card-subgroup">
-                  {{ item['subgroup'] ? item['subgroup'] : '未知字幕组' }}
-                </el-text>
-              </el-tooltip>
+            <el-tag type="info" :title="item['subgroup'] || '未知字幕组'">
+              <el-text line-clamp="1" size="small" class="list-card-subgroup">
+                {{ item['subgroup'] ? item['subgroup'] : '未知字幕组' }}
+              </el-text>
             </el-tag>
             <el-tag type="warning">
               {{ item['currentEpisodeNumber'] }} /
@@ -106,12 +109,13 @@
 </template>
 
 <script setup>
-import {showLastDownloadTime, showPlaylist, showScore, toApiFile} from "@/js/global.js";
-import {ref, watch} from "vue";
+import {coverClickAction, showLastDownloadTime, showPlaylist, showScore, toApiFile} from "@/js/global.js";
+import {computed, ref, watch} from "vue";
 import {Delete, Edit as EditIcon, Files, Picture} from "@element-plus/icons-vue";
 
 const props = defineProps(["item"])
 const coverFailed = ref(false)
+const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
 watch(() => props.item.cover, () => {
   coverFailed.value = false
 })
@@ -132,7 +136,21 @@ let decodeURLComponentSafe = (str) => {
   return decodeURIComponent(str.replace('+', ' '));
 }
 
-const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
+const coverActionLabel = computed(() => {
+  const labels = {
+    edit: '编辑订阅',
+    playlist: '打开视频列表',
+    cover: '编辑封面'
+  }
+  return `${labels[coverClickAction.value] || labels.cover}：${props.item.title || '当前订阅'}`
+})
+
+const handleCoverClick = () => {
+  const action = ['edit', 'playlist', 'cover'].includes(coverClickAction.value)
+      ? coverClickAction.value
+      : 'cover'
+  emit(action, props.item)
+}
 </script>
 
 <style scoped>
@@ -143,7 +161,26 @@ const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
 }
 
 .list-card-image-container {
+  position: relative;
   height: 100%;
+}
+
+.list-card-cover-click-target {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--el-border-radius-base);
+  background: transparent;
+  cursor: pointer;
+}
+
+.list-card-cover-click-target:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
 }
 
 .list-card-image {

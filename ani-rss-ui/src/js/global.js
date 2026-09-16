@@ -1,5 +1,5 @@
 import {useColorMode, useDark, useDebounceFn, useEventListener, useLocalStorage} from "@vueuse/core";
-import {ref} from "vue";
+import {ref, watch} from "vue";
 
 /**
  * 保存登录信息
@@ -52,6 +52,24 @@ const showWeek = useLocalStorage("show-week", true)
  * 订阅页面布局
  */
 const subscriptionViewMode = useLocalStorage('subscription-view-mode', 'cover')
+
+/**
+ * 点击订阅封面时执行的操作
+ */
+const coverClickActions = ['edit', 'playlist', 'cover']
+const normalizeCoverClickAction = value =>
+    coverClickActions.includes(value) ? value : 'cover'
+const coverClickAction = useLocalStorage('cover-click-action', 'cover')
+const normalizedCoverClickAction = normalizeCoverClickAction(coverClickAction.value)
+if (coverClickAction.value !== normalizedCoverClickAction) {
+    coverClickAction.value = normalizedCoverClickAction
+}
+watch(coverClickAction, value => {
+    const normalized = normalizeCoverClickAction(value)
+    if (value !== normalized) {
+        coverClickAction.value = normalized
+    }
+})
 
 /**
  * 启动页
@@ -268,6 +286,7 @@ export {
     showScore,
     showWeek,
     subscriptionViewMode,
+    coverClickAction,
     startupPage,
     showPlaylist,
     showLastDownloadTime,

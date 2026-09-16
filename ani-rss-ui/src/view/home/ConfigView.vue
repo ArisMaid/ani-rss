@@ -21,7 +21,7 @@
             :label="tab.label"
             :name="tab.name"
             :lazy="true">
-          <el-scrollbar class="config-scrollbar">
+          <el-scrollbar class="config-scrollbar" always>
             <div class="tab-scroll-content">
               <DownloadView v-if="tab.name === 'download'" v-model:config="config"/>
               <BasicView v-else-if="tab.name === 'basic'" v-model:config="config"/>

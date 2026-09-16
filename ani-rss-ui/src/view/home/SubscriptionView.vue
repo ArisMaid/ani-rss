@@ -76,7 +76,16 @@
 </template>
 
 <script setup>
-import {defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref} from "vue";
+import {
+  defineAsyncComponent,
+  nextTick,
+  onActivated,
+  onBeforeUnmount,
+  onDeactivated,
+  onMounted,
+  reactive,
+  ref
+} from "vue";
 import {ElMessage} from "element-plus";
 import {useLocalStorage} from "@vueuse/core";
 import SubscriptionListView from "@/view/home/SubscriptionListView.vue";
@@ -147,7 +156,7 @@ const selectChange = () => {
       return true
     }
 
-    return releaseDate.value === it.releaseDate.replace(/-\d{2}$/, '')
+    return releaseDate.value === String(it.releaseDate || '').replace(/-\d{2}$/, '')
   }
   changeFilterList()
 }
@@ -155,86 +164,127 @@ const selectChange = () => {
 const listLoaded = data => {
   releaseDateList.value = data.releaseDateList || []
   subscriptionTotal.value = data.total || 0
-  if (data?.refresh?.running && !refreshLoading.value) {
-    startRefreshTracking()
+  if (data?.refresh?.running) {
+    if (!refreshPolling.value) {
+      startRefreshTracking(refreshStartedAt.value || Date.now())
+    }
   }
 }
 
 let refreshTimer
 let refreshGeneration = 0
+const refreshPolling = ref(false)
 const refreshStartedAt = ref(0)
 const MAX_REFRESH_WAIT = 120_000
+const REFRESH_POLL_INTERVAL = 5_000
 
-const stopRefreshPolling = () => {
+const stopRefreshPolling = ({resetUi = false} = {}) => {
   refreshGeneration++
+  refreshPolling.value = false
   if (refreshTimer) {
     clearTimeout(refreshTimer)
     refreshTimer = undefined
   }
+  if (resetUi) {
+    refreshLoading.value = false
+  }
 }
 
 const finishRefresh = (refresh, timedOut = false) => {
+  refreshPolling.value = false
   refreshLoading.value = false
   if (timedOut) {
-    ElMessage.warning('刷新仍在后台运行，请稍后查看列表状态')
+    ElMessage.warning('刷新等待超时，后台可能仍在刷新，请稍后手动查看列表状态')
   } else if (refresh?.failedCount > 0) {
     ElMessage.warning(`刷新完成，但有 ${refresh.failedCount} 个订阅失败`)
   }
 }
 
-const startRefreshTracking = () => {
-  if (refreshLoading.value) return
+const scheduleRefreshPoll = (generation, delay = REFRESH_POLL_INTERVAL) => {
+  if (!refreshPolling.value || generation !== refreshGeneration) return
+  if (refreshTimer) {
+    clearTimeout(refreshTimer)
+  }
+  refreshTimer = setTimeout(() => void pollRefresh(generation), delay)
+}
+
+const startRefreshTracking = (startedAt = Date.now(), immediate = false) => {
+  if (refreshPolling.value) return
   stopRefreshPolling()
+  refreshPolling.value = true
   refreshLoading.value = true
-  refreshStartedAt.value = Date.now()
+  refreshStartedAt.value = startedAt
   const generation = refreshGeneration
-  refreshTimer = setTimeout(() => void pollRefresh(generation), 2000)
+  scheduleRefreshPoll(generation, immediate ? 0 : REFRESH_POLL_INTERVAL)
 }
 
 const pollRefresh = async generation => {
-  if (!refreshLoading.value || generation !== refreshGeneration) return
+  if (!refreshPolling.value || generation !== refreshGeneration) return
   if (Date.now() - refreshStartedAt.value >= MAX_REFRESH_WAIT) {
     finishRefresh(null, true)
     return
   }
   let data
   try {
-    data = await listRef.value?.getList()
-  } catch (error) {
-    if (generation !== refreshGeneration || !refreshLoading.value) return
+    data = await listRef.value?.getList({background: true})
+  } catch {
+    if (generation !== refreshGeneration || !refreshPolling.value) return
     if (Date.now() - refreshStartedAt.value >= MAX_REFRESH_WAIT) {
       finishRefresh(null, true)
     } else {
-      refreshTimer = setTimeout(() => void pollRefresh(generation), 2000)
+      scheduleRefreshPoll(generation)
     }
     return
   }
   if (generation !== refreshGeneration) return
+  if (Date.now() - refreshStartedAt.value >= MAX_REFRESH_WAIT) {
+    finishRefresh(null, true)
+    return
+  }
   const refresh = data?.refresh
   if (refresh && !refresh.running) {
     finishRefresh(refresh)
     return
   }
-  refreshTimer = setTimeout(() => void pollRefresh(generation), 2000)
+  scheduleRefreshPoll(generation)
 }
 
 const refreshAni = async () => {
-  if (refreshLoading.value) return
+  if (refreshPolling.value) return
   stopRefreshPolling()
   const generation = refreshGeneration
+  const startedAt = Date.now()
   refreshLoading.value = true
-  refreshStartedAt.value = Date.now()
+  refreshStartedAt.value = startedAt
   try {
     const res = await http.refreshAll()
+    if (generation !== refreshGeneration) return
     ElMessage.success(res.message)
-    await pollRefresh(generation)
+    startRefreshTracking(startedAt, true)
   } catch {
-    if (generation === refreshGeneration) refreshLoading.value = false
+    if (generation === refreshGeneration) {
+      refreshPolling.value = false
+      refreshLoading.value = false
+    }
   }
 }
 
+let firstActivation = true
+
 onMounted(() => {
   selectChange()
+})
+
+onActivated(() => {
+  if (firstActivation) {
+    firstActivation = false
+    return
+  }
+  void listRef.value?.getList({background: true})
+})
+
+onDeactivated(() => {
+  stopRefreshPolling({resetUi: true})
 })
 
 onBeforeUnmount(stopRefreshPolling)

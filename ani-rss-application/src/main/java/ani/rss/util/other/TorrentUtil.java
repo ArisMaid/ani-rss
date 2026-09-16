@@ -158,11 +158,26 @@ public class TorrentUtil {
         String infoHash = item.getInfoHash();
         File torrents = getTorrentDir(ani);
         String torrent = item.getTorrent();
+        File magnetCache = new File(torrents, infoHash + ".txt");
+        File torrentCache = new File(torrents, infoHash + ".torrent");
+
+        // A resource can change from a magnet/ED2K link to a real torrent
+        // link (or vice versa) without changing its info-hash. Prefer an
+        // existing regular cache file so download, recovery, and media
+        // access all resolve the same local input regardless of that link
+        // representation change.
+        if (magnetCache.isFile()) {
+            return magnetCache;
+        }
+        if (torrentCache.isFile()) {
+            return torrentCache;
+        }
+
         if (ReUtil.contains(StringEnum.MAGNET_REG, torrent)
                 || ReUtil.contains(StringEnum.ED2K_REG, torrent)) {
-            return new File(torrents, infoHash + ".txt");
+            return magnetCache;
         }
-        return new File(torrents, infoHash + ".torrent");
+        return torrentCache;
     }
 
     /**

@@ -58,6 +58,16 @@
       <el-option label="卡片" value="card"/>
     </el-select>
   </SettingsItem>
+  <SettingsItem label="点击封面">
+    <el-select v-model="coverClickAction" class="width-150">
+      <el-option label="编辑订阅" value="edit"/>
+      <el-option label="视频列表" value="playlist"/>
+      <el-option label="编辑封面" value="cover"/>
+    </el-select>
+    <el-text class="cover-action-hint" type="info" size="small">
+      仅影响封面点击，标题仍打开 Bangumi
+    </el-text>
+  </SettingsItem>
   <SettingsItem label="启动页">
     <el-select v-model="startupPage" class="width-150">
       <el-option label="首页" value="/home"/>
@@ -105,6 +115,7 @@ import {Adjust, Css3Alt, Js, Moon, Sun} from "@vicons/fa";
 import {
   color,
   colorChange,
+  coverClickAction,
   maxContentWidth,
   showLastDownloadTime,
   showPlaylist,

@@ -47,7 +47,10 @@ public class WebFilter implements Filter {
         }
 
         ConfigStore.SecurityConfiguration config = ConfigUtil.securityConfiguration();
-        if (uri.startsWith("/api") && config.innerIp() &&
+        // The private-network boundary applies to the complete application,
+        // including the index and hashed static assets. Otherwise a public
+        // client could still bootstrap the UI before its API calls fail.
+        if (config.innerIp() &&
                 !ClientAddressPolicy.isPrivate(AuthUtil.getIp(request))) {
             writePrivateNetworkRequired(request, response);
             return;
@@ -97,6 +100,7 @@ public class WebFilter implements Filter {
                                                     HttpServletResponse response) throws IOException {
         response.setStatus(HttpServletResponse.SC_FORBIDDEN);
         response.setCharacterEncoding(StandardCharsets.UTF_8);
+        response.setHeader("Cache-Control", "no-store");
         Object body;
         if (isV2(request.getRequestURI())) {
             Map<String, Object> problem = new LinkedHashMap<>();
@@ -114,6 +118,13 @@ public class WebFilter implements Filter {
                     .setMessage("仅允许内网访问");
             response.setContentType("application/json");
         }
+        if (!isApi(request.getRequestURI())) {
+            byte[] bytes = "禁止公网访问".getBytes(StandardCharsets.UTF_8);
+            response.setContentType("text/html;charset=UTF-8");
+            response.setContentLength(bytes.length);
+            response.getOutputStream().write(bytes);
+            return;
+        }
         byte[] bytes = GsonStatic.toJson(body).getBytes(StandardCharsets.UTF_8);
         response.setContentLength(bytes.length);
         response.getOutputStream().write(bytes);
@@ -121,6 +132,10 @@ public class WebFilter implements Filter {
 
     private static boolean isV2(String uri) {
         return "/api/v2".equals(uri) || uri != null && uri.startsWith("/api/v2/");
+    }
+
+    private static boolean isApi(String uri) {
+        return uri != null && uri.startsWith("/api");
     }
 
     private static boolean isImmutableAsset(String uri, String extName) {

@@ -7,7 +7,7 @@
   <div style="padding: 0 12px;">
     <el-tabs v-model="activeName" class="tabs-center">
       <el-tab-pane label="基本" name="base" :lazy="true">
-        <el-scrollbar height="500" ref="scrollbarRef">
+        <el-scrollbar height="500" ref="scrollbarRef" always>
           <el-form @submit.prevent label-width="auto">
             <el-form-item label="标题">
               <div class="full-width">
@@ -134,7 +134,7 @@
         <StandbyRssView ref="standbyRssRef" :ani="props.ani"/>
       </el-tab-pane>
       <el-tab-pane label="自定义" name="custom" :lazy="true">
-        <el-scrollbar height="500">
+        <el-scrollbar height="500" always>
           <el-form @submit.prevent label-width="auto">
             <el-form-item label="自定义集数规则">
               <div class="full-width">

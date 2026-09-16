@@ -1,8 +1,7 @@
 <template>
   <div class="cover-card">
     <div class="cover-image-container"
-         :class="{'is-disabled': !item.enable}"
-         @click="emit('cover', item)">
+         :class="{'is-disabled': !item.enable}">
       <img v-if="item.cover && !coverFailed"
            :src="toApiFile(item.cover)"
            :alt="item.title"
@@ -17,6 +16,12 @@
         </el-icon>
         <span v-if="coverFailed">图片暂未加载</span>
       </div>
+      <button
+          type="button"
+          class="cover-click-target"
+          :aria-label="coverActionLabel"
+          @click="handleCoverClick"
+      ></button>
       <button v-if="scoreText" class="cover-score" type="button" @click.stop="emit('rate', item)">
         <span>{{ scoreText }}</span>
       </button>
@@ -32,9 +37,7 @@
         <div class="cover-meta">
           <div class="cover-meta-line">
             <span class="cover-meta-fixed">{{ episodeText }}</span>
-            <el-tooltip :content="subgroupText" placement="top">
-              <span class="cover-subgroup">{{ subgroupText }}</span>
-            </el-tooltip>
+            <span class="cover-subgroup" :title="subgroupText">{{ subgroupText }}</span>
           </div>
           <div v-if="showLastDownloadTime || hasStandbyRss" class="cover-meta-line cover-meta-secondary">
             <span v-if="showLastDownloadTime" class="cover-meta-fixed">{{ updateText }}</span>
@@ -96,12 +99,13 @@
 <script setup>
 import {computed, ref, watch} from "vue";
 import {Delete, Edit as EditIcon, Files, Fold, Picture, Star} from "@element-plus/icons-vue";
-import {showLastDownloadTime, showPlaylist, showScore, toApiFile} from "@/js/global.js";
+import {coverClickAction, showLastDownloadTime, showPlaylist, showScore, toApiFile} from "@/js/global.js";
 import {fromNow} from "@/js/format.js";
 
 const actionsVisible = ref(false)
 const coverFailed = ref(false)
 const props = defineProps(["item"])
+const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
 
 watch(() => props.item.cover, () => {
   coverFailed.value = false
@@ -133,6 +137,22 @@ const updateText = computed(() => {
   return '未更新'
 })
 
+const coverActionLabel = computed(() => {
+  const labels = {
+    edit: '编辑订阅',
+    playlist: '打开视频列表',
+    cover: '编辑封面'
+  }
+  return `${labels[coverClickAction.value] || labels.cover}：${props.item.title || '当前订阅'}`
+})
+
+const handleCoverClick = () => {
+  const action = ['edit', 'playlist', 'cover'].includes(coverClickAction.value)
+      ? coverClickAction.value
+      : 'cover'
+  emit(action, props.item)
+}
+
 const openBgmUrl = it => {
   if (it.bgmUrl?.length) {
     window.open(it.bgmUrl, '_blank', 'noopener')
@@ -145,7 +165,6 @@ const openBgmUrl = it => {
   }
 }
 
-const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
 </script>
 
 <style scoped>
@@ -185,10 +204,6 @@ const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
   transition: filter 0.18s ease, transform 0.18s ease;
 }
 
-.cover-image-container:not(.is-disabled):hover .cover-image {
-  transform: scale(1.03);
-}
-
 .cover-image-container.is-disabled .cover-image {
   filter: grayscale(1) brightness(0.58);
 }
@@ -201,6 +216,24 @@ const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
   gap: 4px;
   color: var(--el-text-color-secondary);
   font-size: 28px;
+}
+
+.cover-click-target {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.cover-click-target:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
 }
 
 .cover-empty span {
@@ -252,7 +285,7 @@ const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 1;
+  z-index: 3;
   min-height: 92px;
   display: flex;
   flex-direction: column;
@@ -265,11 +298,17 @@ const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
   position: absolute;
   right: 6px;
   bottom: 6px;
-  z-index: 3;
+  z-index: 4;
   opacity: 0;
   transform: translateY(4px);
   pointer-events: none;
   transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .cover-image-container:not(.is-disabled):hover .cover-image {
+    transform: scale(1.03);
+  }
 }
 
 .cover-card:hover .cover-actions,

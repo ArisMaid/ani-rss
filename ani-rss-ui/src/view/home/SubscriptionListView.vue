@@ -5,10 +5,10 @@
   <component v-if="dialogs.delete" :is="DelAniView" ref="delAniRef"/>
   <component v-if="dialogs.rate" :is="BgmRateView" ref="bgmRateRef"/>
   <div class="list-container" v-loading="loading">
-    <el-scrollbar class="hide-scrollbar">
+    <el-scrollbar ref="scrollbarRef" class="subscription-scrollbar" always>
       <div class="list-content">
         <template v-if="showWeek">
-          <div v-for="weekItem in filterList" :key="weekItem.weekLabel">
+          <div v-for="weekItem in visibleWeekList" :key="weekItem.groupKey">
             <h2 class="list-week-title">
               {{ weekItem.weekLabel }}
             </h2>
@@ -29,7 +29,7 @@
         </template>
         <template v-else>
           <div :class="gridClass">
-            <div v-for="item in flatFilterList" :key="item.id">
+            <div v-for="item in visibleFlatFilterList" :key="item.id">
               <component
                   :is="viewComponent"
                   :item="item"
@@ -45,11 +45,36 @@
         <div class="list-bottom-spacer"></div>
       </div>
     </el-scrollbar>
+    <div v-if="totalCount" class="subscription-pagination">
+      <div class="subscription-pagination-summary">
+        <span>第 {{ rangeStart }}-{{ rangeEnd }} 项，共 {{ totalCount }} 项</span>
+        <span v-if="showWeek">按星期分组，每页最多 {{ PAGE_SIZE }} 个订阅</span>
+      </div>
+      <el-pagination
+          v-if="pageCount > 1"
+          v-model:current-page="currentPage"
+          :page-size="PAGE_SIZE"
+          :total="totalCount"
+          background
+          layout="prev, pager, next"
+          @current-change="handlePageChange"
+      />
+    </div>
   </div>
 </template>
 
 <script setup>
-import {computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref} from "vue";
+import {
+  computed,
+  defineAsyncComponent,
+  nextTick,
+  onBeforeUnmount,
+  onDeactivated,
+  onMounted,
+  reactive,
+  ref,
+  watch
+} from "vue";
 import {fromNow} from "@/js/format.js";
 import {listAni} from "@/js/http.js";
 import AniCardView from "@/view/home/AniCardView.vue";
@@ -91,6 +116,9 @@ const flatFilterList = ref([])
 const releaseDateList = ref([])
 
 const loading = ref(true)
+const scrollbarRef = ref()
+const currentPage = ref(1)
+const PAGE_SIZE = 60
 const viewComponent = computed(() => props.viewMode === 'cover' ? AniCoverView : AniCardView)
 const gridClass = computed(() => [
   'grid-container',
@@ -121,26 +149,92 @@ const openDialog = (name, payload) => {
   void nextTick(showWhenReady)
 }
 
-const changeFilterList = (text = '') => {
+const decorateItem = item => ({
+  ...item,
+  lastDownloadFormat: fromNow(item['lastDownloadTime'])
+})
+
+const filteredWeekEntries = computed(() =>
+    filterList.value.flatMap((weekItem, weekIndex) =>
+        weekItem.items.map(item => ({
+          groupKey: weekItem.groupKey || String(weekIndex) + '-' + weekItem.weekLabel,
+          weekLabel: weekItem.weekLabel,
+          item
+        }))
+    )
+)
+
+const totalCount = computed(() =>
+    showWeek.value ? filteredWeekEntries.value.length : flatFilterList.value.length
+)
+const pageCount = computed(() => Math.max(1, Math.ceil(totalCount.value / PAGE_SIZE)))
+const pageOffset = computed(() => (currentPage.value - 1) * PAGE_SIZE)
+const rangeStart = computed(() => totalCount.value ? pageOffset.value + 1 : 0)
+const rangeEnd = computed(() =>
+    totalCount.value ? Math.min(pageOffset.value + PAGE_SIZE, totalCount.value) : 0
+)
+
+const visibleFlatFilterList = computed(() =>
+    flatFilterList.value
+        .slice(pageOffset.value, pageOffset.value + PAGE_SIZE)
+        .map(decorateItem)
+)
+
+const visibleWeekList = computed(() => {
+  const groups = new Map()
+  const pageEntries = filteredWeekEntries.value
+      .slice(pageOffset.value, pageOffset.value + PAGE_SIZE)
+  for (const entry of pageEntries) {
+    let group = groups.get(entry.groupKey)
+    if (!group) {
+      group = {
+        groupKey: entry.groupKey,
+        weekLabel: entry.weekLabel,
+        items: []
+      }
+      groups.set(entry.groupKey, group)
+    }
+    group.items.push(decorateItem(entry.item))
+  }
+  return [...groups.values()]
+})
+
+const scrollToTop = async () => {
+  await nextTick()
+  scrollbarRef.value?.setScrollTop?.(0)
+}
+
+const clampCurrentPage = ({scrollWhenClamped = false} = {}) => {
+  const nextPage = Math.min(currentPage.value, pageCount.value)
+  if (nextPage !== currentPage.value) {
+    currentPage.value = nextPage
+    if (scrollWhenClamped) {
+      void scrollToTop()
+    }
+  }
+}
+
+const changeFilterList = (text = '', {resetPage = true} = {}) => {
   const filter = item => {
-    if (text.length < 1) {
+    const query = String(text ?? '')
+    if (query.length < 1) {
       return true
     }
     let {title, pinyin, pinyinInitials} = item
-    return title.indexOf(text) > -1 ||
-        pinyin.indexOf(text) > -1 ||
-        pinyinInitials.indexOf(text) > -1;
+    return String(title ?? '').indexOf(query) > -1 ||
+        String(pinyin ?? '').indexOf(query) > -1 ||
+        String(pinyinInitials ?? '').indexOf(query) > -1;
   }
+  const itemFilter = typeof props.filter === 'function' ? props.filter : () => true
 
   filterList.value = weekList.value
-      .map(it => {
+      .map((it, index) => {
         const items = it.items
-            .filter(props.filter)
+            .filter(itemFilter)
             .filter(filter)
-            .map(it => {
-              return {...it, lastDownloadFormat: fromNow(it['lastDownloadTime'])}
-            });
+        const groupKey = String(index) + '-' + it.weekLabel
         return {
+          groupKey,
           weekLabel: it.weekLabel,
           items
         }
@@ -151,47 +245,68 @@ const changeFilterList = (text = '') => {
   flatFilterList.value = Array.from(filterList.value)
       .flatMap(it => it.items)
       .sort((a, b) => a.sort - b.sort)
+
+  if (resetPage) {
+    currentPage.value = 1
+    void scrollToTop()
+  } else {
+    clampCurrentPage({scrollWhenClamped: true})
+  }
 }
 
 let listAbortController
 let listGeneration = 0
 
-const getList = () => {
+const getList = ({background = false} = {}) => {
   listAbortController?.abort()
   const controller = new AbortController()
   listAbortController = controller
   const generation = ++listGeneration
-  loading.value = true
+  if (!background) {
+    loading.value = true
+  }
 
   return listAni({signal: controller.signal})
       .then(res => {
         if (generation !== listGeneration) return null
         let data = res.data
-        weekList.value = data.weekList
-        releaseDateList.value = data.releaseDateList
+        weekList.value = data.weekList || []
+        releaseDateList.value = data.releaseDateList || []
         emit('loaded', {
           releaseDateList: releaseDateList.value,
           total: weekList.value.reduce((total, week) => total + week.items.length, 0),
           refresh: data.refresh
         })
 
-        changeFilterList(props.title)
+        changeFilterList(props.title, {resetPage: false})
         return data
       })
-      .catch(error => {
-        if (error?.code !== 'REQUEST_ABORTED') {
-          return null
-        }
-        return null
-      })
+      .catch(() => null)
       .finally(() => {
-        if (generation === listGeneration) loading.value = false
+        if (generation === listGeneration && !background) loading.value = false
       })
 }
+
+const handlePageChange = page => {
+  currentPage.value = Math.max(1, Math.min(page, pageCount.value))
+  void scrollToTop()
+}
+
+watch(() => props.title, value => changeFilterList(value))
+watch(() => props.filter, () => changeFilterList(props.title))
+watch(showWeek, () => changeFilterList(props.title))
+watch(() => props.viewMode, () => void scrollToTop())
 
 onMounted(() => {
   window.$reLoadList = getList
   void getList()
+})
+
+onDeactivated(() => {
+  listGeneration++
+  listAbortController?.abort()
+  listAbortController = undefined
+  loading.value = false
 })
 
 onBeforeUnmount(() => {
@@ -216,19 +331,42 @@ defineExpose({
 }
 
 .list-container {
-  height: 100%;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
-.hide-scrollbar {
+.subscription-scrollbar {
   flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 
 .list-content {
   margin: 0;
+  min-width: 0;
+}
+
+.subscription-pagination {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding-top: 8px;
+}
+
+.subscription-pagination-summary {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 
 .list-week-title {

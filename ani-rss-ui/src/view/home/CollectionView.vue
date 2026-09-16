@@ -5,7 +5,7 @@
              center
              title="添加合集">
     <div v-loading="loading" style="height: 500px;">
-      <el-scrollbar style="padding: 0 12px;">
+      <el-scrollbar style="padding: 0 12px;" always>
         <div>
           <el-form @submit.prevent label-width="auto">
             <el-form-item label="番剧名称">

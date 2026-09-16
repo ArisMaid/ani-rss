@@ -57,7 +57,7 @@
           </div>
         </div>
         <el-empty v-if="!activeTorrentsInfos.length" :description="emptyDescription" class="torrents-empty"/>
-        <el-scrollbar v-else class="torrents-scrollbar">
+        <el-scrollbar v-else class="torrents-scrollbar" always>
           <el-card v-for="torrentsInfo in activeTorrentsInfos"
                    :key="torrentsInfo.hash || torrentsInfo.id || torrentsInfo.name"
                    shadow="never"

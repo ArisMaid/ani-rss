@@ -113,11 +113,38 @@ const fixtureItem = {
   enable: true,
   currentEpisodeNumber: 1,
   totalEpisodeNumber: 12,
+  offset: 0,
   releaseDate: '2026-09-07',
   lastDownloadTime: 0,
   cover: '',
+  url: '',
   subgroup: 'W7 Fixture',
   standbyRssList: [],
+  match: [],
+  exclude: [],
+  customTags: [],
+  customPriorityKeywords: [],
+  themoviedbName: '',
+  tmdb: null,
+  customDownloadPathTemplate: '',
+  customEpisodeStr: '',
+  customEpisodeGroupIndex: 0,
+  customDownloadPath: false,
+  customUploadPathTarget: '',
+  customCompletedPathTemplate: '',
+  customRenameTemplate: '',
+  customTagsEnable: false,
+  customPriorityKeywordsEnable: false,
+  customEpisode: false,
+  customUploadEnable: false,
+  customCompleted: false,
+  customRenameTemplateEnable: false,
+  globalExclude: false,
+  omit: false,
+  downloadNew: false,
+  upload: false,
+  message: false,
+  completed: false,
   score: 8.5,
   bgmUrl: 'https://bgm.tv/subject/10000',
   season: 1,
@@ -126,6 +153,28 @@ const fixtureItem = {
   pinyin: 'w7',
   pinyinInitials: 'w',
   procrastinating: false
+}
+
+const fixtureCount = Math.max(1, Number(process.env.W7_FIXTURE_COUNT || 1))
+const fixtureWeekList = () => {
+  if (fixtureCount === 1) {
+    return [{weekLabel: '星期一', items: [fixtureItem]}]
+  }
+
+  const weekLabels = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日']
+  const weeks = weekLabels.map(weekLabel => ({weekLabel, items: []}))
+  for (let index = 0; index < fixtureCount; index++) {
+    const item = {
+      ...fixtureItem,
+      id: `w7-fixture-subscription-${index + 1}`,
+      title: `W7 合成订阅 ${index + 1}`,
+      pinyin: `w7-${index + 1}`,
+      pinyinInitials: `w${index + 1}`,
+      sort: index + 1
+    }
+    weeks[index % weeks.length].items.push(item)
+  }
+  return weeks
 }
 
 const apiResponse = (mode, method, relativePath, url) => {
@@ -145,8 +194,8 @@ const apiResponse = (mode, method, relativePath, url) => {
     return {
       status: 200,
       body: {
-        weekList: [{weekLabel: '星期一', items: [fixtureItem]}],
-        total: 1,
+        weekList: fixtureWeekList(),
+        total: fixtureCount,
         releaseDateList: ['2026-09']
       }
     }

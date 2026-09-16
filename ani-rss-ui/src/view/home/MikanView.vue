@@ -72,7 +72,7 @@
           <el-tabs v-model="activeName" class="week-tabs">
             <el-tab-pane v-for="week in displayWeeks" :key="week.weekLabel"
                          :label="week.weekLabel" :name="week.weekLabel" lazy>
-              <el-scrollbar class="week-pane-scrollbar">
+              <el-scrollbar class="week-pane-scrollbar" always>
                 <div class="collapse-content">
                   <el-collapse accordion @change="collapseChange">
                     <el-collapse-item v-for="it in week.items" :key="it.url" :name="it.url">

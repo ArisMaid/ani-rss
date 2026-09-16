@@ -44,13 +44,6 @@
 }
 
 
-/* 隐藏滚动条 */
-.hide-scrollbar {
-    .el-scrollbar__bar {
-        display: none !important;
-    }
-}
-
 .tabs-center {
     .el-tabs__nav-scroll {
         display: flex;

@@ -20,6 +20,7 @@
 - `corepack pnpm@12.3.4 install --frozen-lockfile`：通过。
 - `corepack pnpm@12.3.4 test -- --run`：5 个测试文件、35/35 通过。
 - `corepack pnpm@12.3.4 run build`：Vite `8.3.0`，生产构建通过。
+- 本机 bundle 检查：static `105,472/48,953 B`；login `203,163/63,228 B`；home `193,412/61,821 B`；subscriptions `192,411/65,173 B`（JS/CSS gzip），`forbiddenModules=[]`；使用唯一输出目录，未清理既有构建产物。
 - Maven 不在本机 PATH，Java 完整回归、SpotBugs、打包和镜像由精确 tag 的 GitHub Actions workflow 执行；不把前端门禁冒充后端门禁。
 
 ## 浏览器修改前后记录
@@ -38,9 +39,11 @@
 
 ## 版本与发布
 
-- 版本：`3.2.32.69`，拟发布 tag：`v3.2.32.69`。
+- 版本：`3.2.32.69`；tag `v3.2.32.69` 精确指向 `38f26a8728f8bfad79d78f1e78089752a036118f`。
 - 版本同步位置：根 POM、应用 POM、UI POM、`ani-rss-ui/src/js/config.js`、`UPDATE.md`。
-- 发布方式：提交精确 commit 后推送 `master`，再推送精确 tag；tag workflow 负责 GitHub Release、`ani-rss.jar`/`ani-rss.exe` 和 GHCR temurin/openj9/arm32v7 镜像。workflow 完成后回填对应 run、附件 SHA-256 和 manifest digest。
+- 远端 build-test：[`35124869519`](https://github.com/ArisMaid/ani-rss/actions/runs/35124869519) 成功；Java/Maven、前端构建与 bundle、W7、N08 门禁均通过。Linux CI bundle 实测为 static `105,473/48,953 B`、login `203,162/63,229 B`、home `193,408/61,822 B`、subscriptions `192,403/65,174 B`（JS/CSS gzip），`forbiddenModules=[]`。
+- 精确 tag workflow：[`35125384219`](https://github.com/ArisMaid/ani-rss/actions/runs/35125384219) 成功，完成 Java 构建、GitHub Release 和 GHCR 镜像发布。Release [`v3.2.32.69`](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.32.69) 为非 draft、非 prerelease；`ani-rss.jar` SHA-256 为 `9e9d251f4516d2763874e223e949923fd7fddfc0e00f3db328d33e6f4c61f785`，`ani-rss.exe` SHA-256 为 `700cdfd5cbdd0474b9f48e62fcaa5abd077e71d2d23c951ab8537571ef99da4a`。
+- GHCR manifest index：temurin `ghcr.io/arismaid/ani-rss:v3.2.32.69` / `sha256:da03c64570399d3140c3cc17bbaf74d8477827c2f932fe4cb46a73755b11b20d`（linux/amd64、linux/arm64）；openj9 `ghcr.io/arismaid/ani-rss:v3.2.32.69-openj9` / `sha256:403b2b21df88f4f386214b156ef7580ae89c54f6aaf098206ce802e4e0e2f2a7`（linux/amd64、linux/arm64）；arm32v7 `ghcr.io/arismaid/ani-rss:v3.2.32.69-arm32v7` / `sha256:37f24c3b98d2ba9e9181695c7c2719d0e811f96054eb93e0b05bde725e000e18`（linux/arm/v7）。Docker Hub 登录按 workflow 条件跳过，因未配置凭据；GHCR 三组镜像均已成功发布。
 
 ## 未验证边界
 

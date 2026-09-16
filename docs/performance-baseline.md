@@ -6,7 +6,7 @@
 
 | 项目 | 实际值 |
 | --- | --- |
-| 版本/标签 | `3.2.32.69` / `v3.2.32.69`（tag workflow 待本轮精确 commit 推送后完成） |
+| 版本/标签 | `3.2.32.69` / `v3.2.32.69`；精确提交 `38f26a8728f8bfad79d78f1e78089752a036118f` |
 | 对照上游 | `v3.2.32` / `b29bd244a082e8f16de57103af388893dbb526f6`；未整体合并 |
 | Node / pnpm | 本机 Node `v24.16.0`，使用 `corepack pnpm@12.3.4` 冻结安装；CI 声明 Node `v26.8.1` |
 | UI 构建 | Vite `8.3.0` 生产构建通过 |
@@ -17,6 +17,27 @@
 使用同一 Windows 主机、同一默认 Playwright 窗口、同一 Chrome for Testing `154.0.8037.0` 和同一份 fixture，修改前后各测 60/300/1000 条。优化后每页挂载卡片均为 60，列表滚动拥有者均为 1；冷/热滚轮各约 10 秒、约 108 个滚轮事件，未发现 page error。优化后 DOM 节点数（`.subscription-page *`）为 1,655/1,655/1,657；基线旧版本卡片 DOM 为 60/300/1000，滚动条带 `hide-scrollbar`。详细原始观察、滚动高度和分页/筛选结果见 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md`](../FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md)。
 
 本次没有采集 Performance 面板 FPS、长任务、Layout/Paint，也没有把空 cover fixture 当作真实图片冷网；真实后台刷新、Maven、外部 SSO、下载器和 Docker/Linux engine 仍待远端或真实环境验证。
+
+### 当前发布门禁与产物
+
+[`build-test` run 35124869519](https://github.com/ArisMaid/ani-rss/actions/runs/35124869519) 与 [`v3.2.32.69` tag build run 35125384219](https://github.com/ArisMaid/ani-rss/actions/runs/35125384219) 均成功。Linux CI bundle gate 实测如下，`forbiddenModules=[]`：
+
+| 场景 | JS gzip | CSS gzip | 预算结果 |
+| --- | ---: | ---: | --- |
+| `staticEntryClosure` | 105,473 B | 48,953 B | 通过 |
+| login | 203,162 B | 63,229 B | 通过 |
+| home | 193,408 B | 61,822 B | 通过 |
+| subscriptions | 192,403 B | 65,174 B | 通过 |
+
+Release [`v3.2.32.69`](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.32.69) 已发布且为非 draft、非 prerelease。`ani-rss.jar` SHA-256 为 `9e9d251f4516d2763874e223e949923fd7fddfc0e00f3db328d33e6f4c61f785`，`ani-rss.exe` SHA-256 为 `700cdfd5cbdd0474b9f48e62fcaa5abd077e71d2d23c951ab8537571ef99da4a`。
+
+| 镜像 tag | manifest index digest | 平台 |
+| --- | --- | --- |
+| `ghcr.io/arismaid/ani-rss:v3.2.32.69` | `sha256:da03c64570399d3140c3cc17bbaf74d8477827c2f932fe4cb46a73755b11b20d` | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/arismaid/ani-rss:v3.2.32.69-openj9` | `sha256:403b2b21df88f4f386214b156ef7580ae89c54f6aaf098206ce802e4e0e2f2a7` | `linux/amd64`, `linux/arm64` |
+| `ghcr.io/arismaid/ani-rss:v3.2.32.69-arm32v7` | `sha256:37f24c3b98d2ba9e9181695c7c2719d0e811f96054eb93e0b05bde725e000e18` | `linux/arm/v7` |
+
+Docker Hub 登录因未配置凭据按 workflow 条件跳过；GHCR 三组镜像均已成功发布。
 
 ## 当前发布单元：v3.2.28.68
 

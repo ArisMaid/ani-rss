@@ -1,6 +1,6 @@
 # Fork 上游同步规则
 
-本 fork 当前发布版本为 `3.2.32.69`（拟由 tag `v3.2.32.69` 发布；上一版 `v3.2.28.68` 精确指向 `2587e9bcae147022c7a4b8d2c03c715f83e33bf3`），本轮对照上游 `v3.2.32` commit `b29bd244a082e8f16de57103af388893dbb526f6`，严格落实 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_PLAN.md`](FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_PLAN.md)，实施记录见 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md`](FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md)。上游只作为局部行为对照，没有整体合并；认证、Cookie + CSRF、SQLite/ownership、缺集恢复、媒体访问、图片缓存和既有构建合同继续以 fork 版本为准。
+本 fork 当前发布版本为 `3.2.32.69`（tag `v3.2.32.69` 精确指向 `38f26a8728f8bfad79d78f1e78089752a036118f`；上一版 `v3.2.28.68` 精确指向 `2587e9bcae147022c7a4b8d2c03c715f83e33bf3`），本轮对照上游 `v3.2.32` commit `b29bd244a082e8f16de57103af388893dbb526f6`，严格落实 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_PLAN.md`](FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_PLAN.md)，实施记录见 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md`](FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md)。上游只作为局部行为对照，没有整体合并；认证、Cookie + CSRF、SQLite/ownership、缺集恢复、媒体访问、图片缓存和既有构建合同继续以 fork 版本为准。
 
 同步时必须保留以下本地合同：
 
@@ -31,7 +31,7 @@
 - S04 刷新生命周期：订阅列表刷新使用单一约 5 秒客户端跟踪链和 120 秒累计等待预算；后台刷新不覆盖已有列表 loading/滚动，deactivated 只停止客户端 timer 并使旧 generation 失效，不取消后端任务；重新激活后重取一次并在仍运行时恢复单链轮询，超时提示后台可能仍在刷新。
 - 保留合同：`.68` 的公共/私有图片加载、`SafeImageView` 生命周期、缓存失败边界、懒路由和 hash 静态缓存未被上游覆盖；TorrentUtil、WebFilter 新增测试分别覆盖缓存优先级和 API/静态限制语义。
 - 本地证据：前端 5 个测试文件 35/35；`corepack pnpm@12.3.4 install --frozen-lockfile`；Vite `8.3.0` 生产构建成功。真实浏览器使用同一 Playwright Chrome for Testing `154.0.8037.0` 与隔离 fixture，对 v3.2.28.68 基线和当前工作树各测 60/300/1000 条，记录见 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md`](FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md)。未声称 FPS；Performance 长任务、真实图片冷网、真实刷新后端、Maven 和外部 SSO 仍需远端/真实环境验证。
-- 发布：版本按规则定为 `3.2.32.69`；当前工作树在本记录写入时尚未创建精确 tag，待提交后由 `v3.2.32.69` tag workflow 完成 GitHub Release 和 GHCR 镜像，并回填 run、附件哈希及 manifest digest。
+- 发布：版本按规则定为 `3.2.32.69`；[`build-test` run 35124869519](https://github.com/ArisMaid/ani-rss/actions/runs/35124869519) 与 [`v3.2.32.69` tag workflow run 35125384219](https://github.com/ArisMaid/ani-rss/actions/runs/35125384219) 均成功。[GitHub Release v3.2.32.69](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.32.69) 为非 draft、非 prerelease；`ani-rss.jar` SHA-256 为 `9e9d251f4516d2763874e223e949923fd7fddfc0e00f3db328d33e6f4c61f785`，`ani-rss.exe` SHA-256 为 `700cdfd5cbdd0474b9f48e62fcaa5abd077e71d2d23c951ab8537571ef99da4a`。GHCR temurin/openj9/arm32v7 manifest digest 分别为 `sha256:da03c64570399d3140c3cc17bbaf74d8477827c2f932fe4cb46a73755b11b20d`、`sha256:403b2b21df88f4f386214b156ef7580ae89c54f6aaf098206ce802e4e0e2f2a7`、`sha256:37f24c3b98d2ba9e9181695c7c2719d0e811f96054eb93e0b05bde725e000e18`；Docker Hub 因未配置凭据按 workflow 条件跳过。
 
 ## 同步审计步骤
 

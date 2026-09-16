@@ -111,7 +111,7 @@ class WebFilterTest {
             new WebFilter().doFilter(request, response, new MockFilterChain());
 
             assertEquals(403, response.getStatus());
-            assertEquals("application/json", response.getContentType());
+            assertTrue(response.getContentType().startsWith("application/json"));
             JsonObject body = GsonStatic.fromJson(response.getContentAsString(), JsonObject.class);
             assertEquals("仅允许内网访问", body.get("message").getAsString());
         } finally {

@@ -25,7 +25,7 @@
 - 本地前端：35/35 通过；冻结锁文件安装通过；生产 UI 构建和包体门禁通过。
 - 新增三个必要的解析合同检查：精确原始 info hash、纯 v2 文件树、hybrid 双磁力与 v1 身份。用于防止解析器替换破坏下载归属，未新增大范围测试体系。
 - 包体：模态确认与组件补丁引入小幅增量，按实际生产构建审查预算；继续强制 forbiddenModules 与懒路由边界。
-- Java 本地无 Maven，后端、SpotBugs、W7/N08 由提交后的远端 build-test 验证，发布前必须通过。
+- Java 本地无 Maven；[build-test run 35801183296](https://github.com/ArisMaid/ani-rss/actions/runs/35801183296) 在精确提交 `e1268251fcf34f8f1ee249a8591bea8ac73dd8df` 上通过 Maven verify、SpotBugs、前端检查和 W7/N08 浏览器冒烟。此前两个失败的检查已修复并重跑，不作为最终通过证据。
 - 真实账号、下载器与外部磁力 swarm 未连接；原生平台能力声明基于所打包的库，不等同多平台真实解析验收。
 
 ## 兼容与维护
@@ -34,4 +34,6 @@
 
 ## 发布
 
-待远端验证通过后，对精确提交打 v3.2.37.70，使用现有 tag workflow 发布 Release 和 GHCR temurin/openj9/arm32v7 镜像。构建结果随后回填。
+已对精确提交 `e1268251fcf34f8f1ee249a8591bea8ac73dd8df` 打 tag `v3.2.37.70`。[tag build run 35835491553](https://github.com/ArisMaid/ani-rss/actions/runs/35835491553) 成功；[GitHub Release](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.37.70) 为公开正式版，附件 `ani-rss.jar`（SHA-256 `31ed479a3a16317bfe294f58fbf6f72d2ddc86983fabd820f65a589fec20a418`）与 `ani-rss.exe`（SHA-256 `5173a740afccbc3092dfeb3d8acbf5adf863109034f573eddee2f087b35de70e`）已上传。
+
+GHCR 版本镜像已核对：temurin `ghcr.io/arismaid/ani-rss:v3.2.37.70`（linux/amd64、linux/arm64，manifest digest `sha256:a3eccf5d8fce6560b7fb3fb8e80bd04f3b647abe2c8d986d9e2c667007d6b0a4`），openj9 `:v3.2.37.70-openj9`（amd64、arm64，`sha256:a2fc5cf9e9c6c8804cc4e21b00e6b3fbbf9b827c5e10f44ba5cb2e4cb5f157d9`），arm32v7 `:v3.2.37.70-arm32v7`（linux/arm/v7，`sha256:24083f884b5f5ddf7101d6be1f63a629aab540b0743199af6bafeac888039500`）。Docker Hub 因未配置凭据由工作流跳过。

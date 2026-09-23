@@ -7,7 +7,7 @@ import cn.hutool.core.io.FileUtil;
 import cn.hutool.crypto.SecureUtil;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-import org.eclipse.bittorrent.TorrentFile;
+import ani.rss.util.other.TorrentMetadata;
 
 import java.io.IOException;
 import java.io.ByteArrayInputStream;
@@ -92,9 +92,7 @@ public class UploadService {
         try {
             Files.write(temporary, content, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
             try {
-                synchronized (TorrentFile.class) {
-                    new TorrentFile(temporary.toFile());
-                }
+                TorrentMetadata.from(temporary.toFile());
             } catch (RuntimeException | IOException e) {
                 throw new IllegalArgumentException("upload is not a valid torrent file", e);
             }

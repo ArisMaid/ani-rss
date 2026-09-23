@@ -12,7 +12,7 @@ import ani.rss.util.other.TorrentUtil;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.bittorrent.TorrentFile;
+import ani.rss.util.other.TorrentMetadata;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
@@ -165,9 +165,7 @@ public class OwnershipMigrationService {
             }
             String extension = FileUtil.extName(file);
             if ("torrent".equalsIgnoreCase(extension)) {
-                synchronized (TorrentFile.class) {
-                    return infoHash.equalsIgnoreCase(new TorrentFile(file).getHexHash());
-                }
+                return infoHash.equalsIgnoreCase(TorrentMetadata.from(file).getHash());
             }
             if ("txt".equalsIgnoreCase(extension)) {
                 String value = Files.readString(file.toPath(), StandardCharsets.UTF_8).trim();

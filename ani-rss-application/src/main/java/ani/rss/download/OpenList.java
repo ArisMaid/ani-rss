@@ -50,6 +50,7 @@ public class OpenList implements BaseDownload {
 
     @Override
     public DownloaderResult<Void> connectResult(Boolean test, Config config) {
+        log.warn("OpenList 已停止上游支持，请迁移到受支持的下载器；现有任务仍保留兼容处理");
         this.config = ani.rss.util.other.ConfigUtil.copy(config);
         String host = config.getDownloadToolHost();
         String password = config.getDownloadToolPassword();

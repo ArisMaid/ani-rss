@@ -13,13 +13,9 @@
               刷新
             </el-button>
           </el-tooltip>
-          <PopconfirmView title="清空当前日志?" @confirm="clearLogs">
-            <template #reference>
-              <el-button :loading="clearLoading" class="auto-button" type="danger" icon="Delete">
+          <el-button @click="confirmclearLogs" :loading="clearLoading" class="auto-button" type="danger" icon="Delete">
                 清空
               </el-button>
-            </template>
-          </PopconfirmView>
         </div>
       </template>
     </PageHeaderView>
@@ -103,9 +99,10 @@
 </template>
 
 <script setup>
+import {ElMessageBox} from "element-plus";
 import {computed, nextTick, onActivated, ref} from "vue";
 import {Delete, Download as DownloadIcon, Refresh, Search} from "@element-plus/icons-vue";
-import PopconfirmView from "@/view/custom/PopconfirmView.vue";
+
 import PageHeaderView from "@/view/custom/PageHeaderView.vue";
 import * as http from "@/js/http.js";
 import {formatTime} from "@/js/format.js";
@@ -200,6 +197,14 @@ const downloadLogs = () => {
 }
 
 onActivated(getLogs)
+const confirmclearLogs = async () => {
+  try {
+    await ElMessageBox.confirm('日志清空后无法恢复，是否继续？', '清空日志', {
+      confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning'
+    })
+  } catch { return }
+  return clearLogs()
+}
 </script>
 
 <style scoped>

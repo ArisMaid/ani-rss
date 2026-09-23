@@ -1,5 +1,9 @@
 # Fork 上游同步规则
 
+## v3.2.37.70 发布准备
+
+本轮从 v3.2.32.69 按能力同步上游 v3.2.37，详情见 [同步记录](UPSTREAM_V3.2.37_SYNC_REPORT.md)。保留 Java 17、ARM32 与 fork 的备份/认证/归属合同；以下旧版记录保留用于追溯。
+
 本 fork 当前发布版本为 `3.2.32.69`（tag `v3.2.32.69` 精确指向 `38f26a8728f8bfad79d78f1e78089752a036118f`；上一版 `v3.2.28.68` 精确指向 `2587e9bcae147022c7a4b8d2c03c715f83e33bf3`），本轮对照上游 `v3.2.32` commit `b29bd244a082e8f16de57103af388893dbb526f6`，严格落实 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_PLAN.md`](FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_PLAN.md)，实施记录见 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md`](FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md)。上游只作为局部行为对照，没有整体合并；认证、Cookie + CSRF、SQLite/ownership、缺集恢复、媒体访问、图片缓存和既有构建合同继续以 fork 版本为准。
 
 同步时必须保留以下本地合同：

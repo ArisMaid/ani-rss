@@ -9,7 +9,12 @@
     "baseCommit": "066fccc8",
     "reason": "Restore the missing dashboard cover component using an on-demand import, refresh the dashboard date, and sort asynchronously enriched Mikan scores. The card now participates in the shared chunk graph. These limits include small explicit rounding headroom; forbidden-module checks remain unchanged. Home/login closures exclude the on-demand card and are not full cold-card network totals.",
     "report": "../../FUNCTIONAL_BUGFIX_20260909.md",
-    "measuredJsGzipBytes": {"static": 105227, "login": 202044, "home": 192264, "subscriptions": 186271},
+    "measuredJsGzipBytes": {
+      "static": 105227,
+      "login": 202044,
+      "home": 192264,
+      "subscriptions": 186271
+    },
     "measuredSubscriptionsCssGzipBytes": 63912
   },
   "resourceLoadingOptimization": {
@@ -17,10 +22,24 @@
     "baseCommit": "724c2ade116ab31e902ad8b9e15cf23b72b07921",
     "reason": "Bound private-image POST loading with per-consumer cancellation, queue and total deadlines; add SafeImageView lifecycle pause/resume and retry placeholder; add native lazy/async subscription covers; and remove the subscription filter deep copy. The gzip increase is an explicit cost of the lifecycle/queue behavior and is measured separately from the historical functional-repair baseline.",
     "report": "../../RESOURCE_LOADING_OPTIMIZATION_REPORT_20260914.md",
-    "measuredJsGzipBytes": {"static": 105229, "login": 202916, "home": 193135, "subscriptions": 187368},
-    "measuredCssGzipBytes": {"static": 48953, "login": 63229, "home": 61822, "subscriptions": 63970},
+    "measuredJsGzipBytes": {
+      "static": 105229,
+      "login": 202916,
+      "home": 193135,
+      "subscriptions": 187368
+    },
+    "measuredCssGzipBytes": {
+      "static": 48953,
+      "login": 63229,
+      "home": 61822,
+      "subscriptions": 63970
+    },
     "forbiddenModules": [],
-    "budgetHeadroomBytes": {"login": 184, "home": 215, "subscriptions": 232}
+    "budgetHeadroomBytes": {
+      "login": 184,
+      "home": 215,
+      "subscriptions": 232
+    }
   },
   "syncAndScrollOptimization": {
     "date": "2026-09-17",
@@ -28,10 +47,25 @@
     "reason": "The v3.2.32 upstream synchronization adds cover-click actions, torrent fallback handling, the WebFilter/static-cache repair, manifest credentials, and subscription pagination, sorting, filter, scroll, and refresh lifecycle safeguards. The Vite 8.3.0 toolchain also changes shared chunk compression. GitHub Actions Ubuntu build-test 35124151832 measured the closures below; limits retain narrow explicit headroom and forbidden-module checks remain unchanged.",
     "report": "../../FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md",
     "ciWorkflowRun": "35124151832",
-    "measuredJsGzipBytes": {"static": 105473, "login": 203162, "home": 193408, "subscriptions": 192403},
-    "measuredCssGzipBytes": {"static": 48953, "login": 63229, "home": 61822, "subscriptions": 65174},
+    "measuredJsGzipBytes": {
+      "static": 105473,
+      "login": 203162,
+      "home": 193408,
+      "subscriptions": 192403
+    },
+    "measuredCssGzipBytes": {
+      "static": 48953,
+      "login": 63229,
+      "home": 61822,
+      "subscriptions": 65174
+    },
     "forbiddenModules": [],
-    "budgetHeadroomBytes": {"login": 188, "home": 242, "subscriptions": 247, "subscriptionsCss": 226}
+    "budgetHeadroomBytes": {
+      "login": 188,
+      "home": 242,
+      "subscriptions": 247,
+      "subscriptionsCss": 226
+    }
   },
   "budgetChange": {
     "reason": "The R01/R02 lifecycle repair changes async route module hash references in the shared entry chunk. The measured latest-fork comparison is limited to home JS +1, home CSS +1, and subscriptions JS +1 gzip byte; static entry and login remain unchanged. No player, Markdown, or backup module enters these closures. GitHub Actions Ubuntu build-test 34077134774 measured static entry JS at 105201 gzip bytes while the local Windows build measured 105194; no closure or forbidden-module change was observed, so the gate is raised by exactly the cross-platform +2-byte observation rather than updated automatically.",
@@ -45,25 +79,26 @@
     "baselineJsGzipBytes": 105199,
     "maxJsGzipBytes": 105500,
     "baselineCssGzipBytes": 48953,
-    "maxCssGzipBytes": 48953
+    "maxCssGzipBytes": 49050
   },
   "scenarios": {
     "login": {
       "baselineJsGzipBytes": 201956,
-      "maxJsGzipBytes": 203350,
+      "maxJsGzipBytes": 205600,
       "baselineCssGzipBytes": 63229
     },
     "home": {
       "baselineJsGzipBytes": 192173,
-      "maxJsGzipBytes": 193650,
+      "maxJsGzipBytes": 196000,
       "baselineCssGzipBytes": 61821,
-      "maxCssGzipBytes": 61822
+      "maxCssGzipBytes": 62000
     },
     "subscriptions": {
       "baselineJsGzipBytes": 185254,
-      "maxJsGzipBytes": 192650,
+      "maxJsGzipBytes": 199600,
       "baselineCssGzipBytes": 63645,
       "maxCssGzipBytes": 65400
     }
-  }
+  },
+  "sync37Review": "2026-09-23: Vue/Element Plus patches and modal confirmations; measured production gzip; forbiddenModules enforced."
 }

@@ -66,6 +66,7 @@ public class CustomExceptionHandler {
             MethodArgumentTypeMismatchException.class
     })
     public Object malformedRequest(Exception e, HttpServletRequest request) {
+        log.warn("malformed request method:{} type:{}", request == null ? "" : request.getMethod(), e.getClass().getSimpleName());
         if (isV2(request)) {
             return problem(HttpStatus.BAD_REQUEST, "MALFORMED_REQUEST", "request syntax is invalid");
         }
@@ -94,6 +95,7 @@ public class CustomExceptionHandler {
             IllegalStateException.class
     })
     public Object exception(Exception e, HttpServletRequest request) {
+        log.warn("invalid request method:{} type:{}", request == null ? "" : request.getMethod(), e.getClass().getSimpleName());
         if (isV2(request)) {
             HttpStatus status = e instanceof IllegalArgumentException
                     ? HttpStatus.BAD_REQUEST : HttpStatus.CONFLICT;
@@ -106,6 +108,7 @@ public class CustomExceptionHandler {
 
     @ExceptionHandler(ResultException.class)
     public Object resultException(ResultException e, HttpServletRequest request) {
+        log.warn("business request rejected method:{} code:{}", request == null ? "" : request.getMethod(), e.getResult().getCode());
         if (isV2(request)) {
             int code = e.getResult().getCode();
             HttpStatus status = code == ResultCode.HTTP_FORBIDDEN
@@ -129,6 +132,7 @@ public class CustomExceptionHandler {
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     public Object methodNotAllowed(HttpServletRequest request) {
+        log.warn("request method not allowed method:{}", request == null ? "" : request.getMethod());
         if (isV2(request)) {
             return problem(HttpStatus.METHOD_NOT_ALLOWED, "METHOD_NOT_ALLOWED", "method not allowed");
         }

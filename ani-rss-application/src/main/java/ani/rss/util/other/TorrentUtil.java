@@ -22,7 +22,6 @@ import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.extra.spring.SpringUtil;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.bittorrent.TorrentFile;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -565,8 +564,7 @@ public class TorrentUtil {
             return FileUtil.readUtf8String(file);
         }
         try {
-            TorrentFile torrentFile = new TorrentFile(file);
-            hexHash = torrentFile.getHexHash();
+            return TorrentMetadata.from(file).getMagnetUri();
         } catch (Exception e) {
             log.error("转换种子为磁力链接时出现错误 {}", FileUtils.getAbsolutePath(file));
             log.error(e.getMessage(), e);
@@ -606,13 +604,15 @@ public class TorrentUtil {
         try {
             String extension = FileUtil.extName(file);
             if ("torrent".equalsIgnoreCase(extension)) {
-                synchronized (TorrentFile.class) {
-                    return new TorrentFile(file).getHexHash().toLowerCase();
-                }
+                return TorrentMetadata.from(file).getHash();
             }
             if ("txt".equalsIgnoreCase(extension)) {
                 String magnet = FileUtil.readUtf8String(file);
                 String hash = ReUtil.get("(?i)btih:([a-z0-9]+)", magnet, 1);
+                if (StrUtil.isBlank(hash)) {
+                    String v2 = ReUtil.get("(?i)btmh:1220([a-f0-9]{64})", magnet, 1);
+                    if (v2 != null) return v2.substring(0, 40).toLowerCase(java.util.Locale.ROOT);
+                }
                 if (StrUtil.isNotBlank(hash)) {
                     return hash.toLowerCase();
                 }

@@ -52,14 +52,10 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <PopconfirmView title="立即刷新全部订阅?" @confirm="refreshAni">
-            <template #reference>
-              <el-button aria-label="刷新" :loading="refreshLoading" :disabled="refreshLoading"
+          <el-button @click="confirmrefreshAni" aria-label="刷新" :loading="refreshLoading" :disabled="refreshLoading"
                          class="auto-button" icon="Refresh">
                 刷新
               </el-button>
-            </template>
-          </PopconfirmView>
           <el-button aria-label="管理" @click="openDialog('manage')" class="auto-button" icon="Fold">
             管理
           </el-button>
@@ -86,10 +82,10 @@ import {
   reactive,
   ref
 } from "vue";
-import {ElMessage} from "element-plus";
+import {ElMessage, ElMessageBox} from "element-plus";
 import {useLocalStorage} from "@vueuse/core";
 import SubscriptionListView from "@/view/home/SubscriptionListView.vue";
-import PopconfirmView from "@/view/custom/PopconfirmView.vue";
+
 import PageHeaderView from "@/view/custom/PageHeaderView.vue";
 import {subscriptionViewMode} from "@/js/global.js";
 import * as http from "@/js/http.js";
@@ -288,6 +284,14 @@ onDeactivated(() => {
 })
 
 onBeforeUnmount(stopRefreshPolling)
+const confirmrefreshAni = async () => {
+  try {
+    await ElMessageBox.confirm('将立即刷新全部订阅，是否继续？', '刷新全部订阅', {
+      confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning'
+    })
+  } catch { return }
+  return refreshAni()
+}
 </script>
 
 <style scoped>

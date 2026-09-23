@@ -5,7 +5,7 @@
     <parent>
         <groupId>ani.rss</groupId>
         <artifactId>ani-rss</artifactId>
-        <version>3.2.32.69</version>
+        <version>3.2.37.70</version>
     </parent>
 
     <artifactId>ani-rss-application</artifactId>
@@ -30,9 +30,39 @@
             <id>tmdb-api</id>
             <url>https://raw.github.com/wushuo894/tmdb-api/mvn-repo</url>
         </repository>
+        <repository>
+            <id>frostwire-maven</id>
+            <url>https://dl.frostwire.com/maven</url>
+        </repository>
     </repositories>
 
     <dependencies>
+        <dependency>
+            <groupId>com.frostwire</groupId>
+            <artifactId>jlibtorrent</artifactId>
+            <version>2.0.12.9</version>
+        </dependency>
+        <dependency>
+            <groupId>com.frostwire</groupId>
+            <artifactId>jlibtorrent-linux-arm64</artifactId>
+            <version>2.0.12.9</version>
+        </dependency>
+        <dependency>
+            <groupId>com.frostwire</groupId>
+            <artifactId>jlibtorrent-linux-x86_64</artifactId>
+            <version>2.0.12.9</version>
+        </dependency>
+        <dependency>
+            <groupId>com.frostwire</groupId>
+            <artifactId>jlibtorrent-macosx-arm64</artifactId>
+            <version>2.0.12.9</version>
+        </dependency>
+        <dependency>
+            <groupId>com.frostwire</groupId>
+            <artifactId>jlibtorrent-windows</artifactId>
+            <version>2.0.12.9</version>
+        </dependency>
+
         <dependency>
             <groupId>org.mnode.ical4j</groupId>
             <artifactId>ical4j</artifactId>
@@ -46,8 +76,8 @@
             <artifactId>thymeleaf</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.eclipse</groupId>
-            <artifactId>bittorrent</artifactId>
+            <groupId>com.dampcake</groupId>
+            <artifactId>bencode</artifactId>
         </dependency>
         <dependency>
             <groupId>org.xerial</groupId>

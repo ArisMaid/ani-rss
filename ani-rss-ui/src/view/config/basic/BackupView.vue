@@ -1,4 +1,16 @@
 <template>
+  <SettingsItem v-if="props.config" label="自动备份配置">
+    <div>
+      <el-switch v-model="props.config['configBackup']"/>
+      <br>
+      <el-input-number v-model="props.config['configBackupDay']" :min="1">
+        <template #suffix>
+          <span>天</span>
+        </template>
+      </el-input-number>
+    </div>
+  </SettingsItem>
+
   <div class="content flex">
     <el-button bg @click="exportConfig" icon="Upload">导出设置</el-button>
     <el-button bg @click="importConfig" icon="Download">导入设置</el-button>
@@ -29,6 +41,7 @@
   </div>
 </template>
 <script setup>
+import SettingsItem from "@/view/custom/SettingsItem.vue";
 import {ElMessage} from "element-plus";
 import {computed, onBeforeUnmount, onMounted, ref} from "vue";
 import UploadView from "@/view/custom/UploadView.vue";

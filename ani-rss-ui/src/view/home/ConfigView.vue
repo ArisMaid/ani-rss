@@ -69,7 +69,7 @@ const tabs = [
   {name: 'basic', label: '基本设置', description: '订阅、命名、刮削与备份'},
   {name: 'exclude', label: '全局排除', description: '统一排除不需要的资源'},
   {name: 'proxy', label: '代理设置', description: '网络代理与连接配置'},
-  {name: 'login', label: '登录设置', description: '账号与访问安全'},
+  {name: 'login', label: '安全', description: '账号与访问安全'},
   {name: 'notification', label: '通知', description: '消息渠道与事件通知'},
   {name: 'afdian', label: '捐赠', description: '支持项目持续维护'},
   {name: 'about', label: '关于', description: '版本信息与项目链接'}

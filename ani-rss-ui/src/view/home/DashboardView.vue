@@ -352,10 +352,12 @@ const schedulePolling = () => {
   }, 5000)
 }
 
+
 const startPolling = () => {
+  if (pollingActive) return
   pollingActive = true
   pollGeneration++
-  void loadTorrents().catch(() => {}).finally(schedulePolling)
+  void loadAll().finally(schedulePolling)
 }
 
 const stopPolling = () => {
@@ -384,7 +386,7 @@ const handleVisibilityChange = () => {
 
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
-  void loadAll()
+  startPolling()
 })
 
 const openDialog = async (name, payload) => {

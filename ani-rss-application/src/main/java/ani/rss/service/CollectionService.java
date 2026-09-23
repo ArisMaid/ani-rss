@@ -26,7 +26,8 @@ import cn.hutool.core.util.ObjectUtil;
 import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.bittorrent.TorrentFile;
+import ani.rss.util.other.TorrentMetadata;
+import ani.rss.util.other.MagnetTorrentUtil;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
@@ -46,11 +47,10 @@ public class CollectionService {
      */
     public void startCollection(CollectionInfo collectionInfo) {
         String torrent = collectionInfo.getTorrent();
-        File tempFile = FileUtil.createTempFile();
-        Base64.decodeToFile(torrent, tempFile);
-        TorrentFile torrentFile;
+        File tempFile = MagnetTorrentUtil.sourceFile(torrent);
+        TorrentMetadata torrentFile;
         try {
-            torrentFile = new TorrentFile(tempFile);
+            torrentFile = TorrentMetadata.from(tempFile);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -63,7 +63,7 @@ public class CollectionService {
         download(name, tempFile, downloadPath, List.of("ANI-RSS合集下载", subgroup));
 
         TorrentsInfo torrentsInfo = new TorrentsInfo()
-                .setHash(torrentFile.getHexHash());
+                .setHash(torrentFile.getHash());
 
         qBittorrent client = qBittorrentClient();
 
@@ -107,12 +107,12 @@ public class CollectionService {
 
                 if (!reNameMap.containsKey(oldPath)) {
                     if (!reNameMap.containsValue(oldPath) && file.getPriority() > 0) {
-                        client.setFilePriority(torrentFile.getHexHash(), file.getIndex(), 0);
+                        client.setFilePriority(torrentFile.getHash(), file.getIndex(), 0);
                     }
                     continue;
                 }
                 log.info("重命名 {} ==> {}", oldPath, newPath);
-                client.renameFile(torrentFile.getHexHash(), oldPath, newPath);
+                client.renameFile(torrentFile.getHash(), oldPath, newPath);
             }
             files.clear();
             files.addAll(client.files(torrentsInfo, false));
@@ -182,11 +182,10 @@ public class CollectionService {
      */
     public List<Item> preview(CollectionInfo collectionInfo) {
         String torrent = collectionInfo.getTorrent();
-        File tempFile = FileUtil.createTempFile();
-        Base64.decodeToFile(torrent, tempFile);
-        TorrentFile torrentFile;
+        File tempFile = MagnetTorrentUtil.sourceFile(torrent);
+        TorrentMetadata torrentFile;
         try {
-            torrentFile = new TorrentFile(tempFile);
+            torrentFile = TorrentMetadata.from(tempFile);
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

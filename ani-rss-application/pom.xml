@@ -33,6 +33,11 @@
         <repository>
             <id>frostwire-maven</id>
             <url>https://dl.frostwire.com/maven</url>
+            <releases>
+                <!-- This host returns HTML for absent artifacts; never cache it as a POM. -->
+                <checksumPolicy>fail</checksumPolicy>
+            </releases>
+            <snapshots><enabled>false</enabled></snapshots>
         </repository>
     </repositories>
 

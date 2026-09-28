@@ -58,6 +58,10 @@ ani-rss-update.exe
 .pnpm-store
 .playwright-cli/
 
+# Local development plans are not project artifacts.
+/*_PLAN.md
+/*_PLAN_*.md
+
 # Local follow-up-plan verification outputs.
 ani-rss-ui/w7-dist-*/
 output/

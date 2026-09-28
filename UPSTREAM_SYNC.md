@@ -2,9 +2,9 @@
 
 ## v3.2.37.70 发布准备
 
-已从 v3.2.32.69 按能力同步上游 v3.2.37，并发布 v3.2.37.70（tag 精确指向 `e1268251fcf34f8f1ee249a8591bea8ac73dd8df`）；详情见 [同步记录](UPSTREAM_V3.2.37_SYNC_REPORT.md)。保留 Java 17、ARM32 与 fork 的备份/认证/归属合同；以下旧版记录保留用于追溯。
+已从 v3.2.32.69 按能力同步上游 v3.2.37，并发布 v3.2.37.70（tag 精确指向 `e1268251fcf34f8f1ee249a8591bea8ac73dd8df`）。保留 Java 17、ARM32 与 fork 的备份/认证/归属合同；以下旧版记录保留用于追溯。
 
-此前 fork 发布版本为 `3.2.32.69`（tag `v3.2.32.69` 精确指向 `38f26a8728f8bfad79d78f1e78089752a036118f`；再上一版 `v3.2.28.68` 精确指向 `2587e9bcae147022c7a4b8d2c03c715f83e33bf3`），当时对照上游 `v3.2.32` commit `b29bd244a082e8f16de57103af388893dbb526f6`，严格落实 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_PLAN.md`](FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_PLAN.md)，实施记录见 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md`](FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md)。上游只作为局部行为对照，没有整体合并；认证、Cookie + CSRF、SQLite/ownership、缺集恢复、媒体访问、图片缓存和既有构建合同继续以 fork 版本为准。
+此前 fork 发布版本为 `3.2.32.69`（tag `v3.2.32.69` 精确指向 `38f26a8728f8bfad79d78f1e78089752a036118f`；再上一版 `v3.2.28.68` 精确指向 `2587e9bcae147022c7a4b8d2c03c715f83e33bf3`），当时对照上游 `v3.2.32` commit `b29bd244a082e8f16de57103af388893dbb526f6`，按能力局部同步，没有整体合并；认证、Cookie + CSRF、SQLite/ownership、缺集恢复、媒体访问、图片缓存和既有构建合同继续以 fork 版本为准。
 
 同步时必须保留以下本地合同：
 
@@ -20,7 +20,7 @@
 10. 验证和打包流程不得用 `clean` 删除既有输出；发布必须由精确 commit 的 tag 工作流完成。
 11. 版本号前三段跟随上游，第四段本地递增，并同步根 POM、模块 POM、前端默认版本和 `UPDATE.md`。
 
-详细合同见 [`docs/fork-contracts.md`](docs/fork-contracts.md)，测量边界见 [`docs/performance-baseline.md`](docs/performance-baseline.md)，验收结果见 [`docs/verification.md`](docs/verification.md)。
+详细合同见 [`docs/fork-contracts.md`](docs/fork-contracts.md)，历史测量与验收结果以对应 tag、CI 日志及 Release 为准。
 
 ## 3.2.32.69 本轮同步与滚动优化记录
 
@@ -34,7 +34,7 @@
 - S02/S03：分组说明改为文本 + native `title`，移除封面组 tooltip；封面 hover 缩放仅在 fine pointer 下启用。订阅列表和已审查的首页、设置、Mikan、AnimeGarden、AniBT、播放列表、资源弹窗统一使用可发现的 `el-scrollbar always`，移除订阅页 `hide-scrollbar` 和无用全局规则，保持单一滚动拥有者。
 - S04 刷新生命周期：订阅列表刷新使用单一约 5 秒客户端跟踪链和 120 秒累计等待预算；后台刷新不覆盖已有列表 loading/滚动，deactivated 只停止客户端 timer 并使旧 generation 失效，不取消后端任务；重新激活后重取一次并在仍运行时恢复单链轮询，超时提示后台可能仍在刷新。
 - 保留合同：`.68` 的公共/私有图片加载、`SafeImageView` 生命周期、缓存失败边界、懒路由和 hash 静态缓存未被上游覆盖；TorrentUtil、WebFilter 新增测试分别覆盖缓存优先级和 API/静态限制语义。
-- 本地证据：前端 5 个测试文件 35/35；`corepack pnpm@12.3.4 install --frozen-lockfile`；Vite `8.3.0` 生产构建成功。真实浏览器使用同一 Playwright Chrome for Testing `154.0.8037.0` 与隔离 fixture，对 v3.2.28.68 基线和当前工作树各测 60/300/1000 条，记录见 [`FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md`](FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md)。未声称 FPS；Performance 长任务、真实图片冷网、真实刷新后端、Maven 和外部 SSO 仍需远端/真实环境验证。
+- 本地证据：前端 5 个测试文件 35/35；`corepack pnpm@12.3.4 install --frozen-lockfile`；Vite `8.3.0` 生产构建成功。真实浏览器使用同一 Playwright Chrome for Testing `154.0.8037.0` 与隔离 fixture，对 v3.2.28.68 基线和当前工作树各测 60/300/1000 条。未声称 FPS；Performance 长任务、真实图片冷网、真实刷新后端、Maven 和外部 SSO 仍需远端/真实环境验证。
 - 发布：版本按规则定为 `3.2.32.69`；[`build-test` run 35124869519](https://github.com/ArisMaid/ani-rss/actions/runs/35124869519) 与 [`v3.2.32.69` tag workflow run 35125384219](https://github.com/ArisMaid/ani-rss/actions/runs/35125384219) 均成功。[GitHub Release v3.2.32.69](https://github.com/ArisMaid/ani-rss/releases/tag/v3.2.32.69) 为非 draft、非 prerelease；`ani-rss.jar` SHA-256 为 `9e9d251f4516d2763874e223e949923fd7fddfc0e00f3db328d33e6f4c61f785`，`ani-rss.exe` SHA-256 为 `700cdfd5cbdd0474b9f48e62fcaa5abd077e71d2d23c951ab8537571ef99da4a`。GHCR temurin/openj9/arm32v7 manifest digest 分别为 `sha256:da03c64570399d3140c3cc17bbaf74d8477827c2f932fe4cb46a73755b11b20d`、`sha256:403b2b21df88f4f386214b156ef7580ae89c54f6aaf098206ce802e4e0e2f2a7`、`sha256:37f24c3b98d2ba9e9181695c7c2719d0e811f96054eb93e0b05bde725e000e18`；Docker Hub 因未配置凭据按 workflow 条件跳过。
 
 ## 同步审计步骤
@@ -46,7 +46,7 @@
 5. 同步 UI 时检查 `http.js` 使用点、v2/legacy 响应、媒体句柄、恢复状态和 package scripts；同步下载/清理功能运行合同测试。
 6. 同步构建时比较首屏模块图、每场景包体预算和生产浏览器冒烟，保留 pageerror、console error、chunk 404 回归。
 7. 版本沿用四段编号；同步上游前三段时第四段本地修订号递增一次，不夹带无关新功能。
-8. 每次同步提交附一页验收记录，至少包含功能、网络次数、首屏包、已验证项目和未验证项目。
+8. 每次同步在 PR 或 Release 描述中记录功能、网络次数、首屏包、已验证项目和未验证项目；无需把实施报告提交进代码仓库。
 
 ## 3.2.28.68 本轮资源加载优化记录
 
@@ -69,7 +69,7 @@
 - 修复：AnimeGarden 匹配确认和批量入口在交付前再次校验当前列表快照，失效时清理匹配交互；ImageCache 将 pending 预留、发布和本次失败撤销收进现有 key lock；维护暂停保持到重启，暂停时先允许热缓存读取并停止后续淘汰、pending 清理和新持久化。
 - 明确保留边界：不新增恢复事务、状态枚举、管理 API、并发注入框架或浏览器矩阵；pending 交错只做静态锁序复核，异常文件按管理员 SOP 处理，代理不执行批量/递归删除。
 - 待确认：真实外部源/下载器/账号/媒体/数据库费用、生产浏览器完整交互、删除失败故障注入、Docker Desktop/Linux engine 本地构建，以及强杀/断电/系统 I/O 阻塞下的缓存索引一致性。
-- 证据：本地 Java 319 tests、0 failures、0 errors、4 skipped；ImageCacheServiceTest 19/19；前端 35/35；唯一目录生产 UI build 与 bundle gate 通过。远端 [`build-test` run 34217520584](https://github.com/ArisMaid/ani-rss/actions/runs/34217520584) 与 [`v3.2.28.66` tag build run 34218050737](https://github.com/ArisMaid/ani-rss/actions/runs/34218050737) 成功；Release 附件和 GHCR manifest digest 已回填到 [`docs/verification.md`](docs/verification.md) 与 [`docs/performance-baseline.md`](docs/performance-baseline.md)。
+- 证据：本地 Java 319 tests、0 failures、0 errors、4 skipped；ImageCacheServiceTest 19/19；前端 35/35；唯一目录生产 UI build 与 bundle gate 通过。远端 [`build-test` run 34217520584](https://github.com/ArisMaid/ani-rss/actions/runs/34217520584) 与 [`v3.2.28.66` tag build run 34218050737](https://github.com/ArisMaid/ani-rss/actions/runs/34218050737) 成功；Release 附件和 GHCR manifest digest 已核验。
 
 ## 3.2.28.65 本轮审计记录
 
@@ -77,7 +77,7 @@
 - 修复：AnimeGarden 成功重载不再迁移旧 enrichment/group/selection；`ANIME_GARDEN_LIST_EXPIRED` 只进入人工重新加载入口；ImageCache 先按实际新 bytes/临时文件准入并有限淘汰，pending 达上限或历史 manifest 超限时暂停新增与重写；close final flush 排入既有单 writer，最多等待 5 秒。
 - 明确淘汰：v3.2.28.64 中“过期一次受控自动 reload”和“close 最终严格追平”的表述；近期封面缓存允许重建，清理积压由维护 SOP 处理。
 - 待确认：真实外部源/下载器/账号/媒体/数据库费用、生产浏览器完整交互、Docker Desktop/Linux engine 本地构建，以及强杀/断电/系统 I/O 阻塞下的缓存索引一致性。
-- 证据：Java 319 tests、0 failures、0 errors、4 skipped；ImageCacheServiceTest 19/19；前端 35/35；bundle gate 通过。`build-test` run `34193929884` 与 tag build run `34194388721` 成功；Release 附件和 GHCR digest 已回填到 [`docs/verification.md`](docs/verification.md) 与 [`docs/performance-baseline.md`](docs/performance-baseline.md)。
+- 证据：Java 319 tests、0 failures、0 errors、4 skipped；ImageCacheServiceTest 19/19；前端 35/35；bundle gate 通过。`build-test` run `34193929884` 与 tag build run `34194388721` 成功；Release 附件和 GHCR digest 已核验。
 
 ## 3.2.28.64 本轮审计记录
 
@@ -85,8 +85,8 @@
 - 新增并强化：R63-01/02 的请求归属与列表级恢复；R63-03/04 的 manifest revision 单 writer、close 最终 flush 与生命周期诊断；R63-05 的 pending deletion 路径并集预算、准入和退避；R63-06 的 CI N08 同构建产物门禁。
 - 被上游等效替代：无。本轮未执行上游提交合并，没有把冲突解决成功误记为行为等效。
 - 明确淘汰：无。未删除原有恢复、归属、完成、备份、下载和媒体路径。
-- 待确认：真实外部源/下载器/账号/媒体/数据库费用、Linux engine 本地构建；4 个 Java 测试仍因符号链接或外部样本缺失跳过，详见 [`docs/verification.md`](docs/verification.md)。
-- 证据：Java 319 tests、前端 35/35；W7/N08 raw reports 均记录 `commit=bff06cb...` 和 `dirty=false`；远端 `build-test` run `34109933350` 与 tag build run `34110438143` 均成功，Release 附件和 GHCR digest 已核验并记录在 [`docs/verification.md`](docs/verification.md)。
+- 待确认：真实外部源/下载器/账号/媒体/数据库费用、Linux engine 本地构建；4 个 Java 测试仍因符号链接或外部样本缺失跳过。
+- 证据：Java 319 tests、前端 35/35；W7/N08 raw reports 均记录 `commit=bff06cb...` 和 `dirty=false`；远端 `build-test` run `34109933350` 与 tag build run `34110438143` 均成功，Release 附件和 GHCR digest 已核验。
 
 ## 3.2.28.63 本轮审计记录
 
@@ -94,7 +94,7 @@
 - 保留并强化：F22 无评分有限 JSON 语义；F23 pending/手动重试；F24 AnimeGarden 409/一次受控重载与 10,000/100,000 有界索引；F25–F27 图片 busy、single-flight、manifest、pending deletion 和 shutdown；F28 RSS 同一 monotonic clock；F29 8 秒页面轮询 single-flight。
 - 被上游等效替代：无。本轮未执行上游提交合并，因此没有把冲突解决误记为行为等效。
 - 明确淘汰：无。未删除原有恢复、归属、完成、备份、下载和媒体路径。
-- 待确认：真实外部源/下载器/账号/媒体/数据库费用、Linux engine 本地构建；符号链接和真实 upstream backup sample 4 个测试因环境/样本缺失跳过，详见 [`docs/verification.md`](docs/verification.md)。
+- 待确认：真实外部源/下载器/账号/媒体/数据库费用、Linux engine 本地构建；符号链接和真实 upstream backup sample 4 个测试因环境/样本缺失跳过。
 - 证据：完整 Java `verify` 为 311 tests、0 failures、0 errors、4 skipped；前端为 33/33；W6/W7 原始报告均记录 `commit=f550cdd...` 和 `dirty=false`。
 
 ## 3.2.28.62 本轮审计记录

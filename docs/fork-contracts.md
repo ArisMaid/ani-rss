@@ -28,7 +28,7 @@
 | F18 | 验证脚本不得使用 `clean` 或删除历史输出作为前置条件；每次构建/fixture 使用唯一目录 | `package.sh`、`verify.ps1`、workflow、W6/W7 reports |
 | F19 | 上游同步保持前三段基线 + 本地修订号版本规则，并更新根 POM、模块 POM、前端默认版本与发布说明 | `UPSTREAM_SYNC.md`、POM、`config.js` |
 | F20 | 发布镜像必须由可审计的 tag 工作流构建；测试工作流不能推送 `test` 镜像 | `.github/workflows/build.yml`、`.github/workflows/build-test.yml` |
-| F21 | 发布前不能宣称未执行的真实上游、下载器、浏览器或多架构验证 | 本文件、`verification.md`、`performance-baseline.md` |
+| F21 | 发布前不能宣称未执行的真实上游、下载器、浏览器或多架构验证 | 本文件、GitHub Actions 日志与 Release 产物 |
 
 ## 3.2.28.64 增量合同
 
@@ -92,7 +92,7 @@ F40–F42 不增加线程池、状态枚举、事务或管理 API；pending 预�
 2. 先运行安全、恢复、下载器失败、认证和媒体句柄合同测试。
 3. 再运行前端纯逻辑/组件测试、生产构建、bundle 门禁和 W7 浏览器场景。
 4. 运行 W6 fixture、30 样本热列表、100 订阅 RSS 服务链和完整 Java `verify`。
-5. 最后更新版本、`UPDATE.md`、本文件、性能/验收记录和发布工作流结果。
+5. 最后更新版本、`UPDATE.md`、本文件，并在 PR 或 Release 描述中记录性能、验收及发布工作流结果。
 
 同步时将每项差异标记为“保留”“被上游等效替代”“明确淘汰”或“待确认”，不能以冲突解决成功代替行为验证。
 

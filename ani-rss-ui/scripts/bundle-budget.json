@@ -8,7 +8,6 @@
     "date": "2026-09-09",
     "baseCommit": "066fccc8",
     "reason": "Restore the missing dashboard cover component using an on-demand import, refresh the dashboard date, and sort asynchronously enriched Mikan scores. The card now participates in the shared chunk graph. These limits include small explicit rounding headroom; forbidden-module checks remain unchanged. Home/login closures exclude the on-demand card and are not full cold-card network totals.",
-    "report": "../../FUNCTIONAL_BUGFIX_20260909.md",
     "measuredJsGzipBytes": {
       "static": 105227,
       "login": 202044,
@@ -21,7 +20,6 @@
     "date": "2026-09-14",
     "baseCommit": "724c2ade116ab31e902ad8b9e15cf23b72b07921",
     "reason": "Bound private-image POST loading with per-consumer cancellation, queue and total deadlines; add SafeImageView lifecycle pause/resume and retry placeholder; add native lazy/async subscription covers; and remove the subscription filter deep copy. The gzip increase is an explicit cost of the lifecycle/queue behavior and is measured separately from the historical functional-repair baseline.",
-    "report": "../../RESOURCE_LOADING_OPTIMIZATION_REPORT_20260914.md",
     "measuredJsGzipBytes": {
       "static": 105229,
       "login": 202916,
@@ -45,7 +43,6 @@
     "date": "2026-09-17",
     "baseCommit": "3de618d9",
     "reason": "The v3.2.32 upstream synchronization adds cover-click actions, torrent fallback handling, the WebFilter/static-cache repair, manifest credentials, and subscription pagination, sorting, filter, scroll, and refresh lifecycle safeguards. The Vite 8.3.0 toolchain also changes shared chunk compression. GitHub Actions Ubuntu build-test 35124151832 measured the closures below; limits retain narrow explicit headroom and forbidden-module checks remain unchanged.",
-    "report": "../../FORK_V3.2.32_SYNC_AND_SCROLL_OPTIMIZATION_REPORT_20260917.md",
     "ciWorkflowRun": "35124151832",
     "measuredJsGzipBytes": {
       "static": 105473,

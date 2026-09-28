@@ -62,6 +62,12 @@ ani-rss-update.exe
 /*_PLAN.md
 /*_PLAN_*.md
 
+# Local implementation and verification reports stay outside the repository.
+/*_REPORT*.md
+/FUNCTIONAL_BUGFIX_*.md
+/docs/performance-baseline.md
+/docs/verification.md
+
 # Local follow-up-plan verification outputs.
 ani-rss-ui/w7-dist-*/
 output/

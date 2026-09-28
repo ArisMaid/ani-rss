@@ -72,4 +72,4 @@ W6 hot-list 报告 [`w6-hot-list-v3.2.28.63-20260907.json`](performance-data/w6-
 - DB 查询次数、全局锁等待、文件 walk 次数、快照 dirty 写路径和断电续跑成本。
 - 完整 RSS 场景中的缺集恢复、洗版、多文件 torrent、备用 RSS 和完结迁移。
 
-`DownloaderDeleteContractTest`、`DownloaderFailureContractTest`、`QBittorrentAuthenticationContractTest`、`TransmissionContractTest`、`OpenListWorkflowTest`、`MissingEpisodeRecoveryServiceTest`、`OwnershipServiceMoveTest` 和 `SubscriptionDeletionServiceTest` 继续作为行为门禁；当前完整回归为 319/0/0/4 skipped。4 个 skipped 的名称和原因见 [`docs/verification.md`](verification.md)。
+`DownloaderDeleteContractTest`、`DownloaderFailureContractTest`、`QBittorrentAuthenticationContractTest`、`TransmissionContractTest`、`OpenListWorkflowTest`、`MissingEpisodeRecoveryServiceTest`、`OwnershipServiceMoveTest` 和 `SubscriptionDeletionServiceTest` 继续作为行为门禁；当次完整回归为 319/0/0/4 skipped，跳过项以对应 CI 日志为准。

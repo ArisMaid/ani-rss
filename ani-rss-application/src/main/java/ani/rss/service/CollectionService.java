@@ -15,7 +15,6 @@ import ani.rss.util.other.ConfigUtil;
 import ani.rss.util.other.ItemsUtil;
 import ani.rss.util.other.RenameUtil;
 import ani.rss.util.other.TorrentUtil;
-import cn.hutool.core.codec.Base64;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.lang.Assert;
@@ -27,10 +26,10 @@ import cn.hutool.core.util.ReUtil;
 import cn.hutool.core.util.StrUtil;
 import lombok.extern.slf4j.Slf4j;
 import ani.rss.util.other.TorrentMetadata;
-import ani.rss.util.other.MagnetTorrentUtil;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
@@ -39,6 +38,7 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class CollectionService {
+    private static final int MAX_TORRENT_BYTES = 16 * 1024 * 1024;
 
     /**
      * 开始下载合集
@@ -46,14 +46,20 @@ public class CollectionService {
      * @param collectionInfo 合集信息
      */
     public void startCollection(CollectionInfo collectionInfo) {
-        String torrent = collectionInfo.getTorrent();
-        File tempFile = MagnetTorrentUtil.sourceFile(torrent);
-        TorrentMetadata torrentFile;
+        byte[] torrent = decodeTorrent(collectionInfo.getTorrent());
+        TorrentMetadata torrentFile = readTorrent(torrent);
+        File tempFile = FileUtil.createTempFile();
         try {
-            torrentFile = TorrentMetadata.from(tempFile);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+            FileUtil.writeBytes(torrent, tempFile);
+            startCollection(collectionInfo, tempFile, torrentFile);
+        } finally {
+            if (!FileUtil.del(tempFile)) {
+                log.warn("合集种子临时文件未能删除，请按需手动清理");
+            }
         }
+    }
+
+    private void startCollection(CollectionInfo collectionInfo, File tempFile, TorrentMetadata torrentFile) {
         Ani ani = collectionInfo.getAni();
         String title = ani.getTitle();
         String subgroup = ani.getSubgroup();
@@ -181,14 +187,7 @@ public class CollectionService {
      * @return 项目列表
      */
     public List<Item> preview(CollectionInfo collectionInfo) {
-        String torrent = collectionInfo.getTorrent();
-        File tempFile = MagnetTorrentUtil.sourceFile(torrent);
-        TorrentMetadata torrentFile;
-        try {
-            torrentFile = TorrentMetadata.from(tempFile);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+        TorrentMetadata torrentFile = readTorrent(decodeTorrent(collectionInfo.getTorrent()));
 
         Ani ani = collectionInfo.getAni();
         long[] lengths = torrentFile.getLengths();
@@ -293,5 +292,36 @@ public class CollectionService {
             throw new IllegalStateException("active downloader is not qBittorrent");
         }
         return client;
+    }
+
+    private static byte[] decodeTorrent(String source) {
+        if (source == null || source.isBlank()) {
+            throw new IllegalArgumentException("请选择种子文件");
+        }
+        source = source.trim();
+        if (source.regionMatches(true, 0, "magnet:?", 0, 8)) {
+            throw new IllegalArgumentException("合集下载仅支持 .torrent 文件，请先将磁力链接导出为种子文件");
+        }
+        if (source.length() > MAX_TORRENT_BYTES * 2) {
+            throw new IllegalArgumentException("种子元数据过大");
+        }
+        byte[] bytes;
+        try {
+            bytes = Base64.getDecoder().decode(source);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("种子文件内容无效，请重新上传 .torrent 文件", e);
+        }
+        if (bytes.length == 0 || bytes.length > MAX_TORRENT_BYTES) {
+            throw new IllegalArgumentException("种子元数据无效或过大");
+        }
+        return bytes;
+    }
+
+    private static TorrentMetadata readTorrent(byte[] torrent) {
+        try {
+            return TorrentMetadata.from(torrent);
+        } catch (IOException e) {
+            throw new IllegalArgumentException("种子文件解析失败，请重新上传 .torrent 文件", e);
+        }
     }
 }

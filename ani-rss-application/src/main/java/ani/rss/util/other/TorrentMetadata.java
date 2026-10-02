@@ -31,7 +31,11 @@ public final class TorrentMetadata {
      * @throws IOException 种子文件无法读取或 bencode 格式无效
      */
     public static TorrentMetadata from(File file) throws IOException {
-        byte[] torrent = Files.readAllBytes(file.toPath());
+        return from(Files.readAllBytes(file.toPath()));
+    }
+
+    /** Parses uploaded metadata without creating a temporary file. */
+    public static TorrentMetadata from(byte[] torrent) throws IOException {
         try {
             Map<String, Object> metadata = new Bencode(StandardCharsets.ISO_8859_1)
                     .decode(torrent, Type.DICTIONARY);

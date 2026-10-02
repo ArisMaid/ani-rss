@@ -58,8 +58,8 @@ const subscriptionViewMode = useLocalStorage('subscription-view-mode', 'cover')
  */
 const coverClickActions = ['edit', 'playlist', 'cover']
 const normalizeCoverClickAction = value =>
-    coverClickActions.includes(value) ? value : 'cover'
-const coverClickAction = useLocalStorage('cover-click-action', 'cover')
+    coverClickActions.includes(value) ? value : 'edit'
+const coverClickAction = useLocalStorage('cover-click-action', 'edit')
 const normalizedCoverClickAction = normalizeCoverClickAction(coverClickAction.value)
 if (coverClickAction.value !== normalizedCoverClickAction) {
     coverClickAction.value = normalizedCoverClickAction

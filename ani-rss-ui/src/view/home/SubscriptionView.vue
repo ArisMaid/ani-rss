@@ -365,6 +365,11 @@ const confirmrefreshAni = async () => {
 }
 
 @media (max-width: 560px) {
+  .subscription-search {
+    flex-basis: 100%;
+    width: 100%;
+  }
+
   .subscription-toolbar {
     padding-bottom: 8px;
   }

@@ -36,12 +36,8 @@
         </el-tooltip>
         <div class="cover-meta">
           <div class="cover-meta-line">
-            <span class="cover-meta-fixed">{{ episodeText }}</span>
+            <span class="cover-meta-fixed">第 {{ item.season || 1 }} 季</span>
             <span class="cover-subgroup" :title="subgroupText">{{ subgroupText }}</span>
-          </div>
-          <div v-if="showLastDownloadTime || hasStandbyRss" class="cover-meta-line cover-meta-secondary">
-            <span v-if="showLastDownloadTime" class="cover-meta-fixed">{{ updateText }}</span>
-            <span v-if="hasStandbyRss" class="cover-meta-fixed">备用RSS</span>
           </div>
         </div>
       </div>
@@ -74,13 +70,27 @@
                 </el-icon>
                 评分
               </el-dropdown-item>
-              <el-dropdown-item @click="emit('edit', item)">
+              <el-dropdown-item :disabled="actionLoading" divided @click="runAction('refresh')">
+                <el-icon><RefreshRight/></el-icon>
+                刷新
+              </el-dropdown-item>
+              <el-dropdown-item :disabled="actionLoading" @click="runAction('scrape')">
+                <el-icon><RefreshRight/></el-icon>
+                刮削
+              </el-dropdown-item>
+              <el-dropdown-item :disabled="actionLoading" @click="runAction('scrape', true)">
+                <el-text type="warning" title="强制刮削会覆盖已有元数据及图片">
+                  <el-icon><Refresh/></el-icon>
+                  刮削 [F]
+                </el-text>
+              </el-dropdown-item>
+              <el-dropdown-item divided @click="emit('edit', item)">
                 <el-icon>
                   <EditIcon/>
                 </el-icon>
                 编辑
               </el-dropdown-item>
-              <el-dropdown-item divided @click="emit('del', [item])">
+              <el-dropdown-item @click="emit('del', [item])">
                 <el-text type="danger">
                   <el-icon>
                     <Delete/>
@@ -93,16 +103,25 @@
         </el-dropdown>
       </div>
     </div>
+    <div class="cover-below-meta">
+      <el-tag size="small" type="danger">{{ item.ova ? 'ova' : 'tv' }}</el-tag>
+      <el-tag size="small" type="warning">{{ episodeText }}</el-tag>
+      <el-tag v-if="hasStandbyRss" size="small" type="primary">备用RSS</el-tag>
+      <el-tag v-if="showLastDownloadTime" size="small" type="info">{{ updateText }}</el-tag>
+    </div>
   </div>
 </template>
 
 <script setup>
 import {computed, ref, watch} from "vue";
-import {Delete, Edit as EditIcon, Files, Fold, Picture, Star} from "@element-plus/icons-vue";
+import {Delete, Edit as EditIcon, Files, Fold, Picture, Refresh, RefreshRight, Star} from "@element-plus/icons-vue";
+import {ElMessage, ElMessageBox} from "element-plus";
 import {coverClickAction, showLastDownloadTime, showPlaylist, showScore, toApiFile} from "@/js/global.js";
 import {fromNow} from "@/js/format.js";
+import * as http from "@/js/http.js";
 
 const actionsVisible = ref(false)
+const actionLoading = ref(false)
 const coverFailed = ref(false)
 const props = defineProps(["item"])
 const emit = defineEmits(['edit', 'playlist', 'cover', 'del', 'rate'])
@@ -136,6 +155,26 @@ const updateText = computed(() => {
   }
   return '未更新'
 })
+
+const runAction = async (action, force = false) => {
+  if (actionLoading.value) return
+  actionLoading.value = true
+  try {
+    if (force) {
+      await ElMessageBox.confirm('强制刮削会覆盖已有元数据及图片，是否继续？', '强制刮削', {
+        confirmButtonText: '开始刮削', cancelButtonText: '取消', type: 'warning'
+      })
+    }
+    const res = action === 'refresh'
+        ? await http.refreshAni(props.item)
+        : await http.scrape(force, props.item)
+    ElMessage.success(res.message)
+  } catch {
+    // API 层已显示请求错误；关闭确认弹窗时不发起操作。
+  } finally {
+    actionLoading.value = false
+  }
+}
 
 const coverActionLabel = computed(() => {
   const labels = {
@@ -357,8 +396,21 @@ const openBgmUrl = it => {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
 }
 
-.cover-meta-secondary {
-  padding-right: 34px;
+.cover-below-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+  max-width: 100%;
+}
+
+.cover-below-meta .el-tag {
+  max-width: 100%;
+  height: auto;
+  min-height: 20px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--el-border-color);
 }
 
 .cover-meta-fixed {

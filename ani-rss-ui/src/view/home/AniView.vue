@@ -53,7 +53,10 @@
               </div>
             </el-form-item>
             <el-form-item label="BgmUrl">
-              <el-input v-model.trim="props.ani.bgmUrl" placeholder="https://xxx.xxx"/>
+              <div class="tmdb-group">
+                <el-input v-model.trim="props.ani.bgmUrl" placeholder="https://bgm.tv/subject/12345"/>
+                <el-button bg text icon="Link" aria-label="打开 Bangumi 页面" :disabled="!props.ani.bgmUrl" @click="openBgmUrl"/>
+              </div>
             </el-form-item>
             <el-form-item label="主 RSS">
               <div class="full-width">
@@ -441,6 +444,16 @@ let animeGardenShow = () => {
 let aniBTShow = () => {
   let bgmUrl = props.ani.bgmUrl;
   aniBTRef.value?.show(bgmUrl)
+}
+
+const openBgmUrl = () => {
+  try {
+    const url = new URL(props.ani.bgmUrl)
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Invalid protocol')
+    window.open(url.href, '_blank', 'noopener')
+  } catch {
+    ElMessage.error('请输入有效的 HTTP 或 HTTPS 链接')
+  }
 }
 
 let props = defineProps(['ani'])

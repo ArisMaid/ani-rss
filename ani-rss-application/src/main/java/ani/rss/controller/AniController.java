@@ -388,10 +388,10 @@ public class AniController extends BaseController {
         String downloadPath = downloadService.getDownloadPath(ani);
 
         for (Item item : items) {
-            item.setHasDownloaded(false);
+            item.setHasDownloaded(false).setTorrentPath(null);
             File torrent = TorrentUtil.getTorrent(ani, item);
-            if (torrent.exists()) {
-                item.setHasDownloaded(true);
+            if (torrent.isFile()) {
+                item.setHasDownloaded(true).setTorrentPath(torrent.getAbsolutePath());
                 continue;
             }
             if (downloadService.itemDownloaded(ani, item, false)) {

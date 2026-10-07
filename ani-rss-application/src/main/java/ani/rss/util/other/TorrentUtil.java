@@ -16,6 +16,7 @@ import ani.rss.enums.TorrentsTagEnum;
 import ani.rss.ownership.OwnershipService;
 import ani.rss.util.basic.HttpReq;
 import cn.hutool.core.io.FileUtil;
+import cn.hutool.core.lang.Assert;
 import cn.hutool.core.text.StrFormatter;
 import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ReUtil;
@@ -125,11 +126,20 @@ public class TorrentUtil {
      * @return 文件夹
      */
     public static File getTorrentDir(Ani ani) {
+        String id = ani.getId();
         String title = ani.getTitle();
         Boolean ova = ani.getOva();
         Integer season = ani.getSeason();
 
         File configDir = ConfigUtil.getConfigDir();
+        File stableDirectory = null;
+        if (StrUtil.isNotBlank(id)) {
+            Assert.isTrue(id.matches("[A-Za-z0-9_-]+"), "订阅 ID 不能包含路径字符");
+            stableDirectory = new File(new File(new File(configDir, "torrents"), id.substring(0, 1)), id);
+            if (stableDirectory.isDirectory()) {
+                return stableDirectory;
+            }
+        }
 
         String s = PinyinUtils.getPinyinInitialLetters(title);
 
@@ -143,7 +153,8 @@ public class TorrentUtil {
                 torrents = new File(StrFormatter.format("{}/torrents/{}/{}", configDir, s, title));
             }
         }
-        return torrents;
+        // 已有的两代标题目录继续就地使用，新缓存按订阅 ID 存放。
+        return torrents.isDirectory() || stableDirectory == null ? torrents : stableDirectory;
     }
 
     /**

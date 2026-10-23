@@ -5,7 +5,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 @Data
-public class UpgradeSettings {
+public class UpgradeSettings implements java.io.Serializable {
+    private static final long serialVersionUID = 1L;
     private String defaultPolicyId;
     private boolean notifications;
     private String embyUrl = "";
@@ -35,5 +36,5 @@ public class UpgradeSettings {
     private int noProgressHours = 6;
     private int downloadTimeoutHours = 72;
     private String timezone = "Asia/Shanghai";
-    public record PathMapping(String remoteRoot, String localRoot) {}
+    public record PathMapping(String remoteRoot, String localRoot) implements java.io.Serializable {}
 }

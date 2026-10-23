@@ -92,7 +92,7 @@ public class MailNotification implements BaseNotification {
         String html = TemplateUtil.render("mail.html", map);
 
         try {
-            JakartaMailUtil.send(mailAccount, List.of(mailAddressee), title, html, true);
+            JakartaMailUtil.send(mailAccount, mailAddressee, title, html, true);
             return true;
         } catch (Exception e) {
             String message = ExceptionUtils.getMessage(e);

@@ -316,7 +316,7 @@ public class UpgradeScheduler {
         if(job.getState()==JobState.INSTALLING) { /* Retain the immutable manifest for recovery. */ }
         else if(!code.endsWith("_BUSY")&&(code.contains("IDENTITY")||code.contains("CHAPTER")||code.contains("COVERAGE")||code.contains("CHANGED")||code.contains("CONFLICT"))) job.setState(JobState.NEEDS_REVIEW);
         else job.setState(JobState.RETRY_WAIT);
-        long delay=Math.min(3600000,10000L*(1L<<Math.min(job.getAttempts(),8)))+new Random().nextInt(5000);
+        long delay=Math.min(3600000,10000L*(1L<<Math.min(job.getAttempts(),8)))+java.util.concurrent.ThreadLocalRandom.current().nextInt(5000);
         if(error instanceof UpgradeHttp.SourceFailure failure) delay=Math.max(delay,failure.retryAfterMillis());
         job.setRetryAt(System.currentTimeMillis()+delay);
         commits.saveJob(job); repository.event(job.getId(),code,job.getMessage());

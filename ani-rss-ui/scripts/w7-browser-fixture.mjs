@@ -84,7 +84,8 @@ const contentTypes = {
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
-  '.webp': 'image/webp'
+  '.webp': 'image/webp',
+  '.wasm': 'application/wasm'
 }
 
 const send = (response, status, body, headers = {}) => {

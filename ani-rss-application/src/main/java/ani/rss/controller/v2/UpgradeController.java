@@ -43,8 +43,17 @@ public class UpgradeController {
     @Auth @PostMapping("/policies") public QualityPolicyEngine.Policy createPolicy(@RequestBody QualityPolicyEngine.Policy p) { return campaigns.savePolicy(null,p); }
     @Auth @PutMapping("/policies/{id}") public QualityPolicyEngine.Policy updatePolicy(@PathVariable String id,@RequestBody QualityPolicyEngine.Policy p) { return campaigns.savePolicy(id,p); }
     @Auth @DeleteMapping("/policies/{id}") @ResponseStatus(HttpStatus.NO_CONTENT) public void deletePolicy(@PathVariable String id,@RequestParam long expectedRevision) { campaigns.deletePolicy(id,expectedRevision); }
-    public record Preview(Release candidate,Release current) {}
-    public record DraftPreview(QualityPolicyEngine.Policy policy,Release candidate,Release current) {}
+    public record Preview(Release candidate,Release current) {
+        public Preview { candidate=UpgradeModels.snapshot(candidate,Release.class); current=UpgradeModels.snapshot(current,Release.class); }
+        @Override public Release candidate() { return UpgradeModels.snapshot(candidate,Release.class); }
+        @Override public Release current() { return UpgradeModels.snapshot(current,Release.class); }
+    }
+    public record DraftPreview(QualityPolicyEngine.Policy policy,Release candidate,Release current) {
+        public DraftPreview { policy=UpgradeModels.snapshot(policy,QualityPolicyEngine.Policy.class); candidate=UpgradeModels.snapshot(candidate,Release.class); current=UpgradeModels.snapshot(current,Release.class); }
+        @Override public QualityPolicyEngine.Policy policy() { return UpgradeModels.snapshot(policy,QualityPolicyEngine.Policy.class); }
+        @Override public Release candidate() { return UpgradeModels.snapshot(candidate,Release.class); }
+        @Override public Release current() { return UpgradeModels.snapshot(current,Release.class); }
+    }
     @Auth @PostMapping("/evaluate") public QualityPolicyEngine.Decision draft(@RequestBody DraftPreview preview) { return engine.evaluate(preview.policy(),preview.candidate(),preview.current()); }
     @Auth @GetMapping("/versions") public Page<Version> versions(@RequestParam String targetId,@RequestParam(defaultValue="0") int offset,@RequestParam(defaultValue="50") int limit) { return page("upgrade_versions",targetId,null,offset,limit,Version.class); }
     public record Protect(boolean protectedVersion) {}
@@ -70,14 +79,16 @@ public class UpgradeController {
         if("MIKAN".equals(c.getCatalogSource())) { Cursor mikanCursor=new Cursor(); mikanCursor.setId("mikan-catalog:"+id); mikanCursor.setScope(id); repository.save("upgrade_scan_cursors",mikanCursor.getId(),id,null,"PENDING",1,mikanCursor); }
         return scheduler.enqueue("CATALOG",c.getId());
     }
-    public record Page<T>(List<T> items,int offset,int limit,boolean hasMore) {}
+    public record Page<T>(List<T> items,int offset,int limit,boolean hasMore) { public Page { items=List.copyOf(items); } }
     private <T> Page<T> page(String table,String parent,String state,int offset,int limit,Class<T> type) {
         List<T> rows=repository.list(table,parent,state,offset,limit,type); return new Page<>(rows,offset,limit,rows.size()==limit);
     }
     @Auth @GetMapping("/targets") public Page<Target> targets(@RequestParam(defaultValue="0") int offset,@RequestParam(defaultValue="50") int limit) {
         Page<Target> result=page("upgrade_targets",null,null,offset,limit,Target.class); campaigns.refreshCampaignSelection(result.items()); return result;
     }
-    public record TargetOverride(String policyId,boolean excluded,String embySeriesId,Integer season,Map<String,String> episodeMapping,List<String> rssUrls,String libraryId) {}
+    public record TargetOverride(String policyId,boolean excluded,String embySeriesId,Integer season,Map<String,String> episodeMapping,List<String> rssUrls,String libraryId) {
+        public TargetOverride { episodeMapping=episodeMapping==null?null:Map.copyOf(episodeMapping); rssUrls=rssUrls==null?null:List.copyOf(rssUrls); }
+    }
     @Auth @PutMapping("/targets/{id}/override") public Target override(@PathVariable String id,@RequestBody TargetOverride request) {
         Target target=repository.get("upgrade_targets",id,Target.class).orElseThrow();
         if(request.libraryId()!=null&&!request.libraryId().equals(target.getLibraryId())) {
@@ -126,7 +137,9 @@ public class UpgradeController {
                 "policyId",Objects.toString(policy.getId(),"default"),"policyRevision",policy.getRevision(),"decision",decision,"indexFresh",emby.fresh(target.getLibraryId()),"protectedVersion",current!=null&&current.isProtectedVersion());
     }
     public record CandidateCorrection(String subjectId,Set<String> episodes,Integer season,Set<String> groups,Set<String> languages,
-            String subtitleLayout,String subtitlePackaging,Integer resolution,String chapterType,String contentEdition) {}
+            String subtitleLayout,String subtitlePackaging,Integer resolution,String chapterType,String contentEdition) {
+        public CandidateCorrection { episodes=episodes==null?null:Set.copyOf(episodes); groups=groups==null?null:Set.copyOf(groups); languages=languages==null?null:Set.copyOf(languages); }
+    }
     @Auth @PostMapping("/candidates/{id}/resolve") public Release resolve(@PathVariable String id,@RequestBody CandidateCorrection correction) {
         Release r=repository.get("upgrade_releases",id,Release.class).orElseThrow();
         if(correction.subjectId()!=null&&!Objects.equals(correction.subjectId(),r.getSubjectId())) throw new ani.rss.exception.ApiProblemException(HttpStatus.CONFLICT,"UPGRADE_RESOURCE_IDENTITY_CONFLICT","作品身份冲突，不能绕过验证",null,Map.of("candidateId",id));

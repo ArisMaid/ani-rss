@@ -126,6 +126,29 @@ public final class SubscriptionRepository {
     }
 
     /** Persists mutations made through the legacy public list. */
+    public Ani addOrReplace(Ani candidate, boolean override) {
+        lock.writeLock().lock();
+        try {
+            List<Ani> next = snapshot();
+            List<Ani> matches = next.stream().filter(existing -> Objects.equals(existing.getId(), candidate.getId())
+                    || Objects.equals(existing.getTitle(), candidate.getTitle()) && Objects.equals(existing.getSeason(), candidate.getSeason())).toList();
+            if (!matches.isEmpty() && !override) throw new ani.rss.exception.ApiProblemException(
+                    org.springframework.http.HttpStatus.CONFLICT, "SUBSCRIPTION_EXISTS", "此订阅已存在", null,
+                    java.util.Map.of("subscriptionId", matches.get(0).getId()));
+            if (matches.size() > 1) throw new IllegalArgumentException("订阅 ID 与标题分别命中不同订阅，请先修改标题");
+            Ani value = copyList(List.of(candidate)).get(0);
+            if (!matches.isEmpty()) {
+                Ani existing = matches.get(0);
+                // Ownership and recovery records remain bound to the original subscription ID.
+                value.setId(existing.getId()); value.setCurrentEpisodeNumber(existing.getCurrentEpisodeNumber()); value.setLastDownloadTime(existing.getLastDownloadTime());
+                next.set(next.indexOf(existing), value);
+            } else next.add(value);
+            commit(next);
+            return findRuntimeById(value.getId()).orElseThrow();
+        } finally { lock.writeLock().unlock(); }
+    }
+
+    /** Persists mutations made through the legacy public list. */
     public void commitRuntimeCandidate() {
         lock.writeLock().lock();
         try {

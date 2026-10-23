@@ -7,7 +7,8 @@ import cn.hutool.extra.pinyin.engine.tinypinyin.TinyPinyinEngine;
 
 public class PinyinUtils {
 
-    public static final PinyinEngine ENGINE = new TinyPinyinEngine();
+    public static final PinyinEngine ENGINE = new TinyPinyinEngine(
+            com.github.promeg.pinyinhelper.Pinyin.newConfig().with(new CustomPinyinMapDict()));
 
     public static PinyinEngine getEngine() {
         return ENGINE;

@@ -111,8 +111,6 @@ public class DownloadService {
 
         String savePath = getDownloadPath(ani);
 
-        ItemsUtil.procrastinating(ani, items);
-
         // 实时保存文件
         boolean sync = false;
         boolean failedSubmission = false;
@@ -337,6 +335,8 @@ public class DownloadService {
             ani.setLastDownloadTime(System.currentTimeMillis());
             AniUtil.sync();
         }
+
+        if (!failedSubmission) ItemsUtil.procrastinating(ani, items);
 
         if (!autoDisabled) {
             return true;

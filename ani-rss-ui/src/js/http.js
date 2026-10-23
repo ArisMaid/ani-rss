@@ -31,7 +31,10 @@ export let listAni = (options = {}) => api.post('api/listAni', '', options)
  * @param ani 订阅
  * @returns {Promise<any>}
  */
-export let addAni = (ani, options = {}) => api.post('api/addAni', ani, options)
+export let addAni = (ani, override = false, options = {}) => {
+    if (typeof override === 'object') { options = override; override = false }
+    return api.post(`api/addAni?override=${override === true}`, ani, {...options, silent: true})
+}
 
 /**
  * 修改订阅

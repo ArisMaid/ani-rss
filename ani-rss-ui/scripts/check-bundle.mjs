@@ -66,14 +66,14 @@ const moduleRowsByChunk = new Map(Object.entries(moduleMap.chunks || {})
     .map(([file, value]) => [file, value.modules || []]))
 
 const classifyModule = moduleId => {
-  if (/node_modules\/(?:artplayer|artplayer-plugin-multiple-subtitles)(?:\/|$)/i.test(moduleId)) {
+  if (/node_modules\/(?:artplayer|artplayer-plugin-multiple-subtitles|movi-player)(?:\/|$)/i.test(moduleId)) {
     return 'player-library'
   }
   if (/node_modules\/markdown-it(?:\/|$)/i.test(moduleId)
       || /node_modules\/markdown-it-github-alerts(?:\/|$)/i.test(moduleId)) {
     return 'markdown-library'
   }
-  if (/src\/view\/play\/(?:PlayListView|PlayStartView|ArtplayerView)\.vue$/i.test(moduleId)) {
+  if (/src\/view\/play\/(?:PlayListView|PlayStartView|ArtplayerView|MoviPlayerView|ExternalPlayers)\.vue$/i.test(moduleId)) {
     return 'player-view'
   }
   if (/src\/view\/config\/basic\/BackupView\.vue$/i.test(moduleId)) {

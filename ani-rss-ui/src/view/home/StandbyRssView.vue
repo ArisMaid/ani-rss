@@ -34,7 +34,7 @@
       </el-button>
     </div>
     <div>
-      <el-table :data="standbyRss" height="400px" size="small">
+      <el-table class="standby-table" :data="standbyRss" height="400px" size="small">
         <el-table-column fixed label="字幕组" min-width="100px">
           <template #default="it">
             <div v-if="editIndex !== it.$index">
@@ -182,7 +182,10 @@ defineExpose({normalize})
 </script>
 
 <style scoped>
+.standby-table { width: 100%; max-width: 100%; min-width: 0; }
 .standby-rss-view {
+  width: 100%;
+  max-width: 100%;
   height: 500px;
   min-width: 0;
   overflow: hidden;

@@ -59,7 +59,7 @@ public class MikanQuarterCatalog {
         URI source=URI.create(UpgradeHttp.base(ConfigUtil.snapshot().getMikanHost())), target=URI.create(UpgradeHttp.resourceUrl(url));
         return Objects.equals(source.getHost(),target.getHost())&&source.getPort()==target.getPort()&&Objects.equals(source.getScheme(),target.getScheme());
     }
-    public record Binding(String subjectId,List<String> feeds) {}
+    public record Binding(String subjectId,List<String> feeds) { public Binding { feeds=List.copyOf(feeds); } }
     public static Binding binding(String html,String url) {
         var document=Jsoup.parse(html,url); Set<String> ids=new LinkedHashSet<>();
         var mikanId=Pattern.compile("/Home/Bangumi/(\\d+)$").matcher(URI.create(url).getPath());

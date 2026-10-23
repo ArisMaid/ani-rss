@@ -28,7 +28,8 @@
     </SettingsItem>
     <SettingsItem label="收件人邮箱">
       <el-input v-model:model-value="notificationConfig['mailAddressee']"
-                placeholder="xx@xx.com"></el-input>
+                placeholder="a@example.com,b@example.com"></el-input>
+      <el-text size="small">多个收件人使用逗号或分号分隔。</el-text>
     </SettingsItem>
     <SettingsItem label="图片">
       <el-switch v-model:model-value="notificationConfig['mailImage']"/>

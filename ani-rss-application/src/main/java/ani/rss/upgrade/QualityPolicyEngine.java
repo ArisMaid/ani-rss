@@ -29,7 +29,9 @@ public class QualityPolicyEngine {
         private Set<String> blockedGroups = new TreeSet<>();
         private Set<String> containers = new TreeSet<>(List.of("mkv","mp4","avi","webm","ts"));
     }
-    public record Decision(Verdict verdict, String reasonCode, String decisiveField, List<String> explanation) {}
+    public record Decision(Verdict verdict, String reasonCode, String decisiveField, List<String> explanation) {
+        public Decision { explanation=List.copyOf(explanation); }
+    }
     private enum Condition { YES, NO, UNKNOWN }
     private record Interval(int best, int worst) {}
 

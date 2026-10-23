@@ -161,7 +161,7 @@ public class EmbyLibraryIndexService {
                     v.setTargetId(target.getId()); v.setLibraryId(target.getLibraryId()); v.setEmbyItemId(id);
                     v.setMediaSourceId(UpgradeHttp.string(source,"Id")); v.setRemotePath(remote); v.setOrigin("EMBY_ADOPTED");
                     v.setIndexAt(cursor.getLastSuccess()); v.setIndexBatch(cursor.getCompletedBatch());
-                    Release attributes=analysis.parse(remote==null?"":Path.of(remote.replace('\\','/')).getFileName().toString(),target.getSubjectId(),"EMBY");
+                    Release attributes=analysis.parse(remote==null?"":UpgradePaths.fileName(Path.of(remote.replace('\\','/'))),target.getSubjectId(),"EMBY");
                     int episode=UpgradeHttp.integer(item,"IndexNumber",-1);
                     if("Movie".equals(type)) { attributes.getEpisodes().clear(); attributes.getEpisodes().add("MOVIE"); attributes.setChapterType("MOVIE"); }
                     else if(episode>=0) {

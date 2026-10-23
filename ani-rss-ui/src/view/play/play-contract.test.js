@@ -28,6 +28,7 @@ vi.mock('./ArtplayerView.vue', () => ({
     </div>`
   }
 }))
+vi.mock('./MoviPlayerView.vue', () => ({__esModule:true,default:{props:['playItem'],template:'<div class="wasm-stub" :data-src="playItem.src" />'}}))
 
 import PlayStartView from './PlayStartView.vue'
 
@@ -66,13 +67,24 @@ describe('play media contracts', () => {
     revokeObjectUrl = undefined
   })
 
-  const mountView = () => mount(PlayStartView, {
+  const mountView = (engine = 'standard') => {
+    localStorage.setItem('play-engine', engine)
+    return mount(PlayStartView, {
     global: {
       stubs: {
         'el-dialog': dialog,
         'el-text': text
       }
     }
+    })
+  }
+
+  it('uses the WASM engine without waiting for the legacy subtitle endpoint', async () => {
+    wrapper = mountView('wasm')
+    wrapper.vm.show({name:'example.mkv',filename:'signed-handle',subtitles:[]})
+    for(let i=0;i<6;i++) await tick()
+    expect(http.getSubtitles).not.toHaveBeenCalled()
+    expect(wrapper.find('.wasm-stub').attributes('data-src')).toBe('/api/media/signed-handle')
   })
 
   it('shows the video before the slow internal subtitle request resolves', async () => {

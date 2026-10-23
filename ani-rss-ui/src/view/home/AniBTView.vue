@@ -1,17 +1,6 @@
 <template>
-  <el-dialog v-model="batchAdditionDialogVisible" align-center center title="正在批量添加订阅"
-             width="500"
-             :close-on-click-modal="false"
-             :close-on-press-escape="false"
-             :show-close="false">
-    <div>
-      <el-progress :percentage="Number.parseInt((batchAdditionNum / rssList.length) * 100.0)"/>
-    </div>
-    <div>
-      {{ batchAdditionNum }} / {{ rssList.length }}
-    </div>
-  </el-dialog>
-  <el-dialog v-model="matchDialogVisible" align-center center title="匹配" width="auto">
+  <BatchAdditionView ref="batchAdditionRef" v-model="batchAdditionDialogVisible" :items="batchAdditionItems" type="ani-bt" @done="batchDone"/>
+  <el-dialog v-model="matchDialogVisible" align-center center title="匹配" width="auto" @close="cancelBatchMatch">
     <div class="match-content">
       <el-radio-group v-model="addAni.match">
         <div v-for="regexItems in regexList" class="match-item">
@@ -26,11 +15,7 @@
       </el-radio-group>
     </div>
     <div class="dialog-footer">
-      <el-button icon="Check" @click="async ()=>{
-          emit('callback', addAni)
-          dialogVisible = false
-          matchDialogVisible = false
-      }" text bg>确定
+      <el-button icon="Check" @click="confirmMatch" text bg>确定
       </el-button>
     </div>
   </el-dialog>
@@ -94,7 +79,7 @@
                             <template #title>
                               <div class="group-title-wrapper">
                                 <div class="group-checkbox-wrapper">
-                                  <el-checkbox :value="JSON.stringify(group)" class="checkbox-margin" @click.stop/>
+                                  <el-checkbox :value="JSON.stringify(group)" class="checkbox-margin" @click.stop @change="checked => batchGroupChange(checked, group)"/>
                                 </div>
                                 <div class="group-label">
                                   <el-text style="max-width: 100px;" truncated>{{ group.name }}</el-text>
@@ -156,6 +141,14 @@ import {ref} from "vue";
 import {ElMessage, ElText} from "element-plus";
 import {DocumentCopy} from "@element-plus/icons-vue";
 import * as http from "@/js/http.js";
+import {defineAsyncComponent} from 'vue'
+const BatchAdditionView = defineAsyncComponent(() => import('./BatchAdditionView.vue'))
+const batchAdditionRef = ref()
+const batchAdditionItems = ref([])
+const batchMatchGroup = ref(null)
+const batchMatchMap = ref({})
+const batchDone = () => { window.$reLoadList?.() }
+
 import {formatDate, fromNow} from "@/js/format.js";
 import SafeImageView from "@/view/custom/SafeImageView.vue";
 
@@ -179,7 +172,7 @@ let show = (bgmUrl = '') => {
     'seasons': [],
     'items': []
   }
-  rssList.value = []
+  rssList.value = []; batchMatchMap.value = {}
   search(bgmUrl)
 }
 
@@ -259,6 +252,27 @@ let callback = v => {
   matchDialogVisible.value = true
 }
 
+const confirmMatch = () => {
+  if(batchMatchGroup.value) {
+    batchMatchMap.value[batchMatchGroup.value.rss] = JSON.parse(addAni.value.match)
+    batchMatchGroup.value = null
+  } else { emit('callback', {...addAni.value}); dialogVisible.value = false }
+  matchDialogVisible.value = false
+}
+
+const batchGroupChange = (checked, group) => {
+  if(!checked) { delete batchMatchMap.value[group.rss]; return }
+  callback(group)
+  if(matchDialogVisible.value) batchMatchGroup.value = group
+}
+const cancelBatchMatch = () => {
+  if(!batchMatchGroup.value) return
+  const url = batchMatchGroup.value.rss
+  rssList.value = rssList.value.filter(value => JSON.parse(value).rss !== url)
+  delete batchMatchMap.value[url]
+  batchMatchGroup.value = null
+}
+
 let showTag = () => {
   return window.innerWidth > 900;
 }
@@ -275,61 +289,9 @@ let batchAdditionNum = ref(0)
 let batchAdditionDialogVisible = ref(false)
 
 let batchAddition = async () => {
-  batchAdditionNum.value = 0
+  const selected = rssList.value.map(value => { const group = JSON.parse(value); return {...group, match: batchMatchMap.value[group.rss] || []} })
+  batchAdditionItems.value = selected
   batchAdditionDialogVisible.value = true
-  let getBgmId = (url) => {
-    const parsedUrl = new URL(url);
-    return parsedUrl.searchParams.get('bgmId');
-  };
-
-  try {
-    ElMessage.success("添加中....")
-    let map = rssList.value.reduce((acc, item) => {
-      let bangumiId = getBgmId(JSON.parse(item)['rss']);
-      if (!acc[bangumiId]) {
-        acc[bangumiId] = [];
-      }
-      acc[bangumiId].push(JSON.parse(item));
-      return acc;
-    }, {})
-    for (let item of Object.values(map)) {
-      let ani = {
-        "url": item[0]['rss'],
-        "season": 1,
-        "offset": 0,
-        "title": "",
-        "exclude": [],
-        "totalEpisodeNumber": 0,
-        "match": [],
-        "type": "ani-bt",
-        "bgmUrl": `https://bgm.tv/subject/${item[0].bgmId}`,
-        "subgroup": item[0].name
-      }
-
-      ani = (await http.rssToAni(ani)).data
-      if (item.length > 1) {
-        ani.standbyRssList = item.slice(1)
-            .map(o => {
-              return {
-                label: o.name,
-                url: o['rss'],
-                offset: 0
-              }
-            })
-      }
-      batchAdditionNum.value += item.length
-      await http.addAni(ani)
-    }
-    ElMessage.success("添加成功")
-
-    setTimeout(() => {
-      location.reload()
-    }, 1000)
-  } catch (e) {
-    ElMessage.error(e)
-  } finally {
-    batchAdditionDialogVisible.value = false
-  }
 }
 
 let copy = (v) => {

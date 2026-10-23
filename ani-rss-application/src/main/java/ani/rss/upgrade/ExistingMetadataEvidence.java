@@ -9,12 +9,12 @@ import java.util.*;
 
 /** Reads bounded metadata evidence; never rewrites an adopted library file. */
 public final class ExistingMetadataEvidence {
-    public record Context(String bangumiId,String text,Set<String> groups) {}
+    public record Context(String bangumiId,String text,Set<String> groups) { public Context { groups=Set.copyOf(groups); } }
     private ExistingMetadataEvidence() {}
 
     public static Context read(Path video,Path root,boolean independentSubject) throws IOException {
-        String base=video.getFileName().toString().replaceFirst("\\.[^.]+$","");
-        List<Path> candidates=List.of(video.resolveSibling(base+".nfo"),video.getParent().resolve("season.nfo"),video.getParent().resolve("tvshow.nfo"));
+        String base=UpgradePaths.fileName(video).replaceFirst("\\.[^.]+$","");
+        List<Path> candidates=List.of(video.resolveSibling(base+".nfo"),UpgradePaths.parent(video).resolve("season.nfo"),UpgradePaths.parent(video).resolve("tvshow.nfo"));
         String bangumi=null; StringBuilder evidence=new StringBuilder(); Set<String> groups=new TreeSet<>();
         for(int index=0;index<candidates.size();index++) {
             Path nfo=candidates.get(index); if(!Files.exists(nfo,LinkOption.NOFOLLOW_LINKS)) continue;

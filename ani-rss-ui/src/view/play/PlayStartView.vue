@@ -1,7 +1,11 @@
 <template>
   <el-dialog v-model="dialogVisible" :title="playItem.name" center @close="onClose">
     <div class="flex-center content">
-      <ArtplayerView :playItem="playItem" v-if="dialogVisible"/>
+      <div v-if="dialogVisible" class="player-content">
+        <el-radio-group v-model="playerKind" aria-label="播放器" size="small" class="player-kind"><el-radio-button value="wasm">WASM 播放器</el-radio-button><el-radio-button value="standard">标准播放器</el-radio-button></el-radio-group>
+        <MoviPlayerView v-if="playerKind === 'wasm'" :play-item="playItem"/>
+        <ArtplayerView v-else :playItem="playItem"/>
+      </div>
       <el-text v-if="subtitleLoading" class="subtitle-status" type="info">
         正在读取内封字幕…
       </el-text>
@@ -13,8 +17,10 @@
 </template>
 <script setup>
 
-import {onBeforeUnmount, ref} from "vue";
+import {defineAsyncComponent, onBeforeUnmount, ref, watch} from "vue";
+import {useLocalStorage} from '@vueuse/core'
 import ArtplayerView from "./ArtplayerView.vue";
+const MoviPlayerView = defineAsyncComponent(() => import('./MoviPlayerView.vue'))
 import {toApiMedia} from "@/js/global.js";
 import * as http from "@/js/http.js";
 
@@ -24,6 +30,9 @@ let subtitleLoading = ref(false)
 let subtitleError = ref('')
 let subtitleRequest
 let generation = 0
+const playerKind = useLocalStorage('play-engine', 'wasm')
+if(!['wasm','standard'].includes(playerKind.value)) playerKind.value = 'wasm'
+let sidecarSubtitles = []
 
 const revokeSubtitles = subtitles => {
   for (const subtitle of subtitles || []) {
@@ -44,6 +53,11 @@ let show = (pi) => {
 
   playItem.value.src = toApiMedia(playItem.value.filename)
   dialogVisible.value = true
+  sidecarSubtitles = playItem.value.subtitles.map(subtitle => ({...subtitle}))
+  if(playerKind.value === 'standard') loadInternalSubtitles(currentGeneration)
+}
+
+const loadInternalSubtitles = currentGeneration => {
   subtitleLoading.value = true
   subtitleError.value = ''
   subtitleRequest?.abort()
@@ -72,6 +86,14 @@ let show = (pi) => {
       });
 }
 
+watch(playerKind, kind => {
+  if(!dialogVisible.value) return
+  generation++; subtitleRequest?.abort(); subtitleLoading.value = false; subtitleError.value = ''
+  revokeSubtitles(playItem.value.subtitles)
+  playItem.value.subtitles = sidecarSubtitles.map(subtitle => ({...subtitle}))
+  if(kind === 'standard') loadInternalSubtitles(generation)
+})
+
 defineExpose({
   show
 })
@@ -85,6 +107,7 @@ let onClose = () => {
   subtitleLoading.value = false
   subtitleError.value = ''
   playItem.value = {}
+  sidecarSubtitles = []
 }
 
 onBeforeUnmount(onClose)
@@ -100,4 +123,6 @@ onBeforeUnmount(onClose)
 .subtitle-status {
   margin-left: 8px;
 }
+.player-content { min-width:0; }
+.player-kind { margin-bottom:12px; }
 </style>

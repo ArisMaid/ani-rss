@@ -11,7 +11,12 @@ public class SpaceReservationService {
     private final Map<String,Reservation> reservations=new HashMap<>();
     public synchronized void reserve(String operationId,Path directory,long bytes,long margin) throws IOException {
         if(bytes<0||margin<0) throw new IllegalArgumentException("空间预约参数无效");
-        Path parent=directory.toAbsolutePath().normalize(); while(!Files.exists(parent)) parent=parent.getParent();
+        Path parent=directory.toAbsolutePath().normalize();
+        while(!Files.exists(parent)) {
+            Path next=parent.getParent();
+            if(next==null) throw new IOException("SPACE_VOLUME_UNAVAILABLE");
+            parent=next;
+        }
         FileStore store=Files.getFileStore(parent); String key=(System.getProperty("os.name","").startsWith("Windows")?parent.getRoot()+":":"")+store.name()+":"+store.type();
         long other=reservations.entrySet().stream().filter(e->!e.getKey().equals(operationId)&&e.getValue().volume.equals(key)).mapToLong(e->e.getValue().bytes).sum();
         long usable=store.getUsableSpace();

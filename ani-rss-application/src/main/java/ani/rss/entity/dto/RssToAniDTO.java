@@ -10,6 +10,8 @@ import java.io.Serializable;
 @Data
 @Accessors(chain = true)
 public class RssToAniDTO implements Serializable {
+    @Schema(description = "备用 RSS，逐源推断剧集偏移")
+    private java.util.List<ani.rss.entity.StandbyRss> standbyRssList;
     @Schema(description = "RSS URL", defaultValue = "https://mikanani.me/RSS/Bangumi?bangumiId=3828&subgroupid=370")
     private String url;
 

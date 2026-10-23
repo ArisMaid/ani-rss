@@ -14,6 +14,7 @@ public final class UpgradeHttp {
     private static final Semaphore GLOBAL=new Semaphore(4,true);
     private static final ConcurrentHashMap<String,Semaphore> SOURCES=new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<String,Long> NEXT=new ConcurrentHashMap<>();
+    private static final Object RATE_LOCK=new Object();
     public static String resourceUrl(String url) {
         URI uri=URI.create(url);
         if(!("http".equalsIgnoreCase(uri.getScheme())||"https".equalsIgnoreCase(uri.getScheme()))||uri.getHost()==null||uri.getUserInfo()!=null||uri.getFragment()!=null) throw new IllegalArgumentException("资源地址必须是无凭据的 HTTP(S) 地址");
@@ -51,7 +52,7 @@ public final class UpgradeHttp {
         if(!source.tryAcquire(5,TimeUnit.SECONDS)) throw new SourceFailure("HTTP_SOURCE_CONCURRENCY_LIMIT",true);
         local=true;
         long wait;
-        synchronized(NEXT) { long now=System.currentTimeMillis(); long at=Math.max(now,NEXT.getOrDefault(host,0L)); NEXT.put(host,at+1000); wait=at-now; }
+        synchronized(RATE_LOCK) { long now=System.currentTimeMillis(); long at=Math.max(now,NEXT.getOrDefault(host,0L)); NEXT.put(host,at+1000); wait=at-now; }
         if(wait>0) Thread.sleep(Math.min(wait,5000));
         headers.forEach(request::header);
         request.setFollowRedirects(false);

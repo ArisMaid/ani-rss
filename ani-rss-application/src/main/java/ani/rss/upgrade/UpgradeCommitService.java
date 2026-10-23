@@ -192,23 +192,23 @@ public class UpgradeCommitService {
     private void install(JobFile file) throws IOException {
         Path source=Path.of(file.getSource()), destination=Path.of(file.getDestination()), temporary=Path.of(file.getTemporary()), root=Path.of(file.getAllowedRoot());
         paths.requireSafe(destination,root,false); paths.requireSafe(temporary,root,false);
-        Path sourceRoot=source.toAbsolutePath().getParent(); paths.requireSafe(source,sourceRoot,true);
+        Path sourceRoot=UpgradePaths.parent(source.toAbsolutePath()); paths.requireSafe(source,sourceRoot,true);
         if(Files.exists(destination)) {
             if(!MediaVerificationService.sha256(destination).equals(file.getSha256())) throw new IOException("DESTINATION_CONFLICT");
             file.setState("INSTALLED"); file.setError(null); saveFile(file); return;
         }
         if(!MediaVerificationService.sha256(source).equals(file.getSha256())) throw new IOException("VERIFIED_SOURCE_CHANGED");
-        Files.createDirectories(destination.getParent()); paths.requireSafe(destination,root,false);
+        Files.createDirectories(UpgradePaths.parent(destination)); paths.requireSafe(destination,root,false);
         if(Files.exists(temporary)&&"COPY_INCOMPLETE".equals(file.getState())) {
             paths.requireSafe(temporary,root,true);
-            if(!temporary.getFileName().toString().equals(destination.getFileName()+".install-"+file.getJobId())) throw new IOException("INSTALL_TEMPORARY_IDENTITY_CONFLICT");
+            if(!UpgradePaths.fileName(temporary).equals(destination.getFileName()+".install-"+file.getJobId())) throw new IOException("INSTALL_TEMPORARY_IDENTITY_CONFLICT");
             // Recover one explicitly journalled partial copy; no directory cleanup.
             Files.delete(temporary); file.setState("PLANNED"); file.setError(null); saveFile(file);
         }
         if(!Files.exists(temporary)) {
-            try { space.reserve("install:"+file.getJobId(),destination.getParent(),0,ConfigUtil.snapshot().getUpgrade().getReserveBytes()); Files.createLink(temporary,source); }
+            try { space.reserve("install:"+file.getJobId(),UpgradePaths.parent(destination),0,ConfigUtil.snapshot().getUpgrade().getReserveBytes()); Files.createLink(temporary,source); }
             catch(IOException|UnsupportedOperationException e) {
-                space.reserve("install:"+file.getJobId(),destination.getParent(),file.getSize(),ConfigUtil.snapshot().getUpgrade().getReserveBytes());
+                space.reserve("install:"+file.getJobId(),UpgradePaths.parent(destination),file.getSize(),ConfigUtil.snapshot().getUpgrade().getReserveBytes());
                 // CREATE_NEW proves ownership before journalling the exact temporary file.
                 // A write failure or process restart can then recover on the first retry.
                 try(var output=Files.newOutputStream(temporary,StandardOpenOption.CREATE_NEW,StandardOpenOption.WRITE)) {

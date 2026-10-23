@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <FindBugsFilter>
+    <!-- Spring singleton collaborators are retained by identity and never returned as DTO state. -->
+    <Match>
+        <Class name="ani.rss.controller.v2.UpgradeController"/>
+        <Field name="~(campaigns|scheduler)"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
+    <Match>
+        <Class name="ani.rss.upgrade.UpgradeScheduler"/>
+        <Field name="campaigns"/>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+    </Match>
     <!-- Spring-managed collaborators are intentionally retained by identity; they are not DTO state. -->
     <Match>
         <Class name="ani.rss.ownership.OwnershipService"/>

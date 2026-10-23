@@ -1,5 +1,7 @@
 package ani.rss.util.other;
 
+import ani.rss.upgrade.UpgradeHttp;
+
 import ani.rss.commons.AtomicFileWriter;
 import ani.rss.commons.GsonStatic;
 import ani.rss.commons.PathPolicy;
@@ -155,6 +157,10 @@ public class AniUtil {
         log.debug("保存成功 {}", REPOSITORY.path());
     }
 
+    public static Ani addOrReplace(Ani subscription, boolean override) {
+        return REPOSITORY.addOrReplace(subscription, override);
+    }
+
     /**
      * 获取动漫信息
      *
@@ -173,6 +179,14 @@ public class AniUtil {
 
         Ani ani = AniUtil.createAni();
         ani.setUrl(url);
+        if (dto.getStandbyRssList() != null) {
+            if (dto.getStandbyRssList().size() > 50) throw new IllegalArgumentException("备用 RSS 数量不能超过 50");
+            ani.setStandbyRssList(dto.getStandbyRssList().stream().map(rss -> {
+                if (rss == null || StrUtil.isBlank(rss.getUrl())) throw new IllegalArgumentException("备用 RSS 地址不能为空");
+                UpgradeHttp.resourceUrl(rss.getUrl());
+                return ObjectUtil.clone(rss);
+            }).collect(java.util.stream.Collectors.toCollection(ArrayList::new)));
+        }
 
         Map<String, String> paramMap = HttpUtil.decodeParamMap(url, StandardCharsets.UTF_8);
 
@@ -283,23 +297,19 @@ public class AniUtil {
 
         // 自动推断剧集偏移
         if (config.getOffset()) {
-            List<Item> items = ItemsUtil.getItems(ani, url, subgroup);
-            if (items.isEmpty()) {
-                return ani;
-            }
-            Double minEpisode = items.stream()
-                    .map(Item::getEpisode)
-                    .min(Comparator.comparingDouble(i -> i))
-                    .get();
-            int offset = ItemsUtil.is5(minEpisode) ? -minEpisode.intValue() : 1 - minEpisode.intValue();
-            log.debug("自动获取到剧集偏移为 {}", offset);
-            ani.setOffset(offset);
-
+            ani.setOffset(inferOffset(ani, url, subgroup));
             for (StandbyRss rss : standbyRssList) {
-                rss.setOffset(offset);
+                rss.setOffset(inferOffset(ani, rss.getUrl(), ""));
             }
         }
         return ani;
+    }
+
+    static int inferOffset(Ani ani, String url, String subgroup) {
+        // Parse each source against an unshifted copy, including after the primary offset was set.
+        Ani unshifted = ObjectUtil.clone(ani); unshifted.setOffset(0);
+        return ItemsUtil.getItems(unshifted, url, subgroup).stream().map(Item::getEpisode).filter(Objects::nonNull)
+                .min(Double::compare).map(episode -> ItemsUtil.is5(episode) ? -episode.intValue() : 1 - episode.intValue()).orElse(0);
     }
 
 

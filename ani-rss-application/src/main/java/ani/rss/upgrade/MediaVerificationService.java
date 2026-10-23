@@ -15,7 +15,10 @@ import java.util.concurrent.*;
 @Service
 public class MediaVerificationService {
     private static final ExecutorService READERS=Executors.newCachedThreadPool(r->{ Thread t=new Thread(r,"upgrade-process-output"); t.setDaemon(true); return t; });
-    public record Verified(Release attributes,long size,long modifiedAt,String fileKey,String sha256) {}
+    public record Verified(Release attributes,long size,long modifiedAt,String fileKey,String sha256) {
+        public Verified { attributes=UpgradeModels.snapshot(attributes,Release.class); }
+        @Override public Release attributes() { return UpgradeModels.snapshot(attributes,Release.class); }
+    }
     public boolean available(String executable) {
         try { run(List.of(executable,"-version"),10,100000); return true; } catch(Exception e) { return false; }
     }
@@ -39,7 +42,7 @@ public class MediaVerificationService {
         if(!video||!probe.has("format")) throw new IOException("MEDIA_VIDEO_STREAM_MISSING");
         JsonObject format=probe.getAsJsonObject("format");
         String container=Objects.toString(UpgradeHttp.string(format,"format_name"),"");
-        String extension=path.getFileName().toString().toLowerCase(Locale.ROOT);
+        String extension=UpgradePaths.fileName(path).toLowerCase(Locale.ROOT);
         actual.setContainer(container.contains("webm")&&extension.endsWith(".webm")?"webm":container.contains("matroska")?"mkv":container.contains("mp4")?"mp4":container.contains("mpegts")?"ts":container.contains("avi")?"avi":null);
         if(actual.getContainer()==null) throw new IOException("MEDIA_CONTAINER_UNSUPPORTED");
         double duration;
@@ -95,14 +98,14 @@ public class MediaVerificationService {
         if(streams>0&&actual.getSubtitlePackaging()==null) actual.setSubtitlePackaging("SOFT");
     }
     public void supplementSubtitles(Release attributes,Path video,List<Path> subtitles) throws IOException {
-        String base=video.getFileName().toString().replaceFirst("\\.[^.]+$","");
+        String base=UpgradePaths.fileName(video).replaceFirst("\\.[^.]+$","");
         Release observed=new Release(); boolean complete=true; int matched=0;
         // Retain independently observed embedded capability when an external
         // track disagrees with the publisher's declaration.
         for(var evidence:attributes.getEvidence()) if("EMBEDDED_SUBTITLE_TRACK".equals(evidence.getSource())&&"OBSERVED".equals(evidence.getVerificationLevel()))
             for(String language:evidence.getQuote().split("\\+")) if(Set.of("CHS","CHT","JPN","ZHO").contains(language)) observed.getLanguages().add(language);
         for(Path subtitle:subtitles) {
-            if(!subtitle.getFileName().toString().startsWith(base+".")) continue;
+            if(!UpgradePaths.fileName(subtitle).startsWith(base+".")) continue;
             matched++;
             var a=Files.readAttributes(subtitle,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
             if(!a.isRegularFile()||a.isSymbolicLink()||a.size()>16*1024*1024) throw new IOException("SUBTITLE_FILE_UNSUPPORTED");
@@ -117,7 +120,7 @@ public class MediaVerificationService {
                 evidence.setEvidenceSnippet(text.substring(0,Math.min(600,text.length()))); evidence.setVerificationLevel("OBSERVED"); attributes.getEvidence().add(evidence);
             } else {
                 observed.getLanguages().addAll(parsed.getLanguages());
-                Release name=new ReleaseAnalysisService().parse(subtitle.getFileName().toString(),attributes.getSubjectId(),"SUBTITLE_FILENAME"); observed.getLanguages().addAll(name.getLanguages());
+                Release name=new ReleaseAnalysisService().parse(UpgradePaths.fileName(subtitle),attributes.getSubjectId(),"SUBTITLE_FILENAME"); observed.getLanguages().addAll(name.getLanguages());
             }
             if(attributes.getSubtitlePackaging()==null) attributes.setSubtitlePackaging("EXTERNAL");
         }

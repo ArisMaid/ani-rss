@@ -29,11 +29,9 @@
         未启用
       </div>
       <div class="cover-overlay">
-        <el-tooltip :content="item.title" placement="top">
-          <el-text class="cover-title" line-clamp="2" @click.stop="openBgmUrl(item)">
-            {{ item.title }}
-          </el-text>
-        </el-tooltip>
+        <el-text class="cover-title" :title="item.title" line-clamp="2" @click.stop="openBgmUrl(item)">
+          {{ item.title }}
+        </el-text>
         <div class="cover-meta">
           <div class="cover-meta-line">
             <span class="cover-meta-fixed">第 {{ item.season || 1 }} 季</span>

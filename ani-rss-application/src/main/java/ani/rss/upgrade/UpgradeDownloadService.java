@@ -143,7 +143,7 @@ public class UpgradeDownloadService {
             Path allowed=settings.getDownloaderMappings().stream().map(m->Path.of(m.localRoot()).toAbsolutePath().normalize())
                     .filter(path::startsWith).max(Comparator.comparingInt(Path::getNameCount)).orElseThrow(()->new IOException("DOWNLOAD_PATH_OUTSIDE_MAPPING"));
             paths.requireSafe(path,allowed,true);
-            String name=path.getFileName().toString().toLowerCase(Locale.ROOT);
+            String name=UpgradePaths.fileName(path).toLowerCase(Locale.ROOT);
             if(name.matches(".*\\.(mkv|mp4|avi|webm|ts)$")) videos.add(path);
             if(name.matches(".*\\.(ass|ssa|srt|vtt)$")) subtitles.add(path);
             if(name.matches(".*\\.(iso|zip|rar|7z|m2ts|mpls)$")||name.equals("index.bdmv")) unsupportedCarrier=true;
@@ -151,7 +151,7 @@ public class UpgradeDownloadService {
         if(videos.isEmpty()) throw new IOException(unsupportedCarrier?"UNSUPPORTED_RESOURCE_FORMAT":"NO_SUPPORTED_VIDEO_FILES");
         List<JobFile> files=new ArrayList<>(); Set<String> coverage=new TreeSet<>();
         for(Path video:videos) {
-            Release filename=analysis.parse(video.getFileName().toString(),target.getSubjectId(),"TORRENT_FILE");
+            Release filename=analysis.parse(UpgradePaths.fileName(video),target.getSubjectId(),"TORRENT_FILE");
             SubjectEpisodeResolver.normalizeChapters(target,filename);
             if("EXTRA".equals(filename.getChapterType())) continue;
             if(videos.size()>1&&(!"NORMAL".equals(filename.getChapterType())&&!filename.getChapterType().equals(release.getChapterType())||filename.getEpisodes().isEmpty())) {
@@ -184,9 +184,9 @@ public class UpgradeDownloadService {
             Path destination=directory.resolve(filenameOut);
             install.setDestination(destination.toString()); files.add(install); coverage.addAll(declared.getEpisodes());
             for(Path subtitle:subtitles) {
-                String videoBase=video.getFileName().toString().replaceFirst("\\.[^.]+$","");
-                if(!subtitle.getFileName().toString().startsWith(videoBase+".")) continue;
-                String suffix=subtitle.getFileName().toString().substring(videoBase.length());
+                String videoBase=UpgradePaths.fileName(video).replaceFirst("\\.[^.]+$","");
+                if(!UpgradePaths.fileName(subtitle).startsWith(videoBase+".")) continue;
+                String suffix=UpgradePaths.fileName(subtitle).substring(videoBase.length());
                 JobFile sub=new JobFile(); sub.setKind("SUBTITLE"); sub.setSource(subtitle.toString()); sub.setAttributes(declared);
                 sub.setSize(Files.size(subtitle)); sub.setSha256(MediaVerificationService.sha256(subtitle));
                 sub.setDestination(destination.resolveSibling(filenameOut.replaceFirst("\\.[^.]+$","")+suffix).toString()); files.add(sub);

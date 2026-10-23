@@ -468,6 +468,8 @@ public class ItemsUtil {
                     .toList();
         }
 
+        if (ani.getTotalEpisodeNumber() > 0 && currentEpisodeNumber(ani, items) >= ani.getTotalEpisodeNumber()) return;
+
         items.stream()
                 .map(Item::getPubDate)
                 .filter(Objects::nonNull)

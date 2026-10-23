@@ -27,8 +27,8 @@ public class MetadataEnrichmentService {
             if(!"VIDEO".equals(v.getKind())||!"AUTOMATIC_UPGRADE".equals(v.getOrigin())) continue;
             Path video=Path.of(v.getPath());
             updates.add(Map.of("Path",emby.remotePath(video),"UpdateType",v.getEmbyItemId()==null?"Created":"Modified"));
-            boolean seasonFolder=target.getEmbySeriesId()!=null&&target.getSeason()!=null||video.getParent().getFileName().toString().matches("(?i)Season[ ._-]*\\d+");
-            nfos.add(SubjectEpisodeResolver.isMovie(target)?video.resolveSibling(video.getFileName().toString().replaceFirst("\\.[^.]+$","")+".nfo"):video.getParent().resolve(seasonFolder?"season.nfo":"tvshow.nfo"));
+            boolean seasonFolder=target.getEmbySeriesId()!=null&&target.getSeason()!=null||UpgradePaths.fileName(UpgradePaths.parent(video)).matches("(?i)Season[ ._-]*\\d+");
+            nfos.add(SubjectEpisodeResolver.isMovie(target)?video.resolveSibling(UpgradePaths.fileName(video).replaceFirst("\\.[^.]+$","")+".nfo"):UpgradePaths.parent(video).resolve(seasonFolder?"season.nfo":"tvshow.nfo"));
         }
         for(Path nfo:nfos) {
             Path root=target.getOutputDirectory()==null?Path.of(target.getOutputRoot()):UpgradeCommitService.allowedRoot(Path.of(target.getOutputDirectory()),ConfigUtil.snapshot().getUpgrade());
@@ -55,7 +55,7 @@ public class MetadataEnrichmentService {
         factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD,""); factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA,"");
         Document document;
         if(Files.exists(nfo)) try(var in=Files.newInputStream(nfo)) { document=factory.newDocumentBuilder().parse(in); }
-        else { document=factory.newDocumentBuilder().newDocument(); document.appendChild(document.createElement(SubjectEpisodeResolver.isMovie(target)?"movie":nfo.getFileName().toString().equals("season.nfo")?"season":"tvshow")); }
+        else { document=factory.newDocumentBuilder().newDocument(); document.appendChild(document.createElement(SubjectEpisodeResolver.isMovie(target)?"movie":UpgradePaths.fileName(nfo).equals("season.nfo")?"season":"tvshow")); }
         Element root=document.getDocumentElement();
         if("true".equalsIgnoreCase(text(root,"lockdata"))) return List.of();
         NodeList ids=root.getElementsByTagName("uniqueid");

@@ -18,7 +18,7 @@ public class UpgradeNotificationService {
         var config=ConfigUtil.snapshot(); if(!config.getUpgrade().isNotifications()) return;
         Context context=new Context(job.getId(),target.getSubjectId(),target.getTitle(),"自动化洗版完成，新版已安装，清单内旧文件已删除");
         Ani view=new Ani().setId("upgrade-event:"+job.getId()).setTitle(context.title()).setJpTitle(target.getOriginalTitle()).setBgmUrl("https://bgm.tv/subject/"+target.getSubjectId())
-                .setSeason(target.getSeason()==null?1:target.getSeason()).setMessage(true).setOva(SubjectEpisodeResolver.isMovie(target)).setCustomDownloadPath(true).setCustomDownloadPathTemplate(target.getOutputRoot())
+                .setSeason(Objects.requireNonNullElse(target.getSeason(),Integer.valueOf(1))).setMessage(true).setOva(SubjectEpisodeResolver.isMovie(target)).setCustomDownloadPath(true).setCustomDownloadPathTemplate(target.getOutputRoot())
                 .setReleaseDate(Date.from(LocalDate.parse(target.getPremiereDate()).atStartOfDay(ZoneId.of(config.getUpgrade().getTimezone())).toInstant())).setCurrentEpisodeNumber(0).setTotalEpisodeNumber(0).setSubgroup("").setThemoviedbName("").setCover("").setImage(target.getCover());
         Set<NotificationTypeEnum> allowed=Set.of(NotificationTypeEnum.MAIL,NotificationTypeEnum.SERVER_CHAN,NotificationTypeEnum.SYSTEM,NotificationTypeEnum.TELEGRAM,NotificationTypeEnum.WEB_HOOK,NotificationTypeEnum.BARK);
         for(var channel:config.getNotificationConfigList()) {

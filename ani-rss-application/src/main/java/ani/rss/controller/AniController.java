@@ -62,39 +62,14 @@ public class AniController extends BaseController {
     @Auth
     @Operation(summary = "添加订阅")
     @PostMapping("/addAni")
-    public Result<Void> addAni(@RequestBody Ani ani) {
+    public Result<Void> addAni(@RequestBody Ani ani, @RequestParam(defaultValue = "false") boolean override) {
         ani.setTitle(ani.getTitle().trim())
                 .setUrl(ani.getUrl().trim());
         AniUtil.verify(ani);
 
-        Optional<Ani> first = AniUtil.ANI_LIST.stream()
-                .filter(it -> it.getId().equals(ani.getId()))
-                .findFirst();
-
-        if (first.isPresent()) {
-            throw new IllegalArgumentException("此订阅已存在");
-        }
-
-        first = AniUtil.ANI_LIST.stream()
-                .filter(it -> it.getTitle().equals(ani.getTitle()) && it.getSeason().equals(ani.getSeason()))
-                .findFirst();
-
         String title = ani.getTitle();
-        Integer season = ani.getSeason();
-
-        if (first.isPresent()) {
-            Config config = ConfigUtil.CONFIG;
-            Boolean replace = config.getReplace();
-            if (replace) {
-                AniUtil.ANI_LIST.remove(first.get());
-                log.info("自动替换 {} 第{}季", title, season);
-            } else {
-                throw new IllegalArgumentException("订阅标题重复");
-            }
-        }
-
-        AniUtil.ANI_LIST.add(ani);
-        AniUtil.sync();
+        ani = AniUtil.addOrReplace(ani, override);
+        Ani saved = ani;
         Boolean enable = ani.getEnable();
         if (enable) {
             RssTask.submitDownload(List.of(ani));
@@ -102,9 +77,9 @@ public class AniController extends BaseController {
             // 如果未开启订阅则只获取一下集数
             ThreadUtil.execute(() -> {
                 try {
-                    List<Item> items = ItemsUtil.getItems(ani);
-                    int currentEpisodeNumber = ItemsUtil.currentEpisodeNumber(ani, items);
-                    ani.setCurrentEpisodeNumber(currentEpisodeNumber);
+                    List<Item> items = ItemsUtil.getItems(saved);
+                    int currentEpisodeNumber = ItemsUtil.currentEpisodeNumber(saved, items);
+                    saved.setCurrentEpisodeNumber(currentEpisodeNumber);
                 } catch (Exception e) {
                     log.error(ExceptionUtils.getMessage(e), e);
                 }
@@ -114,6 +89,8 @@ public class AniController extends BaseController {
 
         return Result.success("添加订阅成功");
     }
+
+    public Result<Void> addAni(Ani ani) { return addAni(ani, false); }
 
     @Auth
     @Operation(summary = "修改订阅")

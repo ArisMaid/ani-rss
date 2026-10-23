@@ -31,7 +31,7 @@ public class WebFilter implements Filter {
      */
     private static final List<String> CACHE_EXT = List.of(
             "css", "js", "jpg", "jpeg", "png", "gif", "webp", "svg", "ico",
-            "woff", "woff2", "ttf", "otf");
+            "woff", "woff2", "ttf", "otf", "wasm");
 
     @Override
     public void doFilter(ServletRequest req, ServletResponse res, FilterChain filterChain) throws IOException, ServletException {

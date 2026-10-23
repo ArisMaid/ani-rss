@@ -5,6 +5,9 @@ import java.util.*;
 
 public final class UpgradeModels {
     private UpgradeModels() {}
+    public static <T> T snapshot(T value,Class<T> type) {
+        return value==null?null:ani.rss.commons.GsonStatic.GSON.fromJson(ani.rss.commons.GsonStatic.toJson(value),type);
+    }
     public enum JobState { DISCOVERED, ANALYZING, ELIGIBLE, QUEUED, DOWNLOADING, VERIFYING, READY_TO_COMMIT,
         INSTALLING, INSTALLED, CLEANING_OLD, COMPLETED, NO_RESOURCE, NOT_BETTER, WAITING_EVIDENCE, WAITING_AI,
         NEEDS_REVIEW, RETRY_WAIT, PAUSED, CANCELLED, FAILED, CLEANUP_PENDING }

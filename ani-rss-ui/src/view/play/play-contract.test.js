@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import {afterEach, describe, expect, it, vi} from 'vitest'
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {nextTick} from 'vue'
 import {mount} from '@vue/test-utils'
 
@@ -57,9 +57,17 @@ describe('play media contracts', () => {
   let createObjectUrl
   let revokeObjectUrl
 
+  beforeEach(() => {
+    // Node 26 exposes its own storage getter; use this test's browser storage.
+    vi.stubGlobal('localStorage', jsdom.window.localStorage)
+    window.localStorage.clear()
+  })
+
   afterEach(() => {
     wrapper?.unmount()
     wrapper = undefined
+    window.localStorage.removeItem('play-engine')
+    vi.unstubAllGlobals()
     vi.clearAllMocks()
     delete URL.createObjectURL
     delete URL.revokeObjectURL
@@ -68,7 +76,7 @@ describe('play media contracts', () => {
   })
 
   const mountView = (engine = 'standard') => {
-    localStorage.setItem('play-engine', engine)
+    window.localStorage.setItem('play-engine', engine)
     return mount(PlayStartView, {
     global: {
       stubs: {

@@ -29,6 +29,9 @@ public final class DownloaderClient {
         return operation(adapter::torrentsResult);
     }
 
+    public DownloaderResult<List<TorrentsInfo>> inventory() { return operation(adapter::inventory); }
+    public DownloaderResult<Void> submit(DownloadSubmission submission) { return operation(() -> adapter.submit(submission)); }
+
     public DownloaderResult<Void> download(Ani ani, Item item, String savePath, File torrentFile) {
         return operation(() -> adapter.downloadResult(ani, item, savePath, torrentFile));
     }

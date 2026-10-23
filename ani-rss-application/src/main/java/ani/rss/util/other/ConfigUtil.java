@@ -317,6 +317,24 @@ public class ConfigUtil {
     public static Config snapshot() {
         return STORE.snapshot();
     }
+    public static void syncExpected(Config config,long expectedRevision) {
+        synchronized(SYNC_LOCK) {
+            Config current=snapshot();
+            if(current.getUpgradeModeRevision()!=expectedRevision) ani.rss.upgrade.UpgradeModeService.conflict(current.getUpgradeModeRevision());
+            syncLocked(config);
+        }
+    }
+
+    public static void switchUpgradeMode(ani.rss.upgrade.UpgradeMode mode, long expectedRevision) {
+        synchronized (SYNC_LOCK) {
+            Config candidate = snapshot();
+            ani.rss.upgrade.UpgradeModeService.normalize(candidate);
+            if (candidate.getUpgradeModeRevision() != expectedRevision)
+                ani.rss.upgrade.UpgradeModeService.conflict(candidate.getUpgradeModeRevision());
+            candidate.setUpgradeMode(mode);
+            syncLocked(candidate);
+        }
+    }
 
     public static long revision() {
         return STORE.revision();
@@ -344,6 +362,7 @@ public class ConfigUtil {
      * @param config 设置
      */
     public static void format(Config config) {
+        ani.rss.upgrade.UpgradeModeService.normalize(config);
         if (!List.of("Original", "Subfolder", "NoSubfolder").contains(config.getQbContentLayout())) {
             config.setQbContentLayout("Original");
         }

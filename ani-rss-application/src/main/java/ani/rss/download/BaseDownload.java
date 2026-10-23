@@ -17,6 +17,10 @@ import java.util.List;
 import java.util.Set;
 
 public interface BaseDownload {
+    default DownloaderResult<Void> submit(DownloadSubmission submission) {
+        return DownloaderResult.rejected("AUTOMATIC_DOWNLOAD_UNSUPPORTED");
+    }
+    default DownloaderResult<List<TorrentsInfo>> inventory() { return torrentsResult(); }
     /**
      * 登录
      *

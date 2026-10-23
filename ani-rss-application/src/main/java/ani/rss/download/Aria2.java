@@ -31,6 +31,26 @@ import java.util.*;
  */
 @Slf4j
 public class Aria2 implements BaseDownload {
+    @Override
+    public DownloaderResult<Void> submit(DownloadSubmission s) {
+        Aria2RpcBody body=s.torrentFile()==null?Aria2RpcBody.addUri(s.magnet(),s.saveRoot()):Aria2RpcBody.addTorrent(s.torrentFile(),s.saveRoot());
+        return rpc(body,configuration()).thenFunction(response -> {
+            requireSuccess(response); JsonObject json=GsonStatic.fromJson(response.body(),JsonObject.class);
+            if(json.has("error")) return DownloaderResult.rejected("ARIA2_APPLICATION_REJECTED");
+            if(!json.has("result")) return DownloaderResult.failed("ARIA2_INVALID_RESPONSE",false);
+            return DownloaderResult.success(null,json.get("result").getAsString());
+        });
+    }
+
+    @Override
+    public DownloaderResult<List<TorrentsInfo>> inventory() {
+        List<TorrentsInfo> result=new ArrayList<>();
+        result.addAll(getTorrentsInfos(Aria2RpcBody.tellActive(),true));
+        result.addAll(getTorrentsInfos(Aria2RpcBody.tellWaiting(),true));
+        result.addAll(getTorrentsInfos(Aria2RpcBody.tellStopped(),true));
+        result.sort(Comparator.comparing(t->"ARIA2_METADATA".equals(t.getCategory())));
+        return DownloaderResult.success(result);
+    }
     private volatile Config config;
 
     public Aria2() {
@@ -71,6 +91,9 @@ public class Aria2 implements BaseDownload {
     }
 
     public List<TorrentsInfo> getTorrentsInfos(Aria2RpcBody aria2RpcBody) {
+        return getTorrentsInfos(aria2RpcBody,false);
+    }
+    private List<TorrentsInfo> getTorrentsInfos(Aria2RpcBody aria2RpcBody,boolean includeMetadata) {
         return rpc(aria2RpcBody, configuration())
                 .thenFunction(res -> {
                     requireSuccess(res);
@@ -88,6 +111,7 @@ public class Aria2 implements BaseDownload {
                     return result
                             .stream()
                             .filter(torrent -> {
+                                if(includeMetadata) return true;
                                 Aria2TorrentsInfo.Bittorrent bittorrent = torrent.getBittorrent();
                                 if (Objects.isNull(bittorrent)) {
                                     return false;

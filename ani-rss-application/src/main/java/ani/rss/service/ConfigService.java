@@ -74,6 +74,9 @@ public class ConfigService {
 
     public void setConfig(Config newConfig) {
         Config config = ConfigUtil.snapshot();
+        if (newConfig.getUpgradeModeRevision() != null && config.getUpgradeModeRevision() != null
+                && !Objects.equals(newConfig.getUpgradeModeRevision(), config.getUpgradeModeRevision()))
+            ani.rss.upgrade.UpgradeModeService.conflict(config.getUpgradeModeRevision());
         Config previousConfig = ConfigUtil.copy(config);
         Config candidate = ConfigUtil.copy(config);
         Login login = previousConfig.getLogin();
@@ -131,7 +134,8 @@ public class ConfigService {
             }
         }
 
-        ConfigUtil.sync(candidate);
+        if(candidate.getUpgrade()!=null&&candidate.getUpgrade().isAiEnabled()&&!Objects.equals(ani.rss.upgrade.DeepSeekAnalysisClient.fingerprint(candidate.getUpgrade()),candidate.getUpgrade().getAiTestFingerprint())) throw new IllegalArgumentException("启用 AI 前请先保存地址、密钥与模型，并完成结构化输出自检");
+        ConfigUtil.syncExpected(candidate,previousConfig.getUpgradeModeRevision());
         Config committed = ConfigUtil.snapshot();
         Integer newRenameSleepSeconds = committed.getRenameSleepSeconds();
         Integer newSleep = committed.getRssSleepMinutes();
@@ -166,6 +170,7 @@ public class ConfigService {
             }
         } catch (Exception failure) {
             try {
+                previousConfig.setUpgradeModeRevision(ConfigUtil.snapshot().getUpgradeModeRevision());
                 ConfigUtil.sync(previousConfig);
                 LogUtil.loadLogback();
                 if (downloaderChanged) {
@@ -317,6 +322,14 @@ public class ConfigService {
     }
 
     private static void clearSecrets(Config config) {
+        if (config.getUpgrade() != null) {
+            var settings = config.getUpgrade();
+            settings.setEmbyKeyConfigured(StrUtil.isNotBlank(settings.getEmbyApiKey()));
+            settings.setAiKeyConfigured(StrUtil.isNotBlank(settings.getAiApiKey()));
+            settings.setEmbyApiKey("");
+            settings.setAiApiKey("");
+            settings.setAiTestFingerprint("");
+        }
         config.setTmdbApiKey("")
                 .setDownloadToolPassword("")
                 .setProxyPassword("")
@@ -342,6 +355,17 @@ public class ConfigService {
     }
 
     private static void preserveSecrets(Config previous, Config candidate) {
+        if (candidate.getUpgrade() != null) {
+            var next = candidate.getUpgrade();
+            var old = previous.getUpgrade() == null ? new ani.rss.upgrade.UpgradeSettings() : previous.getUpgrade();
+            if (next.isClearEmbyKey()) next.setEmbyApiKey("");
+            else if (StrUtil.isBlank(next.getEmbyApiKey())) next.setEmbyApiKey(old.getEmbyApiKey());
+            if (next.isClearAiKey()) next.setAiApiKey("");
+            else if (StrUtil.isBlank(next.getAiApiKey())) next.setAiApiKey(old.getAiApiKey());
+            next.setClearEmbyKey(false);
+            next.setClearAiKey(false);
+            next.setAiTestFingerprint(old.getAiTestFingerprint());
+        }
         if (StrUtil.isBlank(candidate.getTmdbApiKey())) candidate.setTmdbApiKey(previous.getTmdbApiKey());
         if (StrUtil.isBlank(candidate.getDownloadToolPassword())) candidate.setDownloadToolPassword(previous.getDownloadToolPassword());
         if (StrUtil.isBlank(candidate.getProxyPassword())) candidate.setProxyPassword(previous.getProxyPassword());

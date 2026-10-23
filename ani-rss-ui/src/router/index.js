@@ -21,6 +21,10 @@ const routes = [
         component: () => import('@/view/home/TorrentsInfosView.vue')
     },
     {
+        path: '/upgrade',
+        component: () => import('@/view/home/UpgradeView.vue')
+    },
+    {
         path: '/logs',
         component: () => import('@/view/home/LogsView.vue')
     },

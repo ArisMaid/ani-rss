@@ -458,6 +458,7 @@ public final class DatabaseManager {
                 current.setAutoCommit(autoCommit);
             }
         }
+        ani.rss.upgrade.UpgradeSchema.migrate(current, version);
     }
 
     private static boolean hasColumn(Connection connection, String table, String column) throws SQLException {

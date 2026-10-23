@@ -119,6 +119,11 @@ public class MikanService {
      * @param season 集度
      * @return Mikan
      */
+    /** Cached directory without score warmup or legacy subscription enrichment. */
+    public Mikan catalog(Mikan.Season season) {
+        return loadCachedList("", season);
+    }
+
     public Mikan list(String text, Mikan.Season season) {
         Mikan mikan = loadCachedList(text, season);
         List<MikanInfo> mikanInfos = Optional.ofNullable(mikan.getWeeks())

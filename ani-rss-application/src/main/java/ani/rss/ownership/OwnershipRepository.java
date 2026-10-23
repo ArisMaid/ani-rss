@@ -28,6 +28,7 @@ public class OwnershipRepository {
                 try (ResultSet resultSet = existing.executeQuery()) {
                     if (resultSet.next()) {
                         DownloadOwnership current = mapOwnership(resultSet);
+                        if(!"SUBSCRIPTION".equals(resultSet.getString("owner_kind"))) throw new IllegalStateException("下载任务由自动化目标管理");
                         if (current.state() == OwnershipState.DELETED) {
                             return reassignDeletedOwnership(connection, current, ownership);
                         }
@@ -143,7 +144,7 @@ public class OwnershipRepository {
     public Optional<DownloadOwnership> find(String ownershipId) {
         return DatabaseManager.withConnection(connection -> {
             try (PreparedStatement statement = connection.prepareStatement(
-                    "SELECT * FROM download_ownership WHERE ownership_id = ?")) {
+                    "SELECT * FROM download_ownership WHERE ownership_id = ? AND owner_kind='SUBSCRIPTION'")) {
                 statement.setString(1, ownershipId);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     return resultSet.next() ? Optional.of(mapOwnership(resultSet)) : Optional.empty();
@@ -164,7 +165,7 @@ public class OwnershipRepository {
                     connection,
                     """
                             SELECT * FROM download_ownership
-                            WHERE downloader_type = ? AND remote_task_id = ?
+                            WHERE downloader_type = ? AND remote_task_id = ? AND owner_kind='SUBSCRIPTION'
                             ORDER BY CASE state WHEN 'ACTIVE' THEN 0 WHEN 'LEGACY_ADOPTED' THEN 1 ELSE 2 END
                             LIMIT 1
                             """,
@@ -173,7 +174,7 @@ public class OwnershipRepository {
                     connection,
                     """
                             SELECT * FROM download_ownership
-                            WHERE downloader_type = ? AND info_hash = ?
+                            WHERE downloader_type = ? AND info_hash = ? AND owner_kind='SUBSCRIPTION'
                             LIMIT 1
                             """,
                     downloaderType, normalizedInfoHash);
@@ -185,7 +186,7 @@ public class OwnershipRepository {
         return DatabaseManager.withConnection(connection -> {
             try (PreparedStatement statement = connection.prepareStatement("""
                     SELECT * FROM download_ownership
-                    WHERE downloader_type = ? AND info_hash = ?
+                    WHERE downloader_type = ? AND info_hash = ? AND owner_kind='SUBSCRIPTION'
                     LIMIT 1
                     """)) {
                 statement.setString(1, downloaderType);
@@ -246,15 +247,15 @@ public class OwnershipRepository {
     }
 
     public List<DownloadOwnership> listBySubscription(String subscriptionId) {
-        return list("SELECT * FROM download_ownership WHERE subscription_id = ? ORDER BY created_at", subscriptionId);
+        return list("SELECT * FROM download_ownership WHERE subscription_id = ? AND owner_kind='SUBSCRIPTION' ORDER BY created_at", subscriptionId);
     }
 
     public List<DownloadOwnership> listByDownloaderType(String downloaderType) {
-        return list("SELECT * FROM download_ownership WHERE downloader_type = ? ORDER BY created_at", downloaderType);
+        return list("SELECT * FROM download_ownership WHERE downloader_type = ? AND owner_kind='SUBSCRIPTION' ORDER BY created_at", downloaderType);
     }
 
     public List<DownloadOwnership> listAll() {
-        return list("SELECT * FROM download_ownership ORDER BY created_at", null);
+        return list("SELECT * FROM download_ownership WHERE owner_kind='SUBSCRIPTION' ORDER BY created_at", null);
     }
 
     public void activate(String ownershipId, String remoteTaskId) {

@@ -45,7 +45,9 @@ public class RenameTask implements BaseTask {
                     return;
                 }
                 Boolean deleteStandbyRSSOnly = config.getDeleteStandbyRSSOnly();
-                try {
+                try (var lease = ani.rss.upgrade.UpgradeFileCoordinator.lease()) {
+                    if (downloadService.findAniByDownloadPath(torrentsInfo)
+                            .filter(ani.rss.upgrade.UpgradeFileCoordinator::managed).isPresent()) continue;
                     TorrentUtil.rename(torrentsInfo);
                     downloadService.notification(torrentsInfo);
                     if (deleteStandbyRSSOnly) {

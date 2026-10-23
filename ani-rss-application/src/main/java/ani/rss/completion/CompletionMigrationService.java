@@ -14,6 +14,7 @@ import ani.rss.service.SubscriptionDeletionService;
 import ani.rss.util.other.AniUtil;
 import ani.rss.util.other.ConfigUtil;
 import ani.rss.util.other.TorrentUtil;
+import ani.rss.upgrade.UpgradeFileCoordinator;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ObjectUtil;
@@ -53,6 +54,12 @@ public class CompletionMigrationService {
     }
 
     public void complete(Ani source) {
+        try (var lease = ani.rss.upgrade.UpgradeFileCoordinator.lease()) {
+            completeLocked(source);
+        }
+    }
+
+    private void completeLocked(Ani source) {
         if (source == null || StrUtil.isBlank(source.getId())) {
             return;
         }
@@ -68,6 +75,7 @@ public class CompletionMigrationService {
 
     /** Reconciles a crash after the move but before its durable finalization state. */
     public void reconcilePendingFinalizations() {
+        try (var lease = UpgradeFileCoordinator.lease()) {
         for (CompletionMigrationRecord record : repository.listPendingFinalization()) {
             Object lock = locks.computeIfAbsent(record.subscriptionId(), ignored -> new Object());
             synchronized (lock) {
@@ -87,9 +95,11 @@ public class CompletionMigrationService {
                 }
             }
         }
+        }
     }
 
     private void moveAndFinalize(Ani ani) {
+        if (UpgradeFileCoordinator.persistentConflict(ani,null)) return;
         CompletionTarget target = target(ani);
         if (target == null) {
             return;
@@ -160,11 +170,13 @@ public class CompletionMigrationService {
             return;
         }
         Ani ani = current.get();
+        if (UpgradeFileCoordinator.persistentConflict(ani,null)) return;
         if (!record.subscriptionFingerprint().equals(fingerprint(ani))) {
             repository.setState(record.subscriptionId(), CompletionMigrationState.CONFLICT);
             return;
         }
         verifyMoved(record.subscriptionId(), record.targetRoot());
+        UpgradeFileCoordinator.migrated(ani,downloadService.getDownloadPath(ani,ConfigUtil.snapshot()),record.targetRoot());
         deletionService.deleteWithoutFiles(List.of(record.subscriptionId()));
         recoveryService.cancelSubscription(record.subscriptionId());
         repository.setState(record.subscriptionId(), CompletionMigrationState.FINALIZED);

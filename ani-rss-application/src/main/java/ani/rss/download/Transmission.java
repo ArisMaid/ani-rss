@@ -39,6 +39,32 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Slf4j
 public class Transmission implements BaseDownload {
+    @Override
+    public DownloaderResult<Void> submit(DownloadSubmission s) {
+        Config config=configuration(); SessionState state=ensureSession(config);
+        List<String> tags=List.of("AUTOMATIC_UPGRADE",s.operationId());
+        TransmissionRpcBody body=s.torrentFile()==null
+                ? TransmissionRpcBody.torrentAdd(tags,s.magnet(),s.saveRoot())
+                : TransmissionRpcBody.torrentAdd(tags,s.torrentFile(),s.saveRoot());
+        RpcResponse response=rpc(config,body,state);
+        JsonObject payload=TransmissionRpcCodec.payload(response.body(),state.dialect());
+        JsonObject added=null;
+        for(String key:List.of("torrent-added","torrent_added","torrent-duplicate","torrent_duplicate"))
+            if(payload.has(key)) { added=payload.getAsJsonObject(key); break; }
+        String reference=responseReference(added);
+        if(StrUtil.isBlank(reference)) return DownloaderResult.failed("TRANSMISSION_INVALID_RESPONSE",false);
+        return DownloaderResult.success(null,reference);
+    }
+
+    @Override
+    public DownloaderResult<List<TorrentsInfo>> inventory() {
+        Config config=configuration(); SessionState state=ensureSession(config);
+        RpcResponse response=rpc(config,TransmissionRpcBody.torrentGet(),state);
+        JsonObject payload=TransmissionRpcCodec.payload(response.body(),state.dialect());
+        TransmissionTorrentsInfo.Arguments arguments=GsonStatic.fromJson(payload.toString(),TransmissionTorrentsInfo.Arguments.class);
+        return DownloaderResult.success(Optional.ofNullable(arguments.getTorrents()).orElseGet(List::of).stream()
+                .map(TransmissionTorrentsInfo.Torrent::toTorrentsInfo).toList());
+    }
     private final ConcurrentMap<String, SessionState> sessions = new ConcurrentHashMap<>();
     private final AtomicLong requestIds = new AtomicLong(1);
     /** The last explicitly tested configuration, kept as an immutable snapshot. */

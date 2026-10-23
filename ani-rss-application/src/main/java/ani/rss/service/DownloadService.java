@@ -1,5 +1,8 @@
 package ani.rss.service;
 
+import ani.rss.upgrade.UpgradeModeService;
+import ani.rss.upgrade.UpgradeFileCoordinator;
+
 import ani.rss.commons.ExceptionUtils;
 import ani.rss.commons.FileUtils;
 import ani.rss.commons.PinyinUtils;
@@ -70,6 +73,7 @@ public class DownloadService {
      */
     @Synchronized("LOCK")
     public boolean downloadAni(Ani ani) {
+        if (UpgradeFileCoordinator.managed(ani)) return true;
         if (!isCurrentRuntimeSubscription(ani)) {
             return false;
         }
@@ -370,6 +374,13 @@ public class DownloadService {
      * @param item 资源项
      */
     public void deleteStandbyRss(Ani ani, Item item) {
+        try (var lease = UpgradeFileCoordinator.lease()) {
+            deleteStandbyRssLocked(ani, item);
+        }
+    }
+
+    private void deleteStandbyRssLocked(Ani ani, Item item) {
+        if (!UpgradeModeService.legacyAllowed() || UpgradeFileCoordinator.recoveryPending()) return;
         Config config = ConfigUtil.CONFIG;
         Boolean standbyRss = config.getStandbyRss();
         Boolean coexist = config.getCoexist();
@@ -438,12 +449,18 @@ public class DownloadService {
      * @param torrentFile 种子文件
      */
     public boolean download(Ani ani, Item item, String savePath, File torrentFile) {
-        return downloadInternal(ani, item, savePath, torrentFile, true);
+        try (var lease = UpgradeFileCoordinator.lease()) {
+            if (UpgradeFileCoordinator.managed(ani)) return false;
+            return downloadInternal(ani, item, savePath, torrentFile, true);
+        }
     }
 
     /** Performs a recovery submission without repeating the normal user notification. */
     public boolean recoverDownload(Ani ani, Item item, String savePath, File torrentFile) {
-        return downloadInternal(ani, item, savePath, torrentFile, false);
+        try (var lease = UpgradeFileCoordinator.lease()) {
+            if (UpgradeFileCoordinator.managed(ani)) return false;
+            return downloadInternal(ani, item, savePath, torrentFile, false);
+        }
     }
 
     private boolean downloadInternal(Ani ani, Item item, String savePath, File torrentFile, boolean notify) {

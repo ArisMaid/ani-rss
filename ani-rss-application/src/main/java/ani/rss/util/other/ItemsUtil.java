@@ -29,6 +29,26 @@ import java.util.function.Function;
 
 @Slf4j
 public class ItemsUtil {
+    public record RawRelease(String id, String title, String enclosure) {}
+
+    /** Preserves every same-episode release for quality analysis. */
+    public static List<RawRelease> getItemsRaw(String rssUrl) {
+        Document document = XmlUtil.readXML(getRss(rssUrl));
+        NodeList nodes = document.getElementsByTagName("item");
+        List<RawRelease> result = new ArrayList<>();
+        for (int index = 0; index < nodes.getLength(); index++) {
+            Element node = (Element) nodes.item(index);
+            NodeList titles = node.getElementsByTagName("title");
+            NodeList enclosures = node.getElementsByTagName("enclosure");
+            if (titles.getLength() == 0 || enclosures.getLength() == 0) continue;
+            String title = titles.item(0).getTextContent();
+            String enclosure = ((Element) enclosures.item(0)).getAttribute("url");
+            NodeList ids = node.getElementsByTagName("guid");
+            String id = ids.getLength() == 0 ? enclosure : ids.item(0).getTextContent();
+            result.add(new RawRelease(id,title,enclosure));
+        }
+        return result;
+    }
 
     /**
      * 获取视频列表

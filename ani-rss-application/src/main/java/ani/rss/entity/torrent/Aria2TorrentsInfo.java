@@ -68,12 +68,13 @@ public class Aria2TorrentsInfo implements Serializable {
         private List<FileEntity> files;
 
         public TorrentsInfo toTorrentsInfo() {
-            Bittorrent.Info info = bittorrent.getInfo();
-            String name = info.getName();
+            Bittorrent.Info info = bittorrent==null?null:bittorrent.getInfo();
+            String name = info==null?gid:info.getName();
 
             TorrentsStateEnum torrentsStateEnum = getTorrentsStateEnum();
 
-            return progress(completedLength, totalLength)
+            return progress(completedLength==null?0:completedLength, totalLength==null?0:totalLength)
+                    .setCategory(info==null?"ARIA2_METADATA":null)
                     .setTagList(List.of())
                     .setId(gid)
                     .setName(name)
@@ -81,7 +82,7 @@ public class Aria2TorrentsInfo implements Serializable {
                     .setState(torrentsStateEnum)
                     .setSavePath(FileUtils.getAbsolutePath(dir))
                     .setFilesSupplier(() ->
-                            files.stream()
+                            (files==null?List.<FileEntity>of():files).stream()
                                     .map(FileEntity::getPath)
                                     .toList()
                     );

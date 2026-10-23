@@ -116,6 +116,7 @@ public final class ConfigStore {
         Config next = copy(defaults);
         BeanUtil.copyProperties(copy(candidate), next,
                 CopyOptions.create().setIgnoreNullValue(true));
+        if(candidate.getUpgradeMode()==null) next.setUpgradeMode(null);
         prepare(next);
         return copy(next);
     }
@@ -138,6 +139,7 @@ public final class ConfigStore {
                     }
                     BeanUtil.copyProperties(loaded, candidate,
                             CopyOptions.create().setIgnoreNullValue(true));
+                    if(!document.has("upgradeMode")) candidate.setUpgradeMode(null);
                 }
                 prepare(candidate);
                 if (!Files.exists(path)) {
@@ -166,6 +168,7 @@ public final class ConfigStore {
             Config next = copy(candidate);
             prepare(next);
             Config previous = copy(lastCommitted);
+            checkUpgradeRevision(previous, next);
             Path path = path();
             JsonObject document = documentFor(path, next);
             try {
@@ -193,6 +196,7 @@ public final class ConfigStore {
             Config previous = copy(lastCommitted);
             try {
                 prepare(candidate);
+                checkUpgradeRevision(previous, candidate);
                 Path path = path();
                 JsonObject document = documentFor(path, candidate);
                 write(path, document);
@@ -226,6 +230,15 @@ public final class ConfigStore {
 
     public Path path() {
         return pathSupplier.get().toAbsolutePath().normalize();
+    }
+
+    private static void checkUpgradeRevision(Config previous, Config next) {
+        Long revision = previous.getUpgradeModeRevision();
+        if (previous.getUpgradeMode() != null && next.getUpgradeMode() != previous.getUpgradeMode()
+                && revision != null && next.getUpgradeModeRevision() != null
+                && !revision.equals(next.getUpgradeModeRevision()))
+            ani.rss.upgrade.UpgradeModeService.conflict(revision);
+        next.setUpgradeModeRevision((revision == null ? 0L : revision) + 1);
     }
 
     private void prepare(Config value) {
@@ -345,7 +358,8 @@ public final class ConfigStore {
         return GsonStatic.GSON.fromJson(GsonStatic.toJson(value), Config.class);
     }
 
-    private static IllegalStateException failure(String action, Exception e) {
+    private static RuntimeException failure(String action, Exception e) {
+        if (e instanceof ani.rss.exception.ApiProblemException problem) return problem;
         if (e instanceof IllegalStateException stateException &&
                 stateException.getCause() != null) {
             return stateException;

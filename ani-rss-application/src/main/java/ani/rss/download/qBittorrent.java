@@ -34,6 +34,27 @@ import java.util.function.Function;
  */
 @Slf4j
 public class qBittorrent implements BaseDownload {
+    @Override
+    public DownloaderResult<Void> submit(DownloadSubmission s) {
+        HttpRequest request = postApi("/api/v2/torrents/add")
+                .form("category", "ani-rss-upgrade").form("tags", "AUTOMATIC_UPGRADE," + s.operationId())
+                .form("autoTMM", false).form("savepath", s.saveRoot()).form("contentLayout", "Original")
+                .form("paused", false).form("stopped", false).form("skip_checking", false)
+                .form("ratioLimit", config.getRatioLimit()).form("seedingTimeLimit", config.getSeedingTimeLimit());
+        if (s.torrentFile() != null) request.form("torrents", s.torrentFile());
+        else request.form("urls", s.magnet());
+        execute(request, qBittorrent::requireSuccess);
+        return DownloaderResult.success(null, s.infoHash());
+    }
+
+    @Override
+    public DownloaderResult<List<TorrentsInfo>> inventory() {
+        return DownloaderResult.success(execute(getApi("/api/v2/torrents/info"), response -> {
+            requireSuccess(response);
+            return GsonStatic.fromJsonList(response.body(),qBittorrentTorrentsInfo.class).stream()
+                    .map(value -> value.toTorrentsInfo(task -> files(task,false))).toList();
+        }));
+    }
 
     private final DownloadService downloadService;
     private final Config config;

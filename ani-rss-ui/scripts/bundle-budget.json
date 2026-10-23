@@ -88,7 +88,7 @@
       "baselineJsGzipBytes": 192173,
       "maxJsGzipBytes": 196000,
       "baselineCssGzipBytes": 61821,
-      "maxCssGzipBytes": 62000
+      "maxCssGzipBytes": 62080
     },
     "subscriptions": {
       "baselineJsGzipBytes": 185254,
@@ -97,5 +97,10 @@
       "maxCssGzipBytes": 65400
     }
   },
-  "sync37Review": "2026-09-23: Vue/Element Plus patches and modal confirmations; measured production gzip; forbiddenModules enforced."
+  "sync37Review": "2026-09-23: Vue/Element Plus patches and modal confirmations; measured production gzip; forbiddenModules enforced.",
+  "automaticUpgradeReview": {
+    "date": "2026-10-09",
+    "reason": "The new lazy upgrade route shares Element Plus styles with home. Home CSS measures 62076 gzip bytes, 76 above the previous gate; the explicit gate increases by 80 bytes. JS gates and forbidden-module checks remain unchanged. Named template icon registration reduces the home JS closure to about 164 KB; all template and literal icon names remain registered.",
+    "homeCssGzipBytes": 62076
+  }
 }

@@ -17,6 +17,10 @@ import java.util.List;
 @Accessors(chain = true)
 @Schema(description = "设置")
 public class Config implements Serializable {
+    @Schema(description = "洗版模式 OFF / LEGACY / AUTOMATIC")
+    private ani.rss.upgrade.UpgradeMode upgradeMode;
+    private Long upgradeModeRevision;
+    private ani.rss.upgrade.UpgradeSettings upgrade;
     /**
      * Mikan Host
      */

@@ -39,17 +39,22 @@ public class Runner implements ApplicationRunner {
     @Resource
     private CompletionMigrationService completionMigrationService;
 
+    @Resource
+    private ani.rss.upgrade.UpgradeScheduler upgradeScheduler;
+
     @Value("${server.port}")
     private String port;
 
     @Override
     public void run(@NonNull ApplicationArguments args) {
         try {
+            upgradeScheduler.acquireInstance();
             ConfigUtil.load();
             AuthService.initialize();
             backupService.backup();
 
             AniUtil.load();
+            upgradeScheduler.recover();
             try {
                 ownershipMigrationService.adoptStrictCandidates();
             } catch (Exception e) {

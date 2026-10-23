@@ -34,6 +34,10 @@
           </el-icon>
           <span>日志</span>
         </el-menu-item>
+        <el-menu-item index="/upgrade">
+          <el-icon><Refresh/></el-icon>
+          <span>洗版</span>
+        </el-menu-item>
         <el-menu-item index="/settings">
           <el-icon>
             <Setting/>
@@ -55,7 +59,7 @@
 <script setup>
 import {onMounted} from "vue";
 import {RouterView, useRoute} from "vue-router";
-import {Collection, Download, House, Setting, Tickets} from "@element-plus/icons-vue";
+import {Collection, Download, House, Setting, Tickets, Refresh} from "@element-plus/icons-vue";
 import {initLayout} from "@/js/global.js";
 
 const route = useRoute()

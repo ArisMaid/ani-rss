@@ -149,10 +149,13 @@ public class UpgradeDownloadService {
             if(name.matches(".*\\.(iso|zip|rar|7z|m2ts|mpls)$")||name.equals("index.bdmv")) unsupportedCarrier=true;
         }
         if(videos.isEmpty()) throw new IOException(unsupportedCarrier?"UNSUPPORTED_RESOURCE_FORMAT":"NO_SUPPORTED_VIDEO_FILES");
+        boolean scopedCollection=release.getEvidence().stream().anyMatch(e->"CHAPTER_SCOPE_FILTER".equals(e.getSource()));
+        if(scopedCollection&&videos.size()==1) throw new IOException("BATCH_FILE_PARTIAL_CHAPTER_OVERLAP");
         List<JobFile> files=new ArrayList<>(); Set<String> coverage=new TreeSet<>();
         for(Path video:videos) {
             Release filename=analysis.parse(UpgradePaths.fileName(video),target.getSubjectId(),"TORRENT_FILE");
             SubjectEpisodeResolver.normalizeChapters(target,filename);
+            if(scopedCollection&&Collections.disjoint(filename.getEpisodes(),release.getEpisodes())) continue;
             if("EXTRA".equals(filename.getChapterType())) continue;
             if(videos.size()>1&&(!"NORMAL".equals(filename.getChapterType())&&!filename.getChapterType().equals(release.getChapterType())||filename.getEpisodes().isEmpty())) {
                 repository.event(job.getId(),"BATCH_FILE_IDENTITY_DEFERRED","合集中的一个文件章节未明确，保留该文件，继续验证可识别章节"); continue;
@@ -168,15 +171,19 @@ public class UpgradeDownloadService {
                 if(!release.getEpisodes().containsAll(declared.getEpisodes())) continue;
             }
             var verified=verification.verify(video,declared,settings);
-            verification.supplementSubtitles(verified.attributes(),video,subtitles);
-            JobFile install=new JobFile(); install.setSource(video.toString()); install.setAttributes(verified.attributes()); install.setSize(verified.size());
+            Release actual=verified.attributes();
+            verification.supplementSubtitles(actual,video,subtitles);
+            JobFile install=new JobFile(); install.setSource(video.toString()); install.setAttributes(actual); install.setSize(verified.size());
             install.setModifiedAt(verified.modifiedAt()); install.setFileKey(verified.fileKey()); install.setSha256(verified.sha256());
             String title=safeName(target.getTitle()); String ext=verified.attributes().getContainer();
-            String episode=String.join("-",declared.getEpisodes()); String hash=release.getInfoHash().substring(0,8);
+            String hash=release.getInfoHash().substring(0,8);
             String template=ConfigUtil.snapshot().getRenameTemplate();
             if(template==null||template.isBlank()) template="${title} S${seasonFormat}E${episodeFormat}";
-            String season=String.valueOf(target.getSeason()==null?1:target.getSeason());
-            String formattedEpisode=String.join("-",declared.getEpisodes().stream().map(e->{ try { var n=new java.math.BigDecimal(e); return String.format("%02d",n.intValue())+(n.stripTrailingZeros().scale()>0?e.substring(e.indexOf('.')):""); } catch(RuntimeException ignored) { return e; } }).toList());
+            Integer identifiedSeason=target.getSeason()==null?declared.getSeason():target.getSeason();
+            String season=String.valueOf(identifiedSeason==null?1:identifiedSeason);
+            List<String> displayEpisodes=declared.getEpisodes().stream().map(e->SubjectEpisodeResolver.displayChapter(target,Integer.valueOf(season),e)).toList();
+            String episode=String.join("-",displayEpisodes);
+            String formattedEpisode=String.join("-",displayEpisodes.stream().map(e->{ try { var n=new java.math.BigDecimal(e); return String.format("%02d",n.intValue())+(n.stripTrailingZeros().scale()>0?e.substring(e.indexOf('.')):""); } catch(RuntimeException ignored) { return e; } }).toList());
             String rendered=template.replace("${title}",title).replace("${jpTitle}",Objects.toString(target.getOriginalTitle(),title)).replace("${season}",season).replace("${seasonFormat}",String.format("%02d",Integer.parseInt(season))).replace("${episode}",episode).replace("${episodeFormat}",formattedEpisode).replace("${subgroup}",String.join("&",declared.getGroups())).replace("${resolution}",verified.attributes().getResolution()+"p").replace("${bgmId}",target.getSubjectId()).replace("${itemTitle}",Objects.toString(declared.getTitle(),title)).replaceAll("\\$\\{[^}]+}","");
             String filenameOut=safeName(rendered)+" ["+verified.attributes().getResolution()+"p-"+hash+"]."+ext;
             if("MOVIE".equals(declared.getChapterType())) filenameOut=title+" ["+verified.attributes().getResolution()+"p-"+hash+"]."+ext;

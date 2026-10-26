@@ -56,6 +56,8 @@ public final class UpgradeModels {
         private String state = "MONITORING";
         private String embySeriesId;
         private Integer season;
+        private Integer seasonStartChapter;
+        private String seasonStartEvidence;
         private Map<String,String> episodeMapping = new LinkedHashMap<>();
         private List<String> rssUrls = new ArrayList<>();
         private long nextScan;
@@ -184,6 +186,7 @@ public final class UpgradeModels {
         private Release attributes;
     }
     @Data public static class Cursor {
+        private int searchRevision;
         private List<MikanCatalogEntry> mikanEntries;
         private String completedBatch;
         private List<String> discoveredFeeds = new ArrayList<>();

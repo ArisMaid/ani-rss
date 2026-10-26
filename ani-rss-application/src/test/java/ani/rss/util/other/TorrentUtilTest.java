@@ -15,6 +15,20 @@ class TorrentUtilTest {
     Path tempDir;
 
     @Test
+    void cachedBase32MagnetUsesTheSameHexIdentityAsTheDownloader() throws Exception {
+        String hex = "0123456789abcdef0123456789abcdef01234567";
+        String base32 = cn.hutool.core.codec.Base32.encode(java.util.HexFormat.of().parseHex(hex));
+        Path cache = tempDir.resolve("opaque-rss-identifier.txt");
+        Files.writeString(cache, "magnet:?xt=urn:btih:" + base32.toLowerCase() + "&dn=Example");
+        assertEquals(hex, TorrentUtil.getCanonicalInfoHash(cache.toFile()));
+        assertEquals(hex, TorrentUtil.getInfoHash(cache.toFile()));
+        Files.writeString(cache, "magnet:?xt=urn:btih:" + hex.toUpperCase());
+        assertEquals(hex, TorrentUtil.getCanonicalInfoHash(cache.toFile()));
+        Files.writeString(cache, "magnet:?xt=urn:btih:not-a-valid-identity");
+        assertEquals("", TorrentUtil.getCanonicalInfoHash(cache.toFile()));
+    }
+
+    @Test
     void getTorrentPrefersRegularTxtThenRegularTorrentBeforeLinkType() throws Exception {
         String originalConfigPath = System.getProperty("CONFIG");
         System.setProperty("CONFIG", tempDir.toString());

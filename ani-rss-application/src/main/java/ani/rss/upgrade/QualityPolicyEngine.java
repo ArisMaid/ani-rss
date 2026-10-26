@@ -45,11 +45,19 @@ public class QualityPolicyEngine {
             if (list.size()>200 || list.stream().anyMatch(Objects::isNull) || new HashSet<>(list).size()!=list.size())
                 throw new IllegalArgumentException("规则排序列表重复或过长");
         if (p.getGroupAliases().size()>500) throw new IllegalArgumentException("字幕组别名过多");
+        if(p.getGroupAliases().entrySet().stream().anyMatch(e->e.getKey()==null||e.getValue()==null||e.getKey().isBlank()||e.getValue().isBlank()))
+            throw new IllegalArgumentException("字幕组别名与标准名称不能为空");
     }
 
     public Decision evaluate(Policy p, Release candidate, Release current) {
         validate(p);
         List<String> why = new ArrayList<>();
+        if(candidate!=null&&candidate.getEvidence().stream().anyMatch(e->"SOURCE_IDENTITY_REJECTED".equals(e.getSource())))
+            return decision(Verdict.IDENTITY_CONFLICT,"SOURCE_IDENTITY_REJECTED","identity",why,"来源标题指向其他作品，不能以英文片段的同名匹配创建下载");
+        if(candidate!=null&&candidate.getEvidence().stream().anyMatch(e->"SOURCE_SEASON_CONFLICT".equals(e.getSource())))
+            return decision(Verdict.IDENTITY_CONFLICT,"SOURCE_SEASON_CONFLICT","identity",why,"发布季号与作品季号不一致，保留记录并继续其他发布");
+        if(candidate!=null&&candidate.getEvidence().stream().anyMatch(e->"CHAPTER_IDENTITY_UNRESOLVED".equals(e.getSource())))
+            return decision(Verdict.WAITING_EVIDENCE,"CHAPTER_IDENTITY_UNRESOLVED","identity",why,"发布章节与作品章节资料尚未对应，继续补证");
         if (candidate == null || candidate.getSubjectId()==null || candidate.getEpisodes().isEmpty())
             return decision(Verdict.WAITING_EVIDENCE,"CHAPTER_IDENTITY_MISSING","identity",why,"需要作品与章节覆盖证据");
         if (current != null && (!Objects.equals(candidate.getSubjectId(),current.getSubjectId())
@@ -100,8 +108,9 @@ public class QualityPolicyEngine {
             else { why.add("未提供双语同屏"); return Condition.NO; }
         }
         Set<String> groups=canonicalGroups(p,r);
-        if(groups.stream().anyMatch(p.getBlockedGroups()::contains)) { why.add("字幕组在黑名单"); return Condition.NO; }
-        if(!p.getAllowedGroups().isEmpty() && groups.stream().noneMatch(p.getAllowedGroups()::contains)) {
+        Set<String> blocked=canonicalGroups(p,p.getBlockedGroups()), allowed=canonicalGroups(p,p.getAllowedGroups());
+        if(groups.stream().anyMatch(blocked::contains)) { why.add("字幕组在黑名单"); return Condition.NO; }
+        if(!allowed.isEmpty() && groups.stream().noneMatch(allowed::contains)) {
             if(groups.isEmpty()) { why.add("必须字幕组未知"); unknown=true; }
             else { why.add("字幕组不在允许列表"); return Condition.NO; }
         }
@@ -118,9 +127,10 @@ public class QualityPolicyEngine {
             case GROUP -> {
                 Set<String> groups=canonicalGroups(p,r);
                 String joint=String.join(" & ",groups);
-                if(p.getGroups().contains(joint)) yield index(p.getGroups(),joint);
+                List<String> order=p.getGroups().stream().map(g->FansubNames.entry(g,p.getGroupAliases())).toList();
+                if(order.contains(joint)) yield index(order,joint);
                 if(groups.isEmpty()) yield new Interval(0,p.getGroups().size());
-                int best=groups.stream().mapToInt(g->p.getGroups().contains(g)?p.getGroups().indexOf(g):p.getGroups().size()).min().orElse(p.getGroups().size());
+                int best=groups.stream().mapToInt(g->order.contains(g)?order.indexOf(g):order.size()).min().orElse(order.size());
                 yield new Interval(best,best);
             }
             case SOURCE -> index(p.getSources(),r.getSourceType());
@@ -139,8 +149,11 @@ public class QualityPolicyEngine {
         return new Interval(best,worst);
     }
     private Set<String> canonicalGroups(Policy p,Release r) {
+        return canonicalGroups(p,r.getGroups());
+    }
+    private Set<String> canonicalGroups(Policy p,Collection<String> names) {
         Set<String> groups=new TreeSet<>();
-        for(String g:r.getGroups()) groups.add(p.getGroupAliases().getOrDefault(g,g));
+        for(String g:names) for(String part:FansubNames.split(g)) groups.add(FansubNames.canonical(part,p.getGroupAliases()));
         return groups;
     }
     private static <T> Interval index(List<T> list,T value) {

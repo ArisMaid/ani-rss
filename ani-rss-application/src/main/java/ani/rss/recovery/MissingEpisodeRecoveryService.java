@@ -552,6 +552,16 @@ public class MissingEpisodeRecoveryService {
     public void cancel(String subscriptionId, String infoHash) {
         repository.cancel(subscriptionId, infoHash);
     }
+    public void supersedeCoveredBatch(Ani ani,Item item,List<TorrentsInfo> tasks) {
+        repository.markSuperseded(ani.getId(),item.getInfoHash(),"RECOVERY_BATCH_COVERED_BY_OWNED_TASKS");
+        for(RecoveryRecord record:repository.listBySubscription(ani.getId())) {
+            if(record.state()!=RecoveryState.SUPERSEDED||!"RECOVERY_CURRENT_RSS_REPLACED".equals(record.lastErrorCode())) continue;
+            Item previous=item(record);
+            if(previous==null||!ItemsUtil.isAllowedByDownloadRules(ani,previous,ConfigUtil.snapshot())) continue;
+            boolean present=tasks.stream().anyMatch(task->StrUtil.equalsIgnoreCase(task.getHash(),record.infoHash())&&ownershipService.belongsTo(task,ani.getId()));
+            if(present) repository.markSubmitted(ani.getId(),record.sourceHash(),System.currentTimeMillis()+INITIAL_BACKOFF.toMillis());
+        }
+    }
 
     public boolean hasOutstanding(String subscriptionId) {
         return repository.hasOutstanding(subscriptionId);

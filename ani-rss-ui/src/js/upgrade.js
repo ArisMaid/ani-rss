@@ -47,3 +47,18 @@ export function defaultPolicy() {
         containers: ['mkv', 'mp4', 'avi', 'webm', 'ts']
     }
 }
+
+export function applyPolicyPreset(current, preset) {
+    if(!preset?.policy) return current
+    const next = JSON.parse(JSON.stringify(preset.policy))
+    if(current.id) Object.assign(next, {id: current.id, revision: current.revision, name: current.name})
+    return next
+}
+export function applyFansubPreference(current, groups) {
+    const next = JSON.parse(JSON.stringify(current))
+    const preferred = groups.map(group => group.name)
+    next.groups = [...preferred, ...next.groups.filter(name => !preferred.includes(name) && !groups.some(group => group.aliases.includes(name)))]
+    next.groupAliases = {...Object.fromEntries(groups.flatMap(group => group.aliases.map(alias => [alias, group.name]))), ...next.groupAliases}
+    if(!next.dimensions.includes('GROUP')) next.dimensions.push('GROUP')
+    return next
+}

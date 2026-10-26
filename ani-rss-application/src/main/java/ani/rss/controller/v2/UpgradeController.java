@@ -40,6 +40,7 @@ public class UpgradeController {
     public record ModeRequest(UpgradeMode mode,long expectedRevision) {}
     @Auth @PutMapping("/mode") public UpgradeModeService.ModeView mode(@RequestBody ModeRequest request) { return modes.switchMode(request.mode(),request.expectedRevision()); }
     @Auth @GetMapping("/policies") public List<QualityPolicyEngine.Policy> policies() { return repository.list("upgrade_policies",null,"ACTIVE",0,200,QualityPolicyEngine.Policy.class); }
+    @Auth @GetMapping("/policy-presets") public QualityPolicyPresets.Catalog policyPresets() { return QualityPolicyPresets.catalog(); }
     @Auth @PostMapping("/policies") public QualityPolicyEngine.Policy createPolicy(@RequestBody QualityPolicyEngine.Policy p) { return campaigns.savePolicy(null,p); }
     @Auth @PutMapping("/policies/{id}") public QualityPolicyEngine.Policy updatePolicy(@PathVariable String id,@RequestBody QualityPolicyEngine.Policy p) { return campaigns.savePolicy(id,p); }
     @Auth @DeleteMapping("/policies/{id}") @ResponseStatus(HttpStatus.NO_CONTENT) public void deletePolicy(@PathVariable String id,@RequestParam long expectedRevision) { campaigns.deletePolicy(id,expectedRevision); }
@@ -85,6 +86,15 @@ public class UpgradeController {
     }
     @Auth @GetMapping("/targets") public Page<Target> targets(@RequestParam(defaultValue="0") int offset,@RequestParam(defaultValue="50") int limit) {
         Page<Target> result=page("upgrade_targets",null,null,offset,limit,Target.class); campaigns.refreshCampaignSelection(result.items()); return result;
+    }
+    @Auth @PostMapping("/targets/{id}/reanalyze") public Map<String,Object> reanalyze(@PathVariable String id) {
+        Target target=repository.get("upgrade_targets",id,Target.class).orElseThrow();
+        scheduler.reanalyzeTarget(target);
+        return Map.of("targetId",id,"candidateCount",repository.all("upgrade_releases",id,null,Release.class).size());
+    }
+    @Auth @GetMapping("/targets/{id}/coverage") public Map<String,Object> coverage(@PathVariable String id) {
+        Target target=repository.get("upgrade_targets",id,Target.class).orElseThrow();
+        return UpgradeCoverageService.assess(repository,target,campaigns.effectivePolicy(target));
     }
     public record TargetOverride(String policyId,boolean excluded,String embySeriesId,Integer season,Map<String,String> episodeMapping,List<String> rssUrls,String libraryId) {
         public TargetOverride { episodeMapping=episodeMapping==null?null:Map.copyOf(episodeMapping); rssUrls=rssUrls==null?null:List.copyOf(rssUrls); }
@@ -157,6 +167,7 @@ public class UpgradeController {
         r.setSubtitleLayout(correction.subtitleLayout()); r.setSubtitlePackaging(correction.subtitlePackaging()); r.setResolution(correction.resolution());
         if(correction.chapterType()!=null) r.setChapterType(correction.chapterType()); if(correction.contentEdition()!=null) r.setContentEdition(correction.contentEdition());
         r.setState("ANALYZING"); r.setRevision(r.getRevision()+1); r.getEvidence().add(new Evidence("USER_CORRECTION","fields","人工修正后仍需实际文件校验"));
+        if(correction.subjectId()!=null) r.getEvidence().add(new Evidence("USER_CORRECTION","identity","人工确认作品身份，仍需实际文件校验"));
         repository.save("upgrade_releases",id,r.getTargetId(),r.getTargetId()+":"+(r.getInfoHash()==null?r.getSource()+":"+r.getSourceId():r.getInfoHash()),r.getState(),r.getRevision(),r);
         scheduler.enqueue("TARGET",r.getTargetId()); return r;
     }

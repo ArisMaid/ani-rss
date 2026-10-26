@@ -71,6 +71,7 @@ ani-rss-update.exe
 # Local follow-up-plan verification outputs.
 ani-rss-ui/w7-dist-*/
 output/
+subscription-test-downloads/
 
 # Local backups and generated first-run credentials may contain secrets.
 ani-rss.backup.*.zip

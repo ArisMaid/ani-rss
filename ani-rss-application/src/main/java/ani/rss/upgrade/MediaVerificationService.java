@@ -33,12 +33,18 @@ public class MediaVerificationService {
         for(JsonElement element:UpgradeHttp.array(probe,"streams")) {
             JsonObject stream=element.getAsJsonObject(); String type=UpgradeHttp.string(stream,"codec_type");
             if("video".equals(type)&&!video) {
-                actual.setResolution(UpgradeHttp.integer(stream,"height",0)); video=true;
+                int width=UpgradeHttp.integer(stream,"width",0),height=UpgradeHttp.integer(stream,"height",0);
+                actual.setResolution(width>=3840&&height>=1600?2160:width>=1920&&height>=800?1080:height); video=true;
+                var dimensions=new UpgradeModels.Evidence("MEDIA_DIMENSIONS","resolution",width+"x"+height+"; tier="+actual.getResolution());
+                dimensions.setVerificationLevel("OBSERVED"); actual.getEvidence().add(dimensions);
                 String codec=UpgradeHttp.string(stream,"codec_name");
                 actual.setCodec("h264".equals(codec)?"AVC":"hevc".equals(codec)?"HEVC":"av1".equals(codec)?"AV1":codec);
             }
         }
         embeddedSubtitles(path,probe,actual,s,deadline);
+        if(actual.getEvidence().stream().noneMatch(e->"EMBEDDED_SUBTITLE_TRACK".equals(e.getSource()))&&!actual.getLanguages().isEmpty()
+                &&!Set.of("SOFT","EXTERNAL").contains(Objects.toString(actual.getSubtitlePackaging(),"")))
+            actual.getEvidence().add(new UpgradeModels.Evidence("PUBLISHER_SUBTITLE_DECLARATION","languages","保留发布声明 "+actual.getLanguages()+"；无独立字幕轨，未作逐集 OCR"));
         if(!video||!probe.has("format")) throw new IOException("MEDIA_VIDEO_STREAM_MISSING");
         JsonObject format=probe.getAsJsonObject("format");
         String container=Objects.toString(UpgradeHttp.string(format,"format_name"),"");
@@ -60,9 +66,10 @@ public class MediaVerificationService {
     }
     private static void embeddedSubtitles(Path path,JsonObject probe,Release actual,UpgradeSettings settings,long deadline) throws IOException {
         Release observed=new Release(); boolean complete=true; int streams=0;
-        for(JsonElement element:UpgradeHttp.array(probe,"streams")) {
-            JsonObject stream=element.getAsJsonObject();
-            if(!"subtitle".equals(UpgradeHttp.string(stream,"codec_type"))) continue;
+        List<JsonObject> subtitleStreams=new ArrayList<>();
+        for(JsonElement element:UpgradeHttp.array(probe,"streams")) if("subtitle".equals(UpgradeHttp.string(element.getAsJsonObject(),"codec_type"))) subtitleStreams.add(element.getAsJsonObject());
+        subtitleStreams.sort(Comparator.comparingInt(MediaVerificationService::subtitlePriority));
+        for(JsonObject stream:subtitleStreams) {
             streams++;
             Release track=new Release(); JsonObject tags=stream.has("tags")?stream.getAsJsonObject("tags"):new JsonObject();
             JsonObject normalized=new JsonObject(); normalized.addProperty("Language",UpgradeHttp.string(tags,"language")); normalized.addProperty("Title",UpgradeHttp.string(tags,"title"));
@@ -73,7 +80,7 @@ public class MediaVerificationService {
             if(index>=0&&streams<=8) try {
                 String text=run(List.of(settings.getFfmpeg(),"-v","error","-nostdin","-i",path.toString(),"-map","0:"+index,"-c:s","srt","-f","srt","pipe:1"),Math.min(8,remaining(deadline)),1_048_576);
                 Release parsed=new Release(); supplementText(parsed,text,"EMBEDDED_SUBTITLE_TEXT");
-                if(!parsed.getLanguages().isEmpty()) {
+                if(!parsed.getLanguages().isEmpty()||nonChineseText(text)) {
                     // A complete bounded Chinese/Japanese text stream outweighs a
                     // contradictory language tag or copied track title.
                     track.setLanguages(new TreeSet<>(parsed.getLanguages())); textKnown=true;
@@ -83,7 +90,7 @@ public class MediaVerificationService {
             } catch(IOException error) { if(Thread.currentThread().isInterrupted()) throw error; }
             var trackEvidence=new UpgradeModels.Evidence("EMBEDDED_SUBTITLE_TRACK","languages",String.join("+",track.getLanguages()));
             trackEvidence.setSourceReference("stream:"+index); trackEvidence.setEvidenceSnippet(normalized.toString()); trackEvidence.setVerificationLevel("OBSERVED"); actual.getEvidence().add(trackEvidence);
-            complete&=textKnown; observed.getLanguages().addAll(track.getLanguages());
+            complete&=textKnown||subtitlePriority(stream)==2; observed.getLanguages().addAll(track.getLanguages());
         }
         Set<String> declared=new TreeSet<>(actual.getLanguages());
         if("SOFT".equals(actual.getSubtitlePackaging())&&complete) {
@@ -96,6 +103,14 @@ public class MediaVerificationService {
         actual.getLanguages().addAll(observed.getLanguages());
         if(actual.getLanguages().contains("CHS")||actual.getLanguages().contains("CHT")) actual.getLanguages().remove("ZHO");
         if(streams>0&&actual.getSubtitlePackaging()==null) actual.setSubtitlePackaging("SOFT");
+    }
+    private static int subtitlePriority(JsonObject stream) {
+        JsonObject tags=stream.has("tags")?stream.getAsJsonObject("tags"):new JsonObject();
+        String language=Objects.toString(UpgradeHttp.string(tags,"language"),"").toLowerCase(Locale.ROOT);
+        String title=Objects.toString(UpgradeHttp.string(tags,"title"),"").toLowerCase(Locale.ROOT);
+        if(language.startsWith("zh")||"chi".equals(language)||title.matches("(?s).*(?:简|簡|繁|中文|chinese|chs|cht).*$")) return 0;
+        if(Set.of("eng","en","jpn","ja","kor","ko","fra","fre","fr","deu","ger","de","spa","es","por","pt","rus","ru","ita","it","ara","ar","tha","th","vie","vi","ind","id").contains(language)) return 2;
+        return 1;
     }
     public void supplementSubtitles(Release attributes,Path video,List<Path> subtitles) throws IOException {
         String base=UpgradePaths.fileName(video).replaceFirst("\\.[^.]+$","");
@@ -113,7 +128,7 @@ public class MediaVerificationService {
             String text=sample.length>=2&&(sample[0]==(byte)0xff&&sample[1]==(byte)0xfe||sample[0]==(byte)0xfe&&sample[1]==(byte)0xff)
                     ?new String(sample,StandardCharsets.UTF_16):new String(sample,StandardCharsets.UTF_8);
             Release parsed=new Release(); supplementText(parsed,text,"EXTERNAL_SUBTITLE");
-            boolean textKnown=a.size()<=sample.length&&text.indexOf('\ufffd')<0&&!parsed.getLanguages().isEmpty(); complete&=textKnown;
+            boolean textKnown=a.size()<=sample.length&&text.indexOf('\ufffd')<0&&(!parsed.getLanguages().isEmpty()||nonChineseText(text)); complete&=textKnown;
             if(textKnown) {
                 observed.getLanguages().addAll(parsed.getLanguages());
                 var evidence=new UpgradeModels.Evidence("EXTERNAL_SUBTITLE_TEXT","languages",String.join("+",parsed.getLanguages()));
@@ -134,6 +149,7 @@ public class MediaVerificationService {
         if(attributes.getLanguages().contains("CHS")||attributes.getLanguages().contains("CHT")) attributes.getLanguages().remove("ZHO");
     }
     public static void supplementText(Release release,String text,String source) {
+        text=subtitlePayload(text);
         // Shared Japanese kanji cannot establish a Chinese subtitle track.
         String simplified="这们说发无开门风过进与书语爱见头车东";
         String traditional="這們說裡還讓點麼";
@@ -142,6 +158,22 @@ public class MediaVerificationService {
         if(chs>=3) release.getLanguages().add("CHS"); if(cht>=3) release.getLanguages().add("CHT");
         if(text.codePoints().filter(c->c>=0x3041&&c<=0x30ff).count()>=6) release.getLanguages().add("JPN");
         if(chs>=3||cht>=3) release.getEvidence().add(new UpgradeModels.Evidence(source,"languages","字幕文本包含可辨识汉字脚本"));
+    }
+    private static boolean nonChineseText(String text) {
+        text=subtitlePayload(text);
+        return text.isBlank()||text.indexOf('\ufffd')<0&&text.codePoints().filter(c->c>='A'&&c<='Z'||c>='a'&&c<='z').count()>=8
+                &&text.codePoints().noneMatch(c->Character.UnicodeScript.of(c)==Character.UnicodeScript.HAN||c>=0x3041&&c<=0x30ff);
+    }
+    private static String subtitlePayload(String text) {
+        if(text.contains("[Script Info]")||text.contains("[Events]")) {
+            List<String> lines=new ArrayList<>();
+            for(String line:text.split("\\R")) if(line.stripLeading().startsWith("Dialogue:")) {
+                String[] fields=line.split(",",10); if(fields.length==10) lines.add(fields[9]);
+            }
+            return String.join("\n",lines);
+        }
+        var time=java.util.regex.Pattern.compile("(?:\\d{2}:)?\\d{2}:\\d{2}[,.]\\d{2,3}\\s*-->").matcher(text);
+        return time.find()?text.substring(time.start()):text;
     }
     private static int remaining(long deadline) throws IOException {
         long seconds=TimeUnit.NANOSECONDS.toSeconds(deadline-System.nanoTime());

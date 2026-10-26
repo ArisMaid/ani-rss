@@ -35,12 +35,13 @@
       <el-tab-pane label="季度订阅" name="campaigns">
         <el-scrollbar class="upgrade-scrollbar" always><div class="tab-scroll-content">
         <section class="settings-section"><div class="settings-section-heading"><div><h3>Mikan 季度订阅</h3><p class="hint">选择年份和季度，按首播日期发现作品并持续寻找更好的版本。</p></div><el-button type="primary" icon="Plus" @click="newCampaign">新增季度订阅</el-button></div>
-        <el-table :data="campaignRows" empty-text="请先配置媒体库和质量规则，再添加季度订阅">
+        <el-table :data="campaignRows" empty-text="请先保存质量规则，再添加季度订阅；可先仅监测资源">
           <el-table-column prop="name" label="任务"/>
           <el-table-column label="订阅季度" width="140"><template #default="{row}">{{ row.catalogSource === 'MIKAN' ? `${row.mikanYear} 年 · ${row.mikanSeason}季` : '自定义日期（已有）' }}</template></el-table-column>
           <el-table-column label="首播区间" min-width="210"><template #default="{row}">{{ row.startDate }} 至 {{ row.endDate }}</template></el-table-column>
           <el-table-column prop="priority" label="任务优先级" width="110"/>
           <el-table-column label="状态" width="90"><template #default="{row}">{{ row.enabled ? '启用' : '暂停' }}</template></el-table-column>
+          <el-table-column label="媒体库" min-width="140"><template #default="{row}">{{ !row.libraryId || row.libraryId === 'UNASSIGNED' ? '仅订阅监测' : row.libraryId }}</template></el-table-column>
           <el-table-column label="操作" min-width="230"><template #default="{row}">
             <el-button text @click="editCampaign(row)">编辑</el-button>
             <el-button text @click="action(`/campaigns/${row.id}/scan`)">立即扫描</el-button>
@@ -80,6 +81,7 @@
         <div class="pager"><el-button :disabled="targetOffset === 0" @click="targetOffset -= 50; loadTargets()">上一页</el-button><el-button :disabled="!targetPage.hasMore" @click="targetOffset += 50; loadTargets()">下一页</el-button></div>
         <template v-if="selectedTarget">
           <h3>{{ selectedTarget.title }} 的候选</h3><el-button :loading="busy" @click="exportPreview(selectedTarget.id)">导出本作品决策预演</el-button>
+          <p v-if="targetCoverage" class="hint">章节覆盖：{{ targetCoverage.expectedKnown ? `${targetCoverage.expectedChapters.length} 个已播章节` : '章节资料待补充' }}；{{ targetCoverage.sourceScanComplete ? '历史来源扫描完成' : '来源扫描尚未完整' }}。尚缺 {{ targetCoverage.missingChapters.length }} 个章节；{{ targetCoverage.waitingEvidence }} 个资源待补证，{{ targetCoverage.identityConflicts }} 个资源身份不符。覆盖不等同于下载或入库完成。</p>
           <el-table :data="versionPage.items || []" empty-text="尚无已接管或已安装版本">
             <el-table-column prop="path" label="已有版本路径" min-width="320"/>
             <el-table-column prop="origin" label="来源" width="180"/>
@@ -179,7 +181,8 @@
         <SettingsItem label="结束日期"><el-date-picker v-model="campaignForm.endDate" aria-label="结束日期" value-format="YYYY-MM-DD"/></SettingsItem>
       </template>
       <SettingsItem label="质量规则"><el-select v-model="campaignForm.policyId" clearable placeholder="使用全局默认规则"><el-option v-for="p in policyRows" :key="p.id" :label="p.name" :value="p.id"/></el-select></SettingsItem>
-      <SettingsItem label="输出媒体库"><el-select v-model="campaignForm.libraryId" placeholder="请先在设置中配置媒体库"><el-option v-for="id in settings?.libraryIds || []" :key="id" :value="id" :label="id"/></el-select></SettingsItem>
+      <SettingsItem label="输出媒体库"><el-select v-model="campaignForm.libraryId" aria-label="输出媒体库"><el-option value="UNASSIGNED" label="仅订阅监测（暂不关联媒体库）"/><el-option v-for="id in settings?.libraryIds || []" :key="id" :value="id" :label="id"/></el-select></SettingsItem>
+      <p v-if="campaignForm.libraryId === 'UNASSIGNED'" class="hint">核对季度作品、资源与规则；自动下载和媒体替换会等待关联媒体库。</p>
       <SettingsItem label="任务优先级"><el-input-number v-model="campaignForm.priority"/></SettingsItem>
       <SettingsItem label="启用"><el-switch v-model="campaignForm.enabled"/><span class="hint">暂停保留任务与已发现作品</span></SettingsItem>
       <p class="hint">规则留空时使用已保存的全局默认规则；作品覆盖优先于任务规则。资源发布日期不受首播区间限制。</p>
@@ -189,6 +192,7 @@
     <el-dialog v-model="policyDialog" :title="policyForm.id ? '编辑质量规则' : '新增质量规则'" width="min(820px, 94vw)" top="6vh">
       <div class="policy-body">
       <el-form label-width="130px">
+        <el-form-item label="规则预设"><div class="preset-controls"><el-select v-model="selectedPreset" aria-label="规则预设" placeholder="选择预设，再应用到当前草稿"><el-option v-for="p in presetCatalog.presets || []" :key="p.id" :value="p.id" :label="p.name"/></el-select><el-button :disabled="!selectedPreset" @click="usePreset">应用预设</el-button></div><p class="hint">{{ selectedPresetInfo?.description || '预设可继续编辑，保存后才生效。' }}</p></el-form-item>
         <el-form-item label="名称"><el-input v-model="policyForm.name"/></el-form-item>
         <el-form-item label="维度优先级">
           <div class="dimension-list"><div v-for="(d, index) in policyForm.dimensions" :key="d" draggable="true" @dragstart="dragIndex = index" @dragover.prevent @drop.prevent="policyForm.dimensions = moveDimension(policyForm.dimensions, dragIndex, index)">
@@ -198,7 +202,8 @@
         <el-form-item label="参与维度"><el-checkbox-group v-model="policyForm.dimensions"><el-checkbox v-for="(name, key) in dimensionLabels" :key="key" :value="key">{{ name }}</el-checkbox></el-checkbox-group></el-form-item>
         <el-form-item v-for="field in ['subtitles','groups','resolutions','sources','packaging','codecs']" :key="field" :label="fieldLabels[field]">
           <div class="ranking-editor">
-            <el-select v-model="policyForm[field]" multiple filterable allow-create default-first-option :aria-label="fieldLabels[field]"><el-option v-for="value in policyForm[field]" :key="value" :value="value" :label="String(value)"/></el-select>
+            <el-select v-model="policyForm[field]" multiple filterable allow-create default-first-option :aria-label="fieldLabels[field]"><el-option v-for="value in rankOptions(field)" :key="value" :value="value" :label="String(value)"/></el-select>
+            <div v-if="field === 'groups'" class="fansub-preset"><el-button size="small" :disabled="!presetCatalog.groups?.length" @click="useFansubPreference">使用六组偏好顺序</el-button><span class="hint">桜都 → 绿茶 → 北宇治 → 悠哈璃羽 → SweetSub → LoliHouse；其他组可作后备。</span></div>
             <div class="ranking-list" :aria-label="`${fieldLabels[field]}优先级`">
               <div v-for="(value, index) in policyForm[field]" :key="value" draggable="true" @dragstart="rankDrag = {field, index}" @dragover.prevent @drop.prevent="reorderRank(field, rankDrag.field === field ? rankDrag.index : -1, index)">
                 <span>{{ index + 1 }}. {{ value }}</span>
@@ -212,9 +217,10 @@
         <el-form-item label="必须中文字幕"><el-switch v-model="policyForm.requireChinese"/></el-form-item>
         <el-form-item label="必须字幕语言"><el-select v-model="policyForm.requiredLanguages" multiple><el-option v-for="v in ['CHS','CHT','JPN']" :key="v" :value="v"/></el-select></el-form-item>
         <el-form-item label="必须双语同屏"><el-switch v-model="policyForm.requireBilingual"/></el-form-item>
-        <el-form-item v-for="field in ['allowedGroups','blockedGroups','containers']" :key="field" :label="{allowedGroups:'允许字幕组',blockedGroups:'禁止字幕组',containers:'允许容器'}[field]"><el-select v-model="policyForm[field]" multiple filterable allow-create><el-option v-for="value in policyForm[field]" :key="value" :value="value"/></el-select></el-form-item>
+        <el-form-item v-for="field in ['allowedGroups','blockedGroups','containers']" :key="field" :label="{allowedGroups:'允许字幕组',blockedGroups:'禁止字幕组',containers:'允许容器'}[field]"><el-select v-model="policyForm[field]" multiple filterable allow-create><el-option v-for="value in rankOptions(field)" :key="value" :value="value"/></el-select></el-form-item>
         <el-form-item label="字幕组别名 JSON"><el-input v-model="aliasText" type="textarea" placeholder='{"喵萌奶茶屋":"喵萌奶茶屋"}'/></el-form-item>
       </el-form>
+      <el-collapse><el-collapse-item title="字幕组预设来源与别名" name="fansub-sources"><p class="hint">{{ presetCatalog.note }} 资料核对：{{ presetCatalog.updatedAt }}</p><p v-for="group in presetCatalog.groups || []" :key="group.name"><a :href="group.source" target="_blank" rel="noopener noreferrer" class="source-link">{{ group.name }} ↗</a><span class="hint"> · {{ group.aliases.join('、') || '英文名称忽略大小写' }}</span></p></el-collapse-item></el-collapse>
       <p>排序从高到低，可拖动或使用上下按钮调整。高维改善可接受低维下降，硬条件始终生效。空字幕组列表表示不比较字幕组；联合组按最高排名参与组比较。</p>
       <el-button @click="previewPolicy">预览当前草稿：字幕组改善、分辨率下降</el-button>
       <p v-if="preview">{{ preview.explanation?.join('；') }}</p>
@@ -246,16 +252,19 @@ import {ElMessage, ElMessageBox} from 'element-plus'
 import api from '@/js/api.js'
 import PageHeaderView from '@/view/custom/PageHeaderView.vue'
 import SettingsItem from '@/view/custom/SettingsItem.vue'
-import {dimensionLabels, jobLabels, moveDimension, parseMappings, mappingText, defaultPolicy, seasonLabels, quarterDateRange, mikanSeasonChoices} from '@/js/upgrade.js'
+import {dimensionLabels, jobLabels, moveDimension, parseMappings, mappingText, defaultPolicy, seasonLabels, quarterDateRange, mikanSeasonChoices, applyPolicyPreset, applyFansubPreference} from '@/js/upgrade.js'
 const base = '/api/v2/upgrade'
 const status = ref({}), loading = ref(false), busy = ref(false), tab = ref('overview')
 const config = ref({}), settings = ref(null), policyRows = ref([]), campaignRows = ref([]), modelRows = ref([])
 const targetPage = ref({}), candidatePage = ref({}), jobPage = ref({})
 const versionPage = ref({}), aliasText = ref('{}')
 const targetOffset = ref(0), candidateOffset = ref(0), jobOffset = ref(0), versionOffset = ref(0), selectedTarget = ref(null)
+const targetCoverage = ref(null)
 const embyMappingText = ref(''), downloaderMappingText = ref(''), libraryText = ref('')
 const campaignDialog = ref(false), campaignForm = ref({}), policyDialog = ref(false), policyForm = ref(defaultPolicy()), preview = ref(null), dragIndex = ref(-1)
 const rankDrag = ref({field: '', index: -1})
+const presetCatalog = ref({groups: [], presets: []}), selectedPreset = ref('')
+const selectedPresetInfo = computed(() => presetCatalog.value.presets.find(p => p.id === selectedPreset.value))
 const legacyCampaign = ref(false), mikanSeasons = ref([]), seasonEntries = ref([])
 const seasonLoading = ref(false), previewLoading = ref(false), seasonError = ref(''), previewError = ref('')
 const tabDescriptions = {overview: '运行模式、任务覆盖与扫描进度', campaigns: '按 Mikan 年份与季度订阅动画，持续跟踪优质资源', policies: '设置质量维度的比较顺序与必须满足的条件', targets: '管理作品档案、候选资源与章节映射', settings: '配置媒体库、路径与辅助分析，查看执行记录'}
@@ -289,7 +298,8 @@ async function loadSettings() {
 async function reload() {
   loading.value = true
   try { await Promise.all([loadStatus(), loadTargets(), loadJobs(), loadSettings(),
-    api.get(`${base}/policies`).then(r => policyRows.value = r.data), api.get(`${base}/campaigns`).then(r => campaignRows.value = r.data)]) }
+    api.get(`${base}/policies`).then(r => policyRows.value = r.data), api.get(`${base}/campaigns`).then(r => campaignRows.value = r.data),
+    api.get(`${base}/policy-presets`).then(r => presetCatalog.value = r.data)]) }
   finally { loading.value = false }
 }
 async function setMode(mode) {
@@ -301,7 +311,7 @@ async function setMode(mode) {
   } catch(e) { if(e.status === 409) { await loadStatus(); await loadSettings() } else throw e } finally { busy.value = false }
 }
 async function action(path) { await api.post(base + path, {}); await Promise.all([loadStatus(), loadJobs()]) }
-function newCampaign() { suggestedCampaignName = ''; legacyCampaign.value = false; campaignForm.value = {name: '', catalogSource: 'MIKAN', mikanYear: null, mikanSeason: null, policyId: null, libraryId: settings.value?.libraryIds?.[0], priority: 0, enabled: true}; campaignDialog.value = true; loadMikanSeasons() }
+function newCampaign() { suggestedCampaignName = ''; legacyCampaign.value = false; campaignForm.value = {name: '', catalogSource: 'MIKAN', mikanYear: null, mikanSeason: null, policyId: null, libraryId: settings.value?.libraryIds?.[0] || 'UNASSIGNED', priority: 0, enabled: true}; campaignDialog.value = true; loadMikanSeasons() }
 function editCampaign(row) { suggestedCampaignName = ''; legacyCampaign.value = row.catalogSource !== 'MIKAN'; campaignForm.value = {...clone(row), catalogSource: row.catalogSource || 'DATE'}; campaignDialog.value = true; loadMikanSeasons() }
 async function loadMikanSeasons() {
   if(campaignForm.value.catalogSource !== 'MIKAN') { ++seasonRequest; ++previewRequest; seasonLoading.value = false; previewLoading.value = false; return }
@@ -336,7 +346,10 @@ async function loadMikanPreview() {
 }
 async function saveCampaign() { busy.value = true; try { const c = campaignForm.value; await api[c.id ? 'put' : 'post'](`${base}/campaigns${c.id ? '/' + c.id : ''}`, c); campaignDialog.value = false; campaignRows.value = (await api.get(`${base}/campaigns`)).data } finally { busy.value = false } }
 async function toggleCampaign(row) { await api.put(`${base}/campaigns/${row.id}`, {...row, enabled: !row.enabled}); campaignRows.value = (await api.get(`${base}/campaigns`)).data }
-function editPolicy(row) { policyForm.value = row ? clone(row) : defaultPolicy(); policyDialog.value = true }
+function editPolicy(row) { policyForm.value = row ? clone(row) : defaultPolicy(); selectedPreset.value = ''; policyDialog.value = true }
+function rankOptions(field) { return [...new Set([...(field === 'groups' || field.endsWith('Groups') ? presetCatalog.value.groups.map(g => g.name) : []), ...policyForm.value[field]])] }
+function usePreset() { policyForm.value = applyPolicyPreset(policyForm.value, selectedPresetInfo.value); aliasText.value = JSON.stringify(policyForm.value.groupAliases || {}, null, 2); preview.value = null }
+function useFansubPreference() { policyForm.value.groupAliases = JSON.parse(aliasText.value); policyForm.value = applyFansubPreference(policyForm.value, presetCatalog.value.groups); aliasText.value = JSON.stringify(policyForm.value.groupAliases, null, 2); preview.value = null }
 function reorderRank(field, from, to) { policyForm.value[field] = moveDimension(policyForm.value[field], from, to) }
 async function savePolicy() { busy.value = true; try { const p = {...policyForm.value, groupAliases: JSON.parse(aliasText.value), resolutions: policyForm.value.resolutions.map(Number)}; await api[p.id ? 'put' : 'post'](`${base}/policies${p.id ? '/' + p.id : ''}`, p); policyDialog.value = false; policyRows.value = (await api.get(`${base}/policies`)).data; ElMessage.success('规则已保存') } catch(e) { if(e instanceof SyntaxError) ElMessage.error('字幕组别名 JSON 格式错误'); else if(e.status === 409) policyRows.value = (await api.get(`${base}/policies`)).data; else throw e } finally { busy.value = false } }
 async function deletePolicy(row) {
@@ -351,7 +364,7 @@ async function previewPolicy() {
   const common = {subjectId: 'example', episodes: ['1'], languages: ['CHS'], container: 'mkv', chapterType: 'NORMAL', correction: 1}
   preview.value = (await api.post(`${base}/evaluate`, {policy: {...policyForm.value, groupAliases: JSON.parse(aliasText.value)}, candidate: {...common, groups: [policyForm.value.groups[0] || 'A组'], resolution: 1080}, current: {...common, groups: [policyForm.value.groups[1] || 'B组'], resolution: 2160}})).data
 }
-async function showCandidates(target) { selectedTarget.value = target; candidateOffset.value = 0; versionOffset.value = 0; await Promise.all([loadCandidates(), loadVersions()]) }
+async function showCandidates(target) { selectedTarget.value = target; targetCoverage.value = null; candidateOffset.value = 0; versionOffset.value = 0; await Promise.all([loadCandidates(), loadVersions(), api.get(`${base}/targets/${encodeURIComponent(target.id)}/coverage`).then(response => { targetCoverage.value = response.data })]) }
 async function loadVersions() { versionPage.value = (await api.get(`${base}/versions?targetId=${encodeURIComponent(selectedTarget.value.id)}&offset=${versionOffset.value}`)).data }
 function showCandidate(row) {
   detailTitle.value = '候选证据'; detail.value = row; detailDialog.value = true
@@ -429,6 +442,9 @@ onBeforeUnmount(stopTimer)
 .dimension-list :deep(.el-button + .el-button), .ranking-list :deep(.el-button + .el-button) { margin-left: 0; }
 .policy-body { max-height: 62vh; overflow-y: auto; padding-right: 6px; }
 .ranking-editor { width: 100%; }
+.preset-controls { display: flex; gap: 8px; width: 100%; }
+.preset-controls :deep(.el-select) { flex: 1; min-width: 0; }
+.fansub-preset { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .ranking-list { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
 .ranking-list > div { display: flex; align-items: center; gap: 4px; max-width: 100%; }
 .ranking-list span { min-width: 0; overflow-wrap: anywhere; }

@@ -27,7 +27,7 @@ public final class UpgradeFileCoordinator {
         String subjectId=m.group(1);
         UpgradeRepository repository=new UpgradeRepository();
         Path save=Path.of(new ani.rss.service.DownloadService().getDownloadPath(subscription,ConfigUtil.snapshot())).toAbsolutePath().normalize();
-        return repository.all("upgrade_targets",null,null,UpgradeModels.Target.class).stream()
+        return repository.targetsForSubject(subjectId).stream()
                 .filter(t->Objects.equals(subjectId,t.getSubjectId())&&!t.isExcluded())
                 .filter(t->new UpgradeCampaignService(repository,new QualityPolicyEngine()).eligible(t))
                 .anyMatch(t->matchesOutput(t,save));
@@ -39,7 +39,7 @@ public final class UpgradeFileCoordinator {
         if(!match.find()) return false;
         Path save=Path.of(new ani.rss.service.DownloadService().getDownloadPath(subscription,ConfigUtil.snapshot())).toAbsolutePath().normalize();
         var locks=new ChapterCommitLockService();
-        for(var target:new UpgradeRepository().all("upgrade_targets",null,null,UpgradeModels.Target.class)) {
+        for(var target:new UpgradeRepository().targetsForSubject(match.group(1))) {
             if(!match.group(1).equals(target.getSubjectId())) continue;
             if(matchesOutput(target,save)&&locks.held(target.getSubjectId(),target.getLibraryId(),target,release)) return true;
         }

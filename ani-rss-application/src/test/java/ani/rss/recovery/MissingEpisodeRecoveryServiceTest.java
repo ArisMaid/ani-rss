@@ -45,6 +45,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class MissingEpisodeRecoveryServiceTest {
+    @Test void coveredBatchDoesNotEraseRecoveryForTheExistingOwnedSingleEpisode() throws Exception {
+        Ani subscription=ani();
+        Item single=item(HASH_A,1,"[Group] Example - 01 [1080p]","Example S01E01.mkv",true,"Group");
+        Item batch=item(HASH_B,1,"[Group] Example [01-03] [1080p]","Example S01E01-03",true,"Group");
+        repository.observe(subscription,single); repository.observe(subscription,batch); createHealthyOwnership(subscription,single,"single.mkv");
+        repository.markSuperseded(subscription.getId(),HASH_A,"RECOVERY_CURRENT_RSS_REPLACED");
+        var task=new ani.rss.entity.torrent.TorrentsInfo().setHash(HASH_A).setId("remote-"+HASH_A).setSavePath(downloadRoot.toString());
+        service.supersedeCoveredBatch(subscription,batch,List.of(task));
+        assertEquals(RecoveryState.SUBMITTED,repository.find(subscription.getId(),HASH_A).orElseThrow().state());
+        assertEquals(RecoveryState.SUPERSEDED,repository.find(subscription.getId(),HASH_B).orElseThrow().state());
+        assertEquals("RECOVERY_BATCH_COVERED_BY_OWNED_TASKS",repository.find(subscription.getId(),HASH_B).orElseThrow().lastErrorCode());
+    }
     private static final String HASH_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final String HASH_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     private static final String HASH_C = "cccccccccccccccccccccccccccccccccccccccc";

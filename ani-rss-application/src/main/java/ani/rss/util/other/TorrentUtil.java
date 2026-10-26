@@ -619,14 +619,12 @@ public class TorrentUtil {
             }
             if ("txt".equalsIgnoreCase(extension)) {
                 String magnet = FileUtil.readUtf8String(file);
-                String hash = ReUtil.get("(?i)btih:([a-z0-9]+)", magnet, 1);
-                if (StrUtil.isBlank(hash)) {
-                    String v2 = ReUtil.get("(?i)btmh:1220([a-f0-9]{64})", magnet, 1);
-                    if (v2 != null) return v2.substring(0, 40).toLowerCase(java.util.Locale.ROOT);
-                }
+                String hash = ani.rss.upgrade.ReleaseAnalysisService.canonicalHash(magnet);
                 if (StrUtil.isNotBlank(hash)) {
-                    return hash.toLowerCase();
+                    return hash;
                 }
+                String v2 = ReUtil.get("(?i)btmh:1220([a-f0-9]{64})(?:&|$)", magnet, 1);
+                if (v2 != null) return v2.substring(0, 40).toLowerCase(java.util.Locale.ROOT);
             }
         } catch (Exception e) {
             log.warn("解析缓存种子的 info-hash 失败 type:{}", e.getClass().getSimpleName());

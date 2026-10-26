@@ -1,6 +1,7 @@
 package ani.rss.util.other;
 
 import ani.rss.upgrade.UpgradeHttp;
+import ani.rss.upgrade.SubscriptionQualitySelector;
 
 import ani.rss.commons.AtomicFileWriter;
 import ani.rss.commons.GsonStatic;
@@ -219,6 +220,7 @@ public class AniUtil {
                 ani.setSubgroup(subgroup);
                 break;
             case "anime-garden":
+                ani.setBgmUrl(dto.getBgmUrl()).setSubgroup(dto.getSubgroup());
                 if (paramMap.containsKey("subject")) {
                     String bgmUrl = "https://bgm.tv/subject/" + paramMap.get("subject");
                     ani.setBgmUrl(bgmUrl);
@@ -446,6 +448,7 @@ public class AniUtil {
      * @param ani 订阅
      */
     public static void verify(Ani ani) {
+        if(SubscriptionQualitySelector.enabled(ani)) SubscriptionQualitySelector.select(ani,List.of());
         String url = ani.getUrl();
         List<String> exclude = ani.getExclude();
         Integer season = ani.getSeason();

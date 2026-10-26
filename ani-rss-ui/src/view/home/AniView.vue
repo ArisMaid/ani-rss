@@ -118,6 +118,12 @@
             <el-form-item label="匹配">
               <ExcludeView v-model:exclude="props.ani.match" :import-exclude="false"/>
             </el-form-item>
+            <el-form-item label="质量规则">
+              <el-select v-model="props.ani.qualityPolicyId" clearable placeholder="不启用质量择优" class="full-width" @visible-change="loadQualityPolicies">
+                <el-option v-for="policy in qualityPolicies" :key="policy.id" :value="policy.id" :label="policy.name"/>
+              </el-select>
+                <div class="el-form-item__description">按质量规则逐集选择，合并已发现的历史资源，后续刷新继续使用该规则。</div>
+            </el-form-item>
             <el-form-item label="排除">
               <ExcludeView v-model:exclude="props.ani.exclude" :import-exclude="true"/>
             </el-form-item>
@@ -313,12 +319,19 @@ import TmdbGroupView from "./TmdbGroupView.vue";
 import CustomTagsView from "@/view/config/CustomTagsView.vue";
 import {Refresh, RefreshRight} from "@element-plus/icons-vue";
 import * as http from "@/js/http.js";
+import api from "@/js/api.js";
 import {getBgmTitle} from "@/js/http.js";
 import AniBTView from "@/view/home/AniBTView.vue";
 import AnimeGardenView from "@/view/home/AnimeGardenView.vue";
 import DisableView from "@/view/custom/DisableView.vue";
 
 const activeName = ref('base')
+const qualityPolicies = ref([])
+async function loadQualityPolicies(open = true) {
+  if(!open) return
+  try { qualityPolicies.value = (await api.get('/api/v2/upgrade/policies')).data }
+  catch(error) { ElMessage.error(`质量规则加载失败：${error.message}`) }
+}
 
 const aniBTRef = ref()
 const mikanRef = ref()
@@ -373,6 +386,7 @@ let searchThemoviedb = () => {
 
 onMounted(() => {
   init()
+  void loadQualityPolicies()
 })
 
 let scrollbarRef = ref()

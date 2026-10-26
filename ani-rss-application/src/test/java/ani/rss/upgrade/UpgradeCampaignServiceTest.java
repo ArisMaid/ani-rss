@@ -13,6 +13,19 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class UpgradeCampaignServiceTest {
+    @Test void ordinarySubscriptionReferenceAlsoPreventsPolicyDeletion() {
+        var subscription=new ani.rss.entity.Ani().setId("ordinary-sub").setTitle("Example").setQualityPolicyId("task");
+        ani.rss.util.other.AniUtil.ANI_LIST.add(subscription);
+        try { assertThrows(ani.rss.exception.ApiProblemException.class,()->service.deletePolicy("task",1)); }
+        finally { ani.rss.util.other.AniUtil.ANI_LIST.remove(subscription); }
+    }
+    @Test void canCreateMonitorOnlyCampaignWithoutAnEmbyLibrary() {
+        ConfigUtil.CONFIG.getUpgrade().setLibraryIds(List.of());
+        Campaign campaign=new Campaign(); campaign.setName("2026 夏季监测"); campaign.setStartDate("2026-07-01"); campaign.setEndDate("2026-09-30");
+        Campaign saved=service.saveCampaign(null,campaign);
+        assertEquals("UNASSIGNED",saved.getLibraryId());
+        assertTrue(saved.isEnabled());
+    }
     @TempDir Path directory;
     private String previousConfig;
     private Config original;

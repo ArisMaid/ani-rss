@@ -11,6 +11,14 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class Upstream52SubscriptionTest {
+    @Test void filteredGardenFeedCanRetainTheExplicitBangumiIdentityWithoutASubjectQueryParameter() {
+        Config original=ConfigUtil.snapshot(); ConfigUtil.CONFIG.setOffset(false).setCopyMasterToStandby(false);
+        try(var bgm=mockStatic(BgmUtil.class);var items=mockStatic(ItemsUtil.class)) {
+            bgm.when(()->BgmUtil.toAni(any(),any())).thenAnswer(inv->{((Ani)inv.getArgument(1)).setOva(false).setTitle("Example");return null;});
+            var dto=new RssToAniDTO().setType("anime-garden").setUrl("https://api.animes.garden/feed.xml?include=Example").setBgmUrl("https://bgm.tv/subject/123").setSubgroup("preferred");
+            Ani result=AniUtil.getAni(dto); assertEquals("https://bgm.tv/subject/123",result.getBgmUrl()); assertEquals("preferred",result.getSubgroup());
+        } finally {BeanUtil.copyProperties(original,ConfigUtil.CONFIG);}
+    }
     @Test void eachStandbyFeedInfersItsOwnOffsetAgainstUnshiftedEpisodes() {
         Config original=ConfigUtil.snapshot();
         ConfigUtil.CONFIG.setOffset(true).setCopyMasterToStandby(false).setStandbyRss(true);

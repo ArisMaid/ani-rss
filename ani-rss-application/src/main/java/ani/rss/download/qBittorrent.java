@@ -1,5 +1,7 @@
 package ani.rss.download;
 
+import ani.rss.upgrade.ReleaseAnalysisService;
+
 import ani.rss.commons.FileUtils;
 import ani.rss.commons.GsonStatic;
 import ani.rss.entity.Ani;
@@ -10,6 +12,7 @@ import ani.rss.entity.torrent.qBittorrentTorrentsInfo;
 import ani.rss.enums.StringEnum;
 import ani.rss.enums.TorrentsTagEnum;
 import ani.rss.service.DownloadService;
+import ani.rss.upgrade.SubscriptionQualitySelector;
 import ani.rss.util.basic.HttpReq;
 import ani.rss.util.basic.ScopedCookieJar;
 import ani.rss.util.other.ConfigUtil;
@@ -174,7 +177,10 @@ public class qBittorrent implements BaseDownload {
         String name = item.getReName();
         Boolean qbUseDownloadPath = config.getQbUseDownloadPath();
 
-        List<String> tags = newTags(ani, item, config);
+        List<String> tags = new ArrayList<>(newTags(ani, item, config));
+        String chapterSelection=SubscriptionQualitySelector.selectionTag(item);
+        if(chapterSelection!=null) tags.add(chapterSelection);
+        if(chapterSelection!=null&&new ReleaseAnalysisService().parse(item.getTitle(),ani.getBgmUrl(),"COLLECTION").getEpisodes().size()>1) tags.add(SubscriptionQualitySelector.COLLECTION_TAG);
         String hash = StrUtil.blankToDefault(TorrentUtil.getInfoHash(torrentFile),
                 StrUtil.blankToDefault(item.getInfoHash(), FileUtil.mainName(torrentFile)));
 
@@ -212,6 +218,7 @@ public class qBittorrent implements BaseDownload {
                     .form("paused", false)
                     .form("stopped", false)
                     .form("urls", FileUtil.readUtf8String(torrentFile));
+            if(chapterSelection!=null&&rename) httpRequest.form("stopCondition","MetadataReceived");
         } else {
             if (torrentFile.length() > 0) {
                 // 开启了重命名则在重命名后再开始下载
@@ -373,7 +380,8 @@ public class qBittorrent implements BaseDownload {
     public Boolean rename(TorrentsInfo torrentsInfo) {
         String reName = torrentsInfo.getName();
 
-        if (StrUtil.isBlank(reName) || !ReUtil.contains(StringEnum.SEASON_REG, reName)) {
+        if (StrUtil.isBlank(reName) || !ReUtil.contains(StringEnum.SEASON_REG, reName)
+                &&(torrentsInfo.getTagList()==null||!torrentsInfo.getTagList().contains(SubscriptionQualitySelector.COLLECTION_TAG))) {
             // 剧场版 OR OVA 直接开始任务
             Boolean start = start(torrentsInfo);
             Assert.isTrue(start, "开始任务失败 {}", reName);
@@ -426,6 +434,26 @@ public class qBittorrent implements BaseDownload {
         }
 
         Boolean subtitleIndependentFolderEnabled = config.getSubtitleIndependentFolderEnabled();
+        if(SubscriptionQualitySelector.preserveBatchFilenames(ani,reName,names)) {
+            Set<String> selected=SubscriptionQualitySelector.selectedChapters(torrentsInfo.getTagList());
+            if(!selected.isEmpty()) {
+                Map<Integer,Boolean> priorities=new LinkedHashMap<>(); Set<String> covered=new HashSet<>();
+                for(var file:files) {
+                    var selection=SubscriptionQualitySelector.selectedFile(ani,file.getName(),selected);
+                    if(file.getName().matches("(?i).*\\.(mkv|mp4|avi|webm|ts)$")) {
+                        if(selection==SubscriptionQualitySelector.FileSelection.UNKNOWN) throw new IllegalArgumentException("BATCH_FILE_CHAPTER_UNKNOWN");
+                        if(selection==SubscriptionQualitySelector.FileSelection.SELECT) for(String e:new ReleaseAnalysisService().parse(file.getName(),ani.getBgmUrl(),"FILE_SELECTION").getEpisodes())
+                            covered.add(ReleaseAnalysisService.number(new java.math.BigDecimal(e).add(java.math.BigDecimal.valueOf(ani.getOffset())).toPlainString()));
+                    }
+                    if(selection!=SubscriptionQualitySelector.FileSelection.UNKNOWN) priorities.put(file.getIndex(),selection==SubscriptionQualitySelector.FileSelection.SELECT);
+                }
+                if(!covered.containsAll(selected)) throw new IllegalArgumentException("BATCH_SELECTED_COVERAGE_INCOMPLETE");
+                for(var priority:priorities.entrySet()) if(!priority.getValue())
+                    Assert.isTrue(setFilePriority(hash,priority.getKey(),0),"QBITTORRENT_FILE_SELECTION_FAILED");
+            }
+            log.info("合集保留逐集文件名，开始任务 {}",reName);
+            return start(torrentsInfo);
+        }
         String subtitleIndependentFolderName = config.getSubtitleIndependentFolderName();
 
         List<String> newNames = new ArrayList<>();

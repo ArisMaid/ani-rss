@@ -37,6 +37,8 @@ public class UpgradeCampaignService {
             if(policy.getRevision()!=expectedRevision) UpgradeModeService.conflict(policy.getRevision());
             Map<String,Object> references=new LinkedHashMap<>();
             if(id.equals(global)) references.put("globalDefault",true);
+            for(var subscription:ani.rss.util.other.AniUtil.ANI_LIST)
+                if(id.equals(subscription.getQualityPolicyId())) references.put("subscription:"+subscription.getId(),subscription.getTitle());
             for(var campaign:repository.all("upgrade_campaigns",null,null,Campaign.class))
                 if(id.equals(campaign.getPolicyId())) references.put("campaign:"+campaign.getId(),campaign.getName());
             for(var target:repository.all("upgrade_targets",null,null,Target.class))
@@ -64,7 +66,8 @@ public class UpgradeCampaignService {
         }
         LocalDate start=LocalDate.parse(campaign.getStartDate()), end=LocalDate.parse(campaign.getEndDate());
         if(start.isAfter(end)) throw new IllegalArgumentException("起始日期不能晚于结束日期");
-        if(!ConfigUtil.snapshot().getUpgrade().getLibraryIds().contains(campaign.getLibraryId())) throw new IllegalArgumentException("请选择已配置媒体库");
+        if(monitorOnly(campaign.getLibraryId())) campaign.setLibraryId("UNASSIGNED");
+        else if(!ConfigUtil.snapshot().getUpgrade().getLibraryIds().contains(campaign.getLibraryId())) throw new IllegalArgumentException("请选择已配置媒体库，或使用仅订阅监测");
         String requested=nonBlank(campaign.getPolicyId());
         String effective=requested==null?nonBlank(ConfigUtil.snapshot().getUpgrade().getDefaultPolicyId()):requested;
         if(effective==null) throw new IllegalArgumentException("请先保存全局默认规则，或选择任务质量规则");
@@ -110,6 +113,7 @@ public class UpgradeCampaignService {
         }
     }
     private static String nonBlank(String value) { return value==null||value.isBlank()?null:value.trim(); }
+    public static boolean monitorOnly(String libraryId) { return libraryId==null||libraryId.isBlank()||"UNASSIGNED".equals(libraryId); }
     private Campaign selectCampaign(Target target,List<Campaign> enabled) {
         if(target.getPremiereDate()==null) return null;
         return enabled.stream()

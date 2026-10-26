@@ -16,6 +16,105 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class UpgradeSourceContractTest {
+    @Test void commonEnglishFragmentsAndNumericFansubNamesCannotCreateFalseIdentityOrEpisodes() {
+        Target target=new Target(); target.setTitle("GREATEST");
+        assertFalse(ReleaseProvider.verifiedTitle(target,"[7³ACG] Possibly the Greatest Alchemist of All Time S01 [1080p][CHS]"));
+        target.setTitle("PARADISE！"); assertFalse(ReleaseProvider.verifiedTitle(target,"[A] Kaitou Tenshi Twin Angel: Kyun Kyun Tokimeki Paradise!! [01-12][1080p][CHS]"));
+        target.setTitle("Blue Box"); assertTrue(ReleaseProvider.verifiedTitle(target,"[A] Blue Box - 01 [1080p][CHS]"));
+        assertEquals(Set.of("3"),new ReleaseAnalysisService().parse("[7³ACG] Example - 03 [1080p][CHS]","100","RSS").getEpisodes());
+        var wrong=new ReleaseAnalysisService().parse("[A] Example - 01 [1080p][CHS]","100","RSS"); wrong.getEvidence().add(new Evidence("SOURCE_IDENTITY_REJECTED","identity","other work"));
+        assertEquals(QualityPolicyEngine.Verdict.IDENTITY_CONFLICT,new QualityPolicyEngine().evaluate(new QualityPolicyEngine.Policy(),wrong,null).verdict());
+    }
+    @Test void actualTraditionalExternalSubtitleOverridesTheSimplifiedDeclarationInTheInstallManifest() throws Exception {
+        var verification=new MediaVerificationService(); Assumptions.assumeTrue(verification.available("ffmpeg")&&verification.available("ffprobe"));
+        Path video=directory.resolve("Example - 01.mkv"),subtitle=directory.resolve("Example - 01.cht.srt");
+        Files.writeString(subtitle,"1\n00:00:00,000 --> 00:00:06,000\n這裡還有這麼多讓我們說不完的話。\n");
+        MediaVerificationService.run(List.of("ffmpeg","-v","error","-nostdin","-f","lavfi","-i","color=c=black:s=1920x1080:r=5","-t","6","-c:v","libx264","-threads","1",video.toString()),30,100000);
+        ConfigUtil.CONFIG.getUpgrade().setDownloaderMappings(List.of(new UpgradeSettings.PathMapping(directory.toString(),directory.toString())));
+        Release release=new ReleaseAnalysisService().parse("[A] Example - 01 [1080p][CHS][外挂][MKV]","100","TEST"); release.setInfoHash("a".repeat(40));
+        Target target=new Target(); target.setId("t"); target.setSubjectId("100"); target.setTitle("Example"); target.setOutputRoot(directory.resolve("library").toString());
+        var task=mock(ani.rss.entity.torrent.TorrentsInfo.class); when(task.finished()).thenReturn(true); when(task.getSavePath()).thenReturn(directory.toString()); when(task.getFilesSupplier()).thenReturn(()->List.of(video.getFileName().toString(),subtitle.getFileName().toString()));
+        var service=new UpgradeDownloadService(new UpgradeRepository(),new LibraryPathMappingService(),verification,new ReleaseAnalysisService(),new SpaceReservationService());
+        Release actual=service.verify(new Job(),target,release,task).stream().filter(f->"VIDEO".equals(f.getKind())).findFirst().orElseThrow().getAttributes();
+        assertEquals(Set.of("CHT"),actual.getLanguages()); assertEquals(1080,actual.getResolution());
+        assertEquals(QualityPolicyEngine.Verdict.REJECTED,new QualityPolicyEngine().evaluate(QualityPolicyPresets.catalog().presets().get(0).policy(),actual,null).verdict());
+    }
+    @Test void verifiedSecondSeasonCannotBeRenamedAsSeasonOneWhenTargetSeasonIsUnset() throws Exception {
+        Path downloads=Files.createDirectory(directory.resolve("downloads")),library=Files.createDirectory(directory.resolve("library"));
+        Path video=Files.writeString(downloads.resolve("Example S02E10 [1080p][CHS].mkv"),"naming fixture");
+        var settings=ConfigUtil.CONFIG.getUpgrade(); settings.setDownloaderMappings(List.of(new UpgradeSettings.PathMapping(downloads.toString(),downloads.toString()))); settings.setTvRoot(library.toString()); ConfigUtil.CONFIG.setRenameTemplate("${title} S${seasonFormat}E${episodeFormat}");
+        var parser=new ReleaseAnalysisService(); Release release=parser.parse(video.getFileName().toString(),"100","TEST"); release.setInfoHash("a".repeat(40));
+        Target target=new Target(); target.setId("t"); target.setSubjectId("100"); target.setTitle("Example"); target.setOutputRoot(library.toString()); assertNull(target.getSeason());
+        var task=mock(ani.rss.entity.torrent.TorrentsInfo.class); when(task.finished()).thenReturn(true); when(task.getSavePath()).thenReturn(downloads.toString()); when(task.getFilesSupplier()).thenReturn(()->List.of(video.getFileName().toString()));
+        var verifier=mock(MediaVerificationService.class); when(verifier.verify(eq(video),any(Release.class),eq(settings))).thenReturn(new MediaVerificationService.Verified(release,Files.size(video),Files.getLastModifiedTime(video).toMillis(),null,MediaVerificationService.sha256(video)));
+        var service=new UpgradeDownloadService(new UpgradeRepository(),new LibraryPathMappingService(),verifier,parser,new SpaceReservationService());
+        assertTrue(service.verify(new Job(),target,release,task).get(0).getDestination().contains("S02E10"));
+    }
+    @Test void rssFailureIsAuditableAndOnlySuccessfulReadsReceiveTheShortCache() {
+        var repository=new UpgradeRepository(); var provider=new ReleaseProvider(repository,new ReleaseAnalysisService());
+        Target target=new Target(); target.setId("rss-target"); target.setSubjectId("100"); String url="https://mikan.example/RSS/Bangumi?bangumiId=1"; target.getRssUrls().add(url);
+        try(var feeds=mockStatic(ani.rss.util.other.ItemsUtil.class)) {
+            feeds.when(()->ani.rss.util.other.ItemsUtil.getItemsRaw(url)).thenThrow(new IllegalStateException("offline")); provider.rss(target);
+            Cursor failed=repository.all("upgrade_scan_cursors",target.getId(),null,Cursor.class).get(0); assertFalse(failed.isComplete()); assertEquals(0,failed.getLastSuccess()); assertNotNull(failed.getError());
+            feeds.when(()->ani.rss.util.other.ItemsUtil.getItemsRaw(url)).thenReturn(List.of()); provider.rss(target); provider.rss(target);
+            Cursor recovered=repository.get("upgrade_scan_cursors",failed.getId(),Cursor.class).orElseThrow(); assertTrue(recovered.isComplete()); assertNull(recovered.getError()); assertTrue(recovered.getLastSuccess()>0);
+            feeds.verify(()->ani.rss.util.other.ItemsUtil.getItemsRaw(url),times(2));
+        }
+    }
+    @Test void mikanTorrentUrlsAndAttachedRevisionEpisodesAreRecognized() {
+        String hash="ABCDEF0123456789ABCDEF0123456789ABCDEF01";
+        assertEquals(hash.toLowerCase(Locale.ROOT),ReleaseAnalysisService.canonicalHash("https://mikanani.me/Download/20260701/"+hash+".torrent?token=x"));
+        assertNull(ReleaseAnalysisService.canonicalHash("https://example.test/"+hash+".torrent.exe"));
+        assertEquals(Set.of("3"),new ReleaseAnalysisService().parse("[A] Example 〖2026〗 - 03 [1080p][CHS]","100","RSS").getEpisodes());
+        var parser=new ReleaseAnalysisService();
+        assertEquals(1080,parser.parse("[A] Example [19 - 总第85][1080P_AVC_AAC][简繁日内封PGS]","100","RSS").getResolution());
+        assertEquals(Set.of("1","2","3"),parser.parse("[A] Example (01-03Fin WEBRIP 1080p AVC AAC 简中)","100","RSS").getEpisodes());
+        assertEquals(Set.of("1","2","3"),parser.parse("[A] Example [01-03Fin][1080p][CHS]","100","RSS").getEpisodes());
+        assertEquals(Set.of("3"),parser.parse("[A] Example -3[1080p][简日内嵌]","100","RSS").getEpisodes());
+        assertEquals(Set.of("CHS","CHT"),parser.parse("[A] Example - 01 [1080p][繁简中字]","100","RSS").getLanguages());
+        for(String episode:List.of(" - 01v2 ","[01v2]","〖01v2〗")) {
+            Release r=new ReleaseAnalysisService().parse("[绿茶字幕组&LoliHouse] Example"+episode+"[1080p][简繁日内封]","100","RSS");
+            assertEquals(Set.of("1"),r.getEpisodes()); assertEquals(2,r.getCorrection()); assertTrue(r.getLanguages().contains("CHS"));
+        }
+    }
+    @Test void storedRssEvidenceIsRepairedAndMergedWithoutLosingCorrections() {
+        var repository=new UpgradeRepository(); var provider=new ReleaseProvider(repository,new ReleaseAnalysisService());
+        Target target=new Target(); target.setId("t"); target.setSubjectId("100");
+        String hash="a".repeat(40);
+        Release canonical=new ReleaseAnalysisService().parse("[A] Example - 01v2 [1080p][CHS]","100","ANIMEGARDEN");
+        canonical.setTargetId("t"); canonical.setSourceId("garden-1"); canonical.setInfoHash(hash); canonical.setEpisodes(new TreeSet<>()); provider.accept(canonical);
+        Release rss=new ReleaseAnalysisService().parse(canonical.getTitle(),"100","RSS"); rss.setTargetId("t"); rss.setSourceId("rss-1"); rss.setTorrentUrl("https://mikanani.me/Download/"+hash+".torrent"); rss.setEpisodes(new TreeSet<>()); provider.accept(rss);
+        provider.refreshStoredEvidence(target);
+        assertEquals(1,repository.all("upgrade_releases","t",null,Release.class).stream().filter(r->!"MERGED".equals(r.getState())).count());
+        Release repaired=repository.identity("upgrade_releases","t:"+hash,Release.class).orElseThrow(); assertEquals(Set.of("1"),repaired.getEpisodes());
+        repaired.setEpisodes(new TreeSet<>()); repaired.getEvidence().add(new Evidence("USER_CORRECTION","episodes","intentionally unresolved")); provider.accept(repaired);
+        provider.refreshStoredEvidence(target); assertTrue(repository.get("upgrade_releases",repaired.getId(),Release.class).orElseThrow().getEpisodes().isEmpty());
+        Release incoming=new ReleaseAnalysisService().parse(canonical.getTitle(),"100","RSS"); incoming.setTargetId("t"); incoming.setSourceId("rss-2"); incoming.setInfoHash(hash); provider.accept(incoming);
+        assertTrue(repository.get("upgrade_releases",repaired.getId(),Release.class).orElseThrow().getEpisodes().isEmpty());
+        Release batch=new ReleaseAnalysisService().parse("[A] Example [01-03Fin][1080p][CHS]","100","RSS"); batch.setTargetId("t"); batch.setSourceId("legacy-batch"); batch.setEpisodes(new TreeSet<>(Set.of("1"))); provider.accept(batch);
+        provider.refreshStoredEvidence(target); assertEquals(Set.of("1","2","3"),repository.get("upgrade_releases",batch.getId(),Release.class).orElseThrow().getEpisodes());
+    }
+    @Test void gardenSingleGroupMetadataPreservesCorroboratedJointTitleCredits() {
+        var repository=new UpgradeRepository(); var provider=new ReleaseProvider(repository,new ReleaseAnalysisService());
+        Target target=new Target(); target.setId("joint"); target.setSubjectId("100"); target.setTitle("Example");
+        try(var http=mockStatic(UpgradeHttp.class,CALLS_REAL_METHODS)) {
+            http.when(()->UpgradeHttp.get(anyString(),anyMap())).thenReturn(JsonParser.parseString("{\"resources\":[{\"id\":1,\"title\":\"[SweetSub&LoliHouse] Example - 01 [1080p][CHS][MKV]\",\"fansub\":{\"name\":\"LoliHouse\"}}]}").getAsJsonObject());
+            assertFalse(provider.scanStep(target));
+            http.when(()->UpgradeHttp.execute(any(),anyMap(),any())).thenReturn(JsonParser.parseString("{\"resources\":[]}").getAsJsonObject());
+            assertTrue(provider.scanStep(target));
+            Release release=repository.all("upgrade_releases","joint",null,Release.class).get(0);
+            assertEquals(Set.of("SweetSub","LoliHouse"),release.getGroups());
+        }
+    }
+    @Test void malformedUnrelatedMikanNavigationCannotBlockValidSubjectAndRssBinding() {
+        ConfigUtil.CONFIG.setMikanHost("https://mikanani.me");
+        String html="<div class='bangumi-info'><a href='https://bgm.tv/subject/100'>Bangumi</a></div>"
+                +"<a href='/Home/Bangumi/System.Collections.Generic.List`1[BangumiOpenApi.Model.ValueAnyOfInner]'>navigation</a>"
+                +"<a href='/RSS/Bangumi?bangumiId=1'>RSS</a>";
+        var result=MikanQuarterCatalog.binding(html,"https://mikanani.me/Home/Bangumi/1");
+        assertEquals("100",result.subjectId());
+        assertEquals(List.of("https://mikanani.me/RSS/Bangumi?bangumiId=1"),result.feeds());
+    }
     @TempDir Path directory;
     private String prior; private Config original;
     @BeforeEach void before() {
@@ -33,7 +132,9 @@ class UpgradeSourceContractTest {
                 for(int i=0;i<count;i++) { int n=(page-1)*100+i; JsonObject item=new JsonObject(); item.addProperty("id",n); item.addProperty("title","[Group] Example - 01 [1080p][CHS][MKV]"); item.addProperty("infoHash",String.format("%040x",n+1)); item.addProperty("magnet","magnet:?xt=urn:btih:"+String.format("%040x",n+1)); items.add(item); }
                 JsonObject result=new JsonObject(); result.add("resources",items); return result;
             });
-            assertFalse(provider.scanStep(target)); assertFalse(provider.scanStep(target)); assertTrue(provider.scanStep(target));
+            assertFalse(provider.scanStep(target)); assertFalse(provider.scanStep(target)); assertFalse(provider.scanStep(target));
+            http.when(()->UpgradeHttp.execute(any(),anyMap(),any())).thenReturn(JsonParser.parseString("{\"resources\":[]}").getAsJsonObject());
+            assertTrue(provider.scanStep(target));
             assertEquals(237,repository.all("upgrade_releases","t",null,Release.class).size());
             Release duplicate=new ReleaseAnalysisService().parse("[Group] Example - 01 [1080p][CHS][MKV]","100","RSS"); duplicate.setInfoHash(String.format("%040x",1)); duplicate.setTargetId("t"); duplicate.setSourceId("feed:1"); provider.accept(duplicate);
             assertEquals(237,repository.all("upgrade_releases","t",null,Release.class).size()); assertEquals(238,repository.all("upgrade_release_sources",null,null,Map.class).size());

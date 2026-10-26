@@ -7,6 +7,9 @@ import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
 import ani.rss.entity.Item;
 import ani.rss.entity.StandbyRss;
+import ani.rss.upgrade.SubscriptionQualitySelector;
+import ani.rss.upgrade.SubscriptionReleaseHistory;
+import ani.rss.upgrade.ReleaseAnalysisService;
 import ani.rss.enums.NotificationStatusEnum;
 import ani.rss.enums.StringEnum;
 import ani.rss.util.basic.HttpReq;
@@ -83,7 +86,9 @@ public class ItemsUtil {
         }
         // 多字幕组共存模式
         Boolean coexist = config.getCoexist();
-        if (coexist) {
+        if (SubscriptionQualitySelector.enabled(ani)) {
+            items = SubscriptionQualitySelector.select(ani,items);
+        } else if (coexist) {
             items = CollUtil.distinct(items, Item::getReName, false);
         } else {
             items = CollUtil.distinct(items, it -> it.getEpisode().toString(), false);
@@ -103,11 +108,19 @@ public class ItemsUtil {
     public static List<Item> getItems(Ani ani, String rssUrl, String subgroupName) {
         Config config = ConfigUtil.CONFIG;
 
-        String xml = getRss(rssUrl);
+        String xml;
+        boolean sourceAvailable=true;
+        try { xml=getRss(rssUrl); }
+        catch(RuntimeException failure) {
+            if(SubscriptionReleaseHistory.merge(ani,rssUrl,List.of()).isEmpty()) throw failure;
+            sourceAvailable=false; xml="<rss><channel/></rss>";
+            log.warn("订阅来源暂不可用，继续历史候选 subscriptionId:{}",ani.getId());
+        }
 
         List<Item> items = new ArrayList<>();
 
         Document document = XmlUtil.readXML(xml);
+        SubscriptionReleaseHistory.recordSource(ani,rssUrl,sourceAvailable);
         Node channel = document.getElementsByTagName("channel").item(0);
         NodeList childNodes = channel.getChildNodes();
         for (int i = childNodes.getLength() - 1; i >= 0; i--) {
@@ -215,6 +228,8 @@ public class ItemsUtil {
 
             infoHash = infoHash.toLowerCase();
             infoHash = URLUtil.decode(infoHash);
+            String canonical=ReleaseAnalysisService.canonicalHash(torrent);
+            if(canonical!=null) infoHash=canonical;
 
             try {
                 length = StrUtil.nullToDefault(length, "0");
@@ -234,6 +249,7 @@ public class ItemsUtil {
                     .setReName(itemTitle)
                     .setTorrent(torrent)
                     .setInfoHash(infoHash)
+                    .setLength(NumberUtil.isLong(length)?Long.parseLong(length):0L)
                     .setFormatSize(formatSize)
                     .setPubDate(pubDate);
 
@@ -243,6 +259,7 @@ public class ItemsUtil {
             items.add(addNewItem);
         }
 
+        items = SubscriptionReleaseHistory.merge(ani,rssUrl,items);
         items = items.stream()
                 .filter(item -> {
                     try {
@@ -253,6 +270,11 @@ public class ItemsUtil {
                     }
                     return false;
                 }).toList();
+        if(SubscriptionQualitySelector.enabled(ani)) {
+            List<Item> selected=SubscriptionQualitySelector.select(ani,items);
+            selected.forEach(item->RenameUtil.rename(ani,item));
+            return selected;
+        }
         return CollUtil.distinct(items, item -> item.getEpisode().toString(), true);
     }
 
@@ -341,7 +363,10 @@ public class ItemsUtil {
             return list;
         }
 
-        int[] array = items.stream().mapToInt(o -> o.getEpisode().intValue()).distinct().toArray();
+        int[] array = SubscriptionQualitySelector.enabled(ani)?items.stream().flatMap(item->SubscriptionQualitySelector.coveredEpisodes(ani,item).stream())
+                .map(java.math.BigDecimal::new).filter(number->number.stripTrailingZeros().scale()<=0).mapToInt(java.math.BigDecimal::intValue).distinct().toArray()
+                :items.stream().mapToInt(o -> o.getEpisode().intValue()).distinct().toArray();
+        if(array.length==0) return list;
         int max = ArrayUtil.max(array);
         int min = ArrayUtil.min(array);
         if (max == min) {
@@ -408,6 +433,11 @@ public class ItemsUtil {
     }
 
     public static int currentEpisodeNumber(Ani ani, List<Item> items) {
+        if(SubscriptionQualitySelector.enabled(ani)) {
+            var episodes=items.stream().flatMap(item->SubscriptionQualitySelector.coveredEpisodes(ani,item).stream()).map(java.math.BigDecimal::new)
+                    .filter(number->number.stripTrailingZeros().scale()<=0).mapToInt(java.math.BigDecimal::intValue).distinct().toArray();
+            return Boolean.TRUE.equals(ani.getDownloadNew())?Arrays.stream(episodes).max().orElse(0):episodes.length;
+        }
         Config config = ConfigUtil.CONFIG;
         Boolean standbyRss = config.getStandbyRss();
         Boolean coexist = config.getCoexist();

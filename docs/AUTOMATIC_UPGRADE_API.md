@@ -7,6 +7,8 @@
 | GET `/status` | 唯一模式、配置修订号、任务／候选计数、扫描覆盖、工具状态及每日 AI 消耗 |
 | PUT `/mode` | `{"mode":"OFF","expectedRevision":12}`；可选 OFF、LEGACY、AUTOMATIC。修订号冲突为 409 |
 | GET／POST `/policies` | 列出／创建完整质量规则 |
+| GET `/policy-presets` | 已核对来源的字幕组标准名、别名，以及三个可编辑质量预设；读取不会改写已保存规则 |
+| POST `/targets/{id}/reanalyze` | 从已保存标题、种子地址补全缺失字段并重新决策，不请求外部补证；保留人工修正和已验证字段。遵循当前模式与媒体库门禁，AUTOMATIC 下符合条件的已关联目标可产生下载任务 |
 | PUT `/policies/{id}` | 提交完整规则及读取时的 revision；成功后 revision 增加 |
 | DELETE `/policies/{id}?expectedRevision=1` | 删除未被引用的规则，成功返回 204；过期修订号或正在被引用返回 409，不存在／已删除返回 404 |
 | POST `/evaluate` | `{"policy":{...},"candidate":{...},"current":{...}}`；只比较草稿，不保存 |
@@ -34,6 +36,8 @@
 | POST `/ai/test` | 小型 JSON 输出自检；计入请求和 token 预算 |
 
 分页使用 `offset=0&limit=50`，limit 范围 1–200；返回 items、offset、limit、hasMore。预演返回 decisions、reasonDistribution 与分页字段。预演只反映保存的证据，不代表已通过实际文件校验或获得生产验收。
+
+目标扫描先读取独立 RSS，再推进 AnimeGarden 分页；某一源失败或尚未翻页完成时，已发现资源仍参与决策，失败源继续按原任务状态重试。每个 RSS 保存独立游标、成功时间、条目数和错误状态；成功读取缓存 15 分钟，失败不占用成功缓存。种子文件 URL 中的 40 位十六进制文件名用于候选归并，实际提交下载前仍核对种子内容的 info hash。
 
 规则编辑保持原 ID 并增加 revision。维度及字幕组合、字幕组、分辨率、来源、封装、编码列表均按从高到低保存。删除检查全局默认、所有日期任务（包括暂停）、作品覆盖（包括排除）及未完成任务；先更换引用后再删除，不隐式替换正在使用的规则。删除后的定义保留用于历史审计，不再出现在规则列表或参与选择；已有媒体、任务与历史记录保持不变。
 
@@ -83,6 +87,8 @@ Mikan 季度订阅示例：
 
 `mikanSeason` 使用冬／春／夏／秋，分别对应 1–3／4–6／7–9／10–12 月。后端根据年份、季度生成 startDate／endDate，忽略客户端传入的日期；新建或改变季度时核对实际上游菜单。暂停、改规则或优先级且不改变所选季度时不依赖上游在线。复用 Mikan 列表缓存且不触发评分预热和原版订阅。
 
+`libraryId` 留空或为 `UNASSIGNED` 时保存为“仅订阅监测”：无需已配置的 Emby 库，仍执行目录发现、候选检索和规则判断，不索引虚构媒体库、不创建自动下载与文件替换。只有关联已配置的真实媒体库后才允许完整洗版流程。规则预设的含义和资料来源见 [字幕组预设](FANSUB_PRESETS.md)。
+
 扫描先保存 Mikan 目录快照，每步处理至多三条，通过 Mikan 条目的 Bangumi 链接核对作品身份，再读取首播事实。只关联同源、同 mikanId 的实际 RSS 链接，优先使用全字幕组聚合 RSS，保留已有手工 RSS 与排除设置。继续扫描 Bangumi 全部动画类型，补充无 Mikan 资源的作品；季度页上的往年长篇作品按首播范围排除。来源失败不冒充空目录，映射缺失保留事件与覆盖未完整标记；游标恢复、手动重扫及每日刷新覆盖两个来源。
 
 旧日期任务示例（catalogSource 省略或为 DATE）：
@@ -100,6 +106,10 @@ Mikan 季度订阅示例：
 ```
 
 ## 本地测试与部署前核对
+
+`GET /api/v2/upgrade/targets/{id}/coverage` 返回 `expectedKnown`、`sourceScanComplete`、`expectedChapters`、`eligibleChapters`、`installedChapters`、`missingChapters`、`qualifyingResources`、`identityConflicts` 和 `waitingEvidence`。状态区分 `WAITING_METADATA`、`SOURCE_INCOMPLETE`、`NO_QUALIFYING_RESOURCE`、`COVERAGE_GAPS` 和 `COVERED`；候选覆盖不代表下载完成。旧版来源游标需完成新版作品及别名查询后才能声称扫描完整。
+
+质量订阅使用 `Ani.qualityPolicyId`；合集保存 `Item.selectedEpisodes`，qBittorrent 获得元数据后按章节选择视频/字幕，公共附件保留。未知视频章节或不能拆分的部分覆盖不会被当作验证成功。作品档案的 `seasonStartChapter` 与 `seasonStartEvidence` 保存完整季度总集数的换算依据，人工修正不被自动重分析覆盖。
 
 先保持 OFF，完成依赖自检、所选媒体库完整索引、规则保存和只读预演导出。确认首播范围、实际输出目录、季集身份及保护状态，再在隔离测试库开启自动模式。检查新视频可播放、旧文件逐项结果、共享字幕／源保留、Emby 新版本收录和重启恢复。
 

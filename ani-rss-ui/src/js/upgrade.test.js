@@ -1,6 +1,24 @@
 import {describe, expect, it} from 'vitest'
-import {defaultPolicy, mappingText, moveDimension, parseMappings, quarterDateRange, mikanSeasonChoices} from './upgrade.js'
+import {defaultPolicy, mappingText, moveDimension, parseMappings, quarterDateRange, mikanSeasonChoices, applyPolicyPreset, applyFansubPreference} from './upgrade.js'
 describe('upgrade settings and rule controls', () => {
+    it('applies a full preset to a draft while preserving the existing identity and revision', () => {
+        const current = {...defaultPolicy(), id: 'saved', revision: 9, name: '我的规则'}
+        const preset = {policy: {...defaultPolicy(), name: '预设', minimumResolution: 1080, requiredLanguages: ['CHS']}}
+        const result = applyPolicyPreset(current, preset)
+        expect(result).toMatchObject({id: 'saved', revision: 9, name: '我的规则', minimumResolution: 1080, requiredLanguages: ['CHS']})
+        result.groups.push('edited')
+        expect(current.minimumResolution).toBe(720)
+        expect(preset.policy.groups).toEqual([])
+        expect(applyPolicyPreset(defaultPolicy(), preset).name).toBe('预设')
+    })
+    it('inserts preferred groups ahead of custom fallbacks and preserves custom aliases', () => {
+        const current = {...defaultPolicy(), groups: ['桜都', '后备组'], groupAliases: {Custom: '后备组'}}
+        const groups = [{name: '桜都字幕组', aliases: ['桜都']}, {name: 'SweetSub', aliases: []}]
+        const result = applyFansubPreference(current, groups)
+        expect(result.groups).toEqual(['桜都字幕组', 'SweetSub', '后备组'])
+        expect(result.groupAliases).toEqual({'桜都': '桜都字幕组', Custom: '后备组'})
+        expect(current.groups).toEqual(['桜都', '后备组'])
+    })
     it('derives whole quarter dates including leap years without local timezone drift', () => {
         expect(quarterDateRange(2024, '冬')).toEqual({startDate: '2024-01-01', endDate: '2024-03-31'})
         expect(quarterDateRange(2024, '春')).toEqual({startDate: '2024-04-01', endDate: '2024-06-30'})

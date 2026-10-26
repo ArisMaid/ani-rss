@@ -6,6 +6,8 @@ import ani.rss.entity.BgmEpisodes;
 import ani.rss.entity.BgmInfo;
 import ani.rss.entity.Config;
 import ani.rss.entity.Item;
+import ani.rss.upgrade.ReleaseAnalysisService;
+import ani.rss.upgrade.SubscriptionQualitySelector;
 import ani.rss.enums.StringEnum;
 import cn.hutool.core.lang.Opt;
 import cn.hutool.core.lang.func.Func1;
@@ -53,11 +55,21 @@ public class RenameUtil {
         itemTitle = itemTitle.replaceAll("\\[([A-Z]|\\d){8}]$", "").trim();
 
         String e;
+        Set<String> qualityCoverage=Set.of();
         // 是否使用自定义剧规则
         if (customEpisode) {
             e = ReUtil.get(customEpisodeStr, itemTitle, customEpisodeGroupIndex);
         } else {
             e = ReUtil.get(REG_STR, itemTitle, 2);
+            if(SubscriptionQualitySelector.enabled(ani)) {
+                qualityCoverage=new ReleaseAnalysisService().parse(itemTitle,ani.getBgmUrl(),"SUBSCRIPTION_RSS").getEpisodes();
+                if(item.getSelectedEpisodes()!=null&&!item.getSelectedEpisodes().isEmpty()) {
+                    Set<String> selected=new TreeSet<>();
+                    for(String selectedEpisode:item.getSelectedEpisodes()) selected.add(ReleaseAnalysisService.number(new java.math.BigDecimal(selectedEpisode).subtract(java.math.BigDecimal.valueOf(offset)).toPlainString()));
+                    qualityCoverage=selected;
+                }
+                if(!qualityCoverage.isEmpty()) e=qualityCoverage.stream().min(Comparator.comparing(java.math.BigDecimal::new)).orElse(e);
+            }
         }
 
         if (StrUtil.isBlank(e)) {
@@ -76,6 +88,10 @@ public class RenameUtil {
         String episodeFormat = String.format("%02d", (int) episode);
 
         episodeStr = String.valueOf((int) episode);
+        if(qualityCoverage.size()>1) {
+            double last=Double.parseDouble(qualityCoverage.stream().max(Comparator.comparing(java.math.BigDecimal::new)).orElse(e))+offset;
+            episodeFormat+="-"+String.format("%02d",(int)last); episodeStr+="-"+(int)last;
+        }
 
         // x.5
         boolean is5 = ItemsUtil.is5(episode);

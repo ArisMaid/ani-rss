@@ -15,6 +15,26 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class UpgradeSchedulerDecisionTest {
+    @Test void gardenFailureStillEvaluatesPreviouslyKnownResourcesAndRssRunsFirst() throws Exception {
+        target.setLibraryId("UNASSIGNED"); target.setPolicyOverride("p");
+        var resolver=mock(SubjectEpisodeResolver.class); when(resolver.enrichStep(target)).thenReturn(true);
+        var provider=mock(ReleaseProvider.class); when(provider.scanStep(target)).thenThrow(new UpgradeHttp.SourceFailure("UPSTREAM_HTTP_503",true));
+        var local=new UpgradeScheduler(repository,new UpgradeCampaignService(repository,new QualityPolicyEngine()),null,mock(EmbyLibraryIndexService.class),provider,mock(AiAnalysisClient.class),new QualityPolicyEngine(),downloads,commits,space,null,resolver,null,mock(UpgradeNotificationService.class));
+        Job scan=new Job(); scan.setId("scan"); scan.setKind("TARGET"); scan.setTargetId("t");
+        repository.save("upgrade_targets","t","UNASSIGNED","100:UNASSIGNED","MONITORING",1,target);
+        assertThrows(UpgradeHttp.SourceFailure.class,()->local.process(scan));
+        var order=inOrder(provider); order.verify(provider).rss(any(Target.class)); order.verify(provider).scanStep(any(Target.class)); order.verify(provider).refreshStoredEvidence(any(Target.class));
+        assertEquals("UPGRADE",repository.get("upgrade_releases","a",Release.class).orElseThrow().getState());
+        assertTrue(repository.all("upgrade_jobs","t",null,Job.class).isEmpty());
+    }
+    @Test void monitorOnlyTargetCollectsDecisionsWithoutCreatingTransferJobs() {
+        target.setLibraryId("UNASSIGNED");
+        var campaign=repository.get("upgrade_campaigns","c",Campaign.class).orElseThrow(); campaign.setLibraryId("UNASSIGNED");
+        repository.save("upgrade_campaigns","c",null,null,"ENABLED",1,campaign);
+        scheduler.evaluateTarget(target);
+        assertTrue(repository.all("upgrade_jobs","t",null,Job.class).isEmpty());
+        assertEquals("MONITORING",target.getState()); verifyNoInteractions(downloads);
+    }
     @TempDir Path directory;
     private String prior;
     private Config original;

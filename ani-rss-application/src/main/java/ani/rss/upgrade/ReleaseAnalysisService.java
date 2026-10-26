@@ -8,7 +8,7 @@ import java.util.regex.*;
 @Service
 public class ReleaseAnalysisService {
     private static final Pattern SEASON_EP=Pattern.compile("(?i)S(\\d{1,3})[ ._-]*E(\\d{1,4}(?:\\.\\d+)?)(?:\\s*[-~–]\\s*(?:E)?(\\d{1,4}))?");
-    private static final Pattern EPISODE=Pattern.compile("(?i)(?:[\\[【]\\s*|\\s-\\s|\\bEP?\\s*|第)(\\d{1,4}(?:\\.\\d+)?)(?:\\s*[-~–]\\s*(\\d{1,4}))?(?:\\s*[\\]】集话話]|\\b)");
+    private static final Pattern EPISODE=Pattern.compile("(?i)(?:[\\[【〖(（]\\s*|\\s-\\s*|\\bEP?\\s*|第)(\\d{1,4}(?:\\.\\d+)?)(?:\\s*[-~–]\\s*(\\d{1,4}))?(?:v[1-9]\\d?)?(?:fin|end)?(?:\\s*[\\]】〗)）集话話]|\\b(?![\\p{L}\\p{N}]))");
     public Release parse(String title,String subjectId,String source) {
         Release r=new Release(); r.setTitle(title); r.setSubjectId(subjectId); r.setSource(source);
         String s=title==null?"":title;
@@ -27,7 +27,7 @@ public class ReleaseAnalysisService {
             Matcher ep=EPISODE.matcher(s);
             while(ep.find()) {
                 double first=Double.parseDouble(ep.group(1));
-                boolean year=ep.group().matches("^[\\[【]\\s*(?:19|20)\\d{2}\\s*[\\]】]$");
+                boolean year=ep.group().matches("^[\\[【〖(（]\\s*(?:19|20)\\d{2}\\s*[\\]】〗)）]$");
                 if(Set.of(480D,576D,720D,1080D,2160D,4320D).contains(first) || year || first<0) continue;
                 if(ep.group(2)==null) r.getEpisodes().add(number(ep.group(1)));
                 else {
@@ -52,23 +52,31 @@ public class ReleaseAnalysisService {
             if(seasonOnly.group(1)!=null) r.setSeason(Integer.parseInt(seasonOnly.group(1)));
             else { String n=seasonOnly.group(2); if(n.matches("\\d+")) r.setSeason(Integer.parseInt(n)); else if(n.length()==1) r.setSeason("一二三四五六七八九十".indexOf(n)+1); }
         }
+        if(r.getSeason()==null) {
+            Matcher englishSeason=Pattern.compile("(?i)\\bSeason\\s*(\\d{1,3})\\b|\\b(\\d{1,3})(?:st|nd|rd|th)\\s+Season\\b").matcher(s);
+            if(englishSeason.find()) r.setSeason(Integer.parseInt(englishSeason.group(1)!=null?englishSeason.group(1):englishSeason.group(2)));
+        }
         if(!normalBatch&&Pattern.compile("(?i)(?:\\b(?:SP|OVA|OAD|NCOP|NCED|OP|ED|PV)\\b|总集篇|總集篇|特别篇|特別篇)").matcher(s).find()) {
             if(s.matches("(?is).*\\b(?:NCOP|NCED|OP|ED|PV)\\b.*")) r.setChapterType("EXTRA");
             else r.setChapterType("SPECIAL");
         }
-        Matcher resolution=Pattern.compile("(?i)(2160|1080|720|480)[pi]\\b").matcher(s);
+        Matcher resolution=Pattern.compile("(?i)(?<!\\d)(2160|1080|720|480)[pi](?![A-Za-z0-9])").matcher(s);
         if(resolution.find()) r.setResolution(Integer.parseInt(resolution.group(1)));
         else if(s.matches("(?is).*\\b4K\\b.*")) r.setResolution(2160);
-        Matcher group=Pattern.compile("^[\\[【]([^\\]】]{1,100})[\\]】]").matcher(s);
+        else {
+            Matcher dimensions=Pattern.compile("(?i)(?<!\\d)\\d{3,4}\\s*[x×]\\s*(2160|1080|720|480)(?![A-Za-z0-9])").matcher(s);
+            if(dimensions.find()) r.setResolution(Integer.parseInt(dimensions.group(1)));
+        }
+        Matcher group=Pattern.compile("^[\\[【〖]([^\\]】〗]{1,100})[\\]】〗]").matcher(s);
         if(group.find()) {
             String g=group.group(1);
             if(!g.matches("(?i).*(?:\\d{3,4}p|CHS|CHT|简|簡|繁|中字).*"))
-                r.getGroups().addAll(Arrays.asList(g.split("\\s*(?:&|＆|\\+|×)\\s*")));
+                r.getGroups().addAll(FansubNames.split(g));
         }
-        if(s.matches("(?is).*(?:\\b(?:CHS|SC|GB)\\b|简体|簡體|简日|簡日|简繁|簡繁|简中|簡中|简字|简内|简外).*$")) r.getLanguages().add("CHS");
-        if(s.matches("(?is).*(?:\\b(?:CHT|TC|BIG5)\\b|繁体|繁體|繁日|简繁|簡繁|繁中|繁字|繁内|繁外).*$")) r.getLanguages().add("CHT");
+        if(s.matches("(?is).*(?:\\b(?:CHS|SC|GB)\\b|简体|簡體|简日|簡日|简繁|簡繁|繁简|繁簡|简中|簡中|简字|简内|简外).*$")) r.getLanguages().add("CHS");
+        if(s.matches("(?is).*(?:\\b(?:CHT|TC|BIG5)\\b|繁体|繁體|繁日|简繁|簡繁|繁简|繁簡|繁中|繁字|繁内|繁外).*$")) r.getLanguages().add("CHT");
         if(s.matches("(?is).*(?:\\b(?:JPN|JAP|JP)\\b|简日|簡日|繁日|简日繁|簡日繁|中日|日文字幕).*$")) r.getLanguages().add("JPN");
-        if(s.contains("简日繁")||s.contains("簡日繁")) r.getLanguages().addAll(List.of("CHS","CHT","JPN"));
+        if(s.contains("简日繁")||s.contains("簡日繁")||s.contains("简繁日")||s.contains("簡繁日")) r.getLanguages().addAll(List.of("CHS","CHT","JPN"));
         if(s.matches("(?is).*(?:双语|雙語|同屏|bilingual).*$")) r.setSubtitleLayout("BILINGUAL");
         if(s.matches("(?is).*(?:硬字幕|内嵌|內嵌|hardsub).*$")) r.setSubtitlePackaging("HARD");
         else if(s.matches("(?is).*(?:外挂|外掛|external).*$")) r.setSubtitlePackaging("EXTERNAL");
@@ -81,7 +89,7 @@ public class ReleaseAnalysisService {
         else if(s.matches("(?is).*\\bDVD(?:RIP)?\\b.*")) r.setSourceType("DVD");
         Matcher format=Pattern.compile("(?i)(?:\\.|\\[|\\s)(mkv|mp4|avi|webm|ts)(?:\\]|\\s|$)").matcher(s);
         if(format.find()) r.setContainer(format.group(1).toLowerCase(Locale.ROOT));
-        Matcher revision=Pattern.compile("(?i)\\bv([1-9]\\d?)\\b").matcher(s);
+        Matcher revision=Pattern.compile("(?i)(?:\\b|(?<=\\d))v([1-9]\\d?)\\b").matcher(s);
         r.setCorrection(revision.find()?Integer.parseInt(revision.group(1)):s.contains("修正")||s.contains("修复")?2:1);
         r.getEvidence().add(new Evidence(source,"releaseTitle",s.substring(0,Math.min(s.length(),12000))));
         return r;
@@ -98,6 +106,13 @@ public class ReleaseAnalysisService {
         if(m.find()) return m.group(1).toLowerCase(Locale.ROOT);
         Matcher b32=Pattern.compile("(?i)(?:urn:btih:)([A-Z2-7]{32})(?:&|$)").matcher(value);
         if(b32.find()) return java.util.HexFormat.of().formatHex(cn.hutool.core.codec.Base32.decode(b32.group(1).toUpperCase(Locale.ROOT)));
+        try {
+            var uri=java.net.URI.create(value);
+            if(Set.of("https","http").contains(Objects.toString(uri.getScheme(),"").toLowerCase(Locale.ROOT))&&uri.getHost()!=null&&uri.getUserInfo()==null) {
+                Matcher file=Pattern.compile("(?i)(?:^|/)([0-9a-f]{40})\\.torrent$").matcher(Objects.toString(uri.getPath(),""));
+                if(file.find()) return file.group(1).toLowerCase(Locale.ROOT);
+            }
+        } catch(IllegalArgumentException malformed) { return null; }
         return null;
     }
 }

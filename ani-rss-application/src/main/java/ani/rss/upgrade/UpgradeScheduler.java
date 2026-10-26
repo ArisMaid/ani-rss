@@ -128,7 +128,7 @@ public class UpgradeScheduler {
             targetOffset=targets.size()<20?0:targetOffset+20;
             for(Target target:targets) {
                 if(!campaigns.eligible(target)||target.getNextScan()>System.currentTimeMillis()) continue;
-                if(!emby.fresh(target.getLibraryId())) enqueue("EMBY",target.getLibraryId());
+                if(!UpgradeCampaignService.monitorOnly(target.getLibraryId())&&!emby.fresh(target.getLibraryId())) enqueue("EMBY",target.getLibraryId());
                 enqueue("TARGET",target.getId());
                 long interval=target.isFinished()||Set.of("剧场版","OVA","OAD","Movie").contains(Objects.toString(target.getType(),""))?21600000:900000;
                 target.setNextScan(System.currentTimeMillis()+interval); repository.save("upgrade_targets",target.getId(),target.getLibraryId(),target.getSubjectId()+":"+target.getLibraryId(),target.getState(),target.getRevision(),target);
@@ -162,10 +162,20 @@ public class UpgradeScheduler {
         if("SUBJECT".equals(job.getKind())) { if(resolver.enrichStep(t)) complete(job,"作品详情与章节映射已保存"); return; }
         if("TARGET".equals(job.getKind())) {
             if(!resolver.enrichStep(t)) return;
-            if(!releases.scanStep(t)) return;
-            releases.rss(t); emby.adopt(t); evaluateTarget(t); complete(job,"候选检索与决策完成"); return;
+            if(!UpgradeCampaignService.monitorOnly(t.getLibraryId())) emby.adopt(t);
+            releases.rss(t);
+            boolean complete;
+            try { complete=releases.scanStep(t); }
+            catch(UpgradeHttp.SourceFailure error) {
+                evaluateTarget(t); throw error;
+            }
+            evaluateTarget(t);
+            if(complete) complete(job,"候选检索与决策完成"); return;
         }
         if(!"UPGRADE".equals(job.getKind())) return;
+        if(UpgradeCampaignService.monitorOnly(t.getLibraryId())&&!Set.of(JobState.INSTALLING,JobState.INSTALLED,JobState.CLEANING_OLD,JobState.CLEANUP_PENDING).contains(job.getState())) {
+            job.setState(JobState.PAUSED); job.setReasonCode("LIBRARY_REQUIRED"); job.setMessage("仅订阅监测：关联媒体库后才能自动下载或替换"); commits.saveJob(job); return;
+        }
         if(!campaigns.eligible(t)&&!Set.of(JobState.INSTALLING,JobState.INSTALLED,JobState.CLEANING_OLD,JobState.CLEANUP_PENDING).contains(job.getState())) {
             job.setState(JobState.PAUSED); job.setMessage("日期任务暂停、范围缩小或目标已排除"); commits.saveJob(job); return;
         }
@@ -224,7 +234,14 @@ public class UpgradeScheduler {
         }
     }
     private List<Version> versions(Target t) { return repository.all("upgrade_versions",t.getId(),"ACTIVE",Version.class).stream().filter(v->"VIDEO".equals(v.getKind())).toList(); }
-    public void evaluateTarget(Target t) {
+    public synchronized void evaluateTarget(Target t) {
+        evaluateTarget(t,true);
+    }
+    public synchronized void reanalyzeTarget(Target t) {
+        evaluateTarget(t,false);
+    }
+    private void evaluateTarget(Target t,boolean allowExternalEvidence) {
+        releases.refreshStoredEvidence(t);
         var p=campaigns.effectivePolicy(t);
         // The transfer is isolated from the library. A missing container can be
         // learned from downloaded metadata; actual installation always uses the
@@ -233,13 +250,14 @@ public class UpgradeScheduler {
         discoveryPolicy.setContainers(Set.of());
         List<Release> candidates=new ArrayList<>();
         for(int offset=0;;offset+=200) { List<Release> page=repository.list("upgrade_releases",t.getId(),null,offset,200,Release.class); candidates.addAll(page); if(page.size()<200) break; }
+        SubjectEpisodeResolver.learnSeasonStart(t,candidates);
         int details=0;
-        for(Release candidate:candidates) if(details<4&&"ANIMEGARDEN".equals(candidate.getSource())&&candidate.getDetailAt()<System.currentTimeMillis()-86400000L
+        for(Release candidate:candidates) if(allowExternalEvidence&&details<4&&"ANIMEGARDEN".equals(candidate.getSource())&&candidate.getDetailAt()<System.currentTimeMillis()-86400000L
                 &&(candidate.getEpisodes().isEmpty()||candidate.getLanguages().isEmpty()||candidate.getGroups().isEmpty())) {
             details++; try { releases.enrich(candidate); } catch(RuntimeException error) { repository.event(candidate.getId(),"RELEASE_DETAIL_DEFERRED","发布详情暂不可用，保留已知证据并继续其他候选"); }
         }
         String aiFailure=null;
-        try { ai.analyze(candidates); } catch(RuntimeException e) { aiFailure=Objects.toString(e.getMessage(),"AI_UNAVAILABLE"); repository.event(t.getId(),"AI_ANALYSIS_DEFERRED",aiFailure); }
+        try { if(allowExternalEvidence) ai.analyze(candidates); } catch(RuntimeException e) { aiFailure=Objects.toString(e.getMessage(),"AI_UNAVAILABLE"); repository.event(t.getId(),"AI_ANALYSIS_DEFERRED",aiFailure); }
         List<Version> current=versions(t);
         candidates.sort(Comparator.comparing(r->Objects.toString(r.getInfoHash(),r.getId())));
         Map<String,Release> best=new LinkedHashMap<>();
@@ -274,14 +292,15 @@ public class UpgradeScheduler {
                 }
                 r.setState(decision.verdict().name()); r.setReason(String.join("；",decision.explanation()));
             }
-            if(r.getEpisodes().isEmpty()) { r.setState("WAITING_EVIDENCE"); r.setReason("需要解析明确章节覆盖，已保留候选供补证"); }
+            if(r.getEvidence().stream().anyMatch(e->"SOURCE_IDENTITY_REJECTED".equals(e.getSource()))) { r.setState("IDENTITY_CONFLICT"); r.setReason("来源身份不符，保留记录并继续其他发布的检索"); }
+            else if(r.getEpisodes().isEmpty()) { r.setState("WAITING_EVIDENCE"); r.setReason("需要解析明确章节覆盖，已保留候选供补证"); }
             if(aiFailure!=null&&"WAITING_EVIDENCE".equals(r.getState())) { r.setState("WAITING_AI"); r.setReason(r.getReason()+"；模型补证待恢复："+aiFailure); }
             repository.save("upgrade_releases",r.getId(),r.getTargetId(),r.getTargetId()+":"+(r.getInfoHash()==null?r.getSource()+":"+r.getSourceId():r.getInfoHash()),r.getState(),r.getRevision(),r);
         }
         boolean identityReview="NEEDS_REVIEW".equals(t.getState());
         if(!identityReview) t.setState(candidates.isEmpty()?(t.getPremiereDate()!=null&&t.getPremiereDate().compareTo(java.time.LocalDate.now(java.time.ZoneId.of(ConfigUtil.snapshot().getUpgrade().getTimezone())).toString())>0?"WAITING_PREMIERE":"NO_RESOURCE"):"MONITORING");
         repository.save("upgrade_targets",t.getId(),t.getLibraryId(),t.getSubjectId()+":"+t.getLibraryId(),t.getState(),t.getRevision(),t);
-        if(identityReview||ConfigUtil.snapshot().getUpgradeMode()!=UpgradeMode.AUTOMATIC||!campaigns.eligible(t)||!emby.fresh(t.getLibraryId())) return;
+        if(identityReview||UpgradeCampaignService.monitorOnly(t.getLibraryId())||ConfigUtil.snapshot().getUpgradeMode()!=UpgradeMode.AUTOMATIC||!campaigns.eligible(t)||!emby.fresh(t.getLibraryId())) return;
         for(Release r:new LinkedHashSet<>(best.values())) {
             if(r.getInfoHash()==null) continue;
             String key=downloadKey(t,r);

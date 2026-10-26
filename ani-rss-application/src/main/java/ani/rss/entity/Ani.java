@@ -283,6 +283,9 @@ public class Ani implements Serializable {
     @Schema(description = "自定义优先保留关键词列表")
     private List<String> customPriorityKeywords;
 
+    @Schema(description = "普通订阅质量规则；每集按规则选择一个发布版本")
+    private String qualityPolicyId;
+
     /**
      * 上次下载完成时间
      */

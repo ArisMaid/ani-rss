@@ -48,6 +48,7 @@ public class RenameTask implements BaseTask {
                 try (var lease = ani.rss.upgrade.UpgradeFileCoordinator.lease()) {
                     if (downloadService.findAniByDownloadPath(torrentsInfo)
                             .filter(ani.rss.upgrade.UpgradeFileCoordinator::managed).isPresent()) continue;
+                    if(downloadService.shouldDeferBatchRename(torrentsInfo,torrentsInfos)) continue;
                     TorrentUtil.rename(torrentsInfo);
                     downloadService.notification(torrentsInfo);
                     if (deleteStandbyRSSOnly) {

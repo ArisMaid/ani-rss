@@ -357,6 +357,15 @@ class UpgradeCommitServiceTest {
         Release other=new Release(); other.getEpisodes().add("2"); assertFalse(UpgradeFileCoordinator.persistentConflict(subscription,other));
         new ChapterCommitLockService().release(job.getId()); assertFalse(UpgradeFileCoordinator.managed(subscription));
     }
+    @Test void subjectLookupRetainsTargetsWhoseLegacyEnvelopeWasNotBackfilled() {
+        DatabaseManager.withConnection(connection -> {
+            try (var statement = connection.prepareStatement("UPDATE upgrade_targets SET subject_id=NULL WHERE id=?")) {
+                statement.setString(1,target.getId()); statement.executeUpdate(); return null;
+            }
+        });
+        assertEquals(List.of(target.getId()),repository.targetsForSubject(target.getSubjectId()).stream().map(Target::getId).toList());
+        assertTrue(repository.targetsForSubject("unrelated-subject").isEmpty());
+    }
     @Test void anExistingArchiveOutsideTheDefaultRootStillParticipatesInThePersistentConflictCheck() throws Exception {
         target.setOutputDirectory(Files.createDirectory(temporary.resolve("existing-archive")).toString());
         repository.save("upgrade_targets",target.getId(),target.getLibraryId(),"100:lib","MONITORING",1,target);

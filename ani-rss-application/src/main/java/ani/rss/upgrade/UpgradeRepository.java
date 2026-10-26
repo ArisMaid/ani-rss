@@ -36,6 +36,22 @@ public class UpgradeRepository {
         });
     }
 
+    /** Avoid deserializing every season's chapter metadata for each downloader task. */
+    public List<UpgradeModels.Target> targetsForSubject(String subjectId) {
+        return DatabaseManager.withConnection(c -> {
+            String sql = "SELECT payload FROM upgrade_targets WHERE "
+                    + "COALESCE(subject_id,json_extract(payload,'$.subjectId'))=?";
+            try (var statement = c.prepareStatement(sql)) {
+                statement.setString(1, subjectId);
+                try (var rows = statement.executeQuery()) {
+                    List<UpgradeModels.Target> targets = new ArrayList<>();
+                    while (rows.next()) targets.add(GsonStatic.fromJson(rows.getString(1), UpgradeModels.Target.class));
+                    return targets;
+                }
+            }
+        });
+    }
+
     public <T> List<T> list(String table, String parent, String state, int offset, int limit, Class<T> type) {
         if (offset < 0 || limit < 1 || limit > 200) throw new IllegalArgumentException("分页范围为 1–200");
         return DatabaseManager.withConnection(c -> {

@@ -2,9 +2,15 @@ package ani.rss.service;
 
 import ani.rss.upgrade.UpgradeModeService;
 import ani.rss.upgrade.UpgradeFileCoordinator;
+import ani.rss.upgrade.SubscriptionQualitySelector;
+import ani.rss.upgrade.ReleaseAnalysisService;
 
 import ani.rss.commons.ExceptionUtils;
 import ani.rss.commons.FileUtils;
+import ani.rss.commons.GsonStatic;
+import ani.rss.recovery.RecoveryRepository;
+import ani.rss.upgrade.UpgradeRepository;
+import ani.rss.upgrade.QualityPolicyEngine;
 import ani.rss.commons.PinyinUtils;
 import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
@@ -100,6 +106,26 @@ public class DownloadService {
 
         int currentDownloadCount = 0;
         List<Item> items = ItemsUtil.getItems(ani);
+        Set<String> alreadyCoveredHashes=new HashSet<>();
+
+        if(SubscriptionQualitySelector.enabled(ani)&&items.stream().anyMatch(i->new ReleaseAnalysisService().parse(i.getTitle(),ani.getBgmUrl(),"RSS").getEpisodes().size()>1)) {
+            Map<String,Item> previous=new HashMap<>();
+            for(var record:new RecoveryRepository().listBySubscription(ani.getId())) {
+                String canonical=ReleaseAnalysisService.canonicalHash("magnet:?xt=urn:btih:"+record.infoHash());
+                if(canonical!=null) previous.put(canonical,GsonStatic.fromJson(record.itemJson(),Item.class));
+            }
+            var policy=new UpgradeRepository().get("upgrade_policies",ani.getQualityPolicyId(),QualityPolicyEngine.Policy.class).orElseThrow();
+            String root=getDownloadPath(ani);
+            for(Item item:items) {
+                Set<String> missing=SubscriptionQualitySelector.missingBatchChapters(ani,item,torrentsInfos,task->task.getSavePath()!=null
+                        &&java.nio.file.Path.of(task.getSavePath()).toAbsolutePath().normalize().equals(java.nio.file.Path.of(root).toAbsolutePath().normalize())
+                        &&ownershipService.belongsTo(task,ani.getId()),previous,policy);
+                if(missing.isEmpty()) alreadyCoveredHashes.add(item.getInfoHash());
+                else if(!missing.equals(SubscriptionQualitySelector.coveredEpisodes(ani,item))) {
+                    item.setSelectedEpisodes(missing); RenameUtil.rename(ani,item);
+                }
+            }
+        }
 
         ItemsUtil.omit(ani, items);
         log.debug("{} 共 {} 个", title, items.size());
@@ -172,6 +198,12 @@ public class DownloadService {
 
             // Recovery consumes only candidates that passed the normal RSS
             // policies above. It must never recreate its own selection rules.
+            if(alreadyCoveredHashes.contains(item.getInfoHash())) {
+                missingEpisodeRecoveryService.supersedeCoveredBatch(ani,item,torrentsInfos);
+                log.info("合集章节已由现有归属任务覆盖，保留现有下载，不重复提交 {}",reName);
+                if(master&&!is5) currentDownloadCount+=SubscriptionQualitySelector.coveredEpisodes(ani,item).size();
+                continue;
+            }
             recoveryCandidates.add(item);
 
             Date pubDate = item.getPubDate();
@@ -341,6 +373,16 @@ public class DownloadService {
         if (!autoDisabled) {
             return true;
         }
+        if(SubscriptionQualitySelector.enabled(ani)) {
+            Set<String> required=new HashSet<>(),finished=new HashSet<>();
+            for(Item item:items) required.addAll(SubscriptionQualitySelector.coveredEpisodes(ani,item));
+            for(var task:torrentsInfos) if(task.finished()&&ownershipService.belongsTo(task,ani.getId())) {
+                Set<String> selected=SubscriptionQualitySelector.selectedChapters(task.getTagList());
+                var attributes=new ReleaseAnalysisService().parse(task.getName(),ani.getBgmUrl(),"COMPLETED_TASK");
+                if(Boolean.TRUE.equals(ani.getOva())||Objects.equals(attributes.getSeason(),ani.getSeason())) finished.addAll(selected.isEmpty()?attributes.getEpisodes():selected);
+            }
+            currentDownloadCount=!required.isEmpty()&&finished.containsAll(required)?required.size():0;
+        }
         Integer totalEpisodeNumber = ani.getTotalEpisodeNumber();
         if (totalEpisodeNumber < 1) {
             return true;
@@ -365,6 +407,35 @@ public class DownloadService {
                 .filter(current -> current == ani)
                 .filter(current -> Boolean.TRUE.equals(current.getEnable()))
                 .isPresent();
+    }
+
+    private boolean redundantBatch(Ani ani,Item item,List<TorrentsInfo> tasks) {
+        if(!SubscriptionQualitySelector.enabled(ani)) return false;
+        String root=getDownloadPath(ani);
+        return SubscriptionQualitySelector.alreadyCoveredBatch(ani,item,tasks,task->task.getSavePath()!=null
+                &&java.nio.file.Path.of(task.getSavePath()).toAbsolutePath().normalize().equals(java.nio.file.Path.of(root).toAbsolutePath().normalize())
+                &&ownershipService.belongsTo(task,ani.getId()));
+    }
+    public boolean shouldDeferBatchRename(TorrentsInfo task,List<TorrentsInfo> tasks) {
+        var subscription=findAniByDownloadPath(task);
+        if(subscription.isEmpty()||!SubscriptionQualitySelector.enabled(subscription.get())) return false;
+        var parsed=new ReleaseAnalysisService().parse(task.getName(),subscription.get().getBgmUrl(),"TASK");
+        if(parsed.getEpisodes().size()<2) return false;
+        Map<String,Item> inputs=new HashMap<>();
+        for(var record:new RecoveryRepository().listBySubscription(subscription.get().getId())) {
+            String hash=ReleaseAnalysisService.canonicalHash("magnet:?xt=urn:btih:"+record.infoHash());
+            if(hash!=null) inputs.put(hash,GsonStatic.fromJson(record.itemJson(),Item.class));
+        }
+        Item proposed=inputs.get(task.getHash());
+        if(proposed!=null) {
+            var policy=new UpgradeRepository().get("upgrade_policies",subscription.get().getQualityPolicyId(),QualityPolicyEngine.Policy.class).orElseThrow();
+            String root=getDownloadPath(subscription.get());
+            return SubscriptionQualitySelector.missingBatchChapters(subscription.get(),proposed,tasks,other->other.getSavePath()!=null
+                    &&java.nio.file.Path.of(other.getSavePath()).toAbsolutePath().normalize().equals(java.nio.file.Path.of(root).toAbsolutePath().normalize())
+                    &&ownershipService.belongsTo(other,subscription.get().getId()),inputs,policy).isEmpty();
+        }
+        String first=parsed.getEpisodes().stream().min(Comparator.comparing(java.math.BigDecimal::new)).orElse("1");
+        return redundantBatch(subscription.get(),new Item().setTitle(task.getName()).setEpisode(Double.valueOf(first)).setInfoHash(task.getHash()),tasks);
     }
 
     /**

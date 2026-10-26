@@ -175,8 +175,8 @@ public class EmbyLibraryIndexService {
                                 if(date!=null&&date.length()>=10) fact.addProperty("airDate",date.substring(0,10)); fact.addProperty("season",actualSeason); fact.addProperty("number",episode);
                                 try { resolved=ai.chapterMapping(target,kind,fact); } catch(RuntimeException error) { repository.event(target.getId(),"CHAPTER_MAPPING_AI_WAIT","章节映射辅助暂不可用，保留已有文件"); }
                             }
-                            chapterNumber=resolved.orElse(Integer.toString(episode));
-                            if(resolved.isEmpty()&&!target.getChapterTypes().isEmpty()&&!target.getChapterTypes().containsKey(kind+":"+episode)) { target.setState("NEEDS_REVIEW"); repository.event(target.getId(),"CHAPTER_MAPPING_UNRESOLVED","Emby 章节不在上游章节集合中，需要核对绝对集数映射"); }
+                            chapterNumber=resolved.orElseGet(()->SubjectEpisodeResolver.canonicalChapter(target,actualSeason,Integer.toString(episode)));
+                            if(resolved.isEmpty()&&!target.getChapterTypes().isEmpty()&&!target.getChapterTypes().containsKey(kind+":"+chapterNumber)) { target.setState("NEEDS_REVIEW"); repository.event(target.getId(),"CHAPTER_MAPPING_UNRESOLVED","Emby 章节不在上游章节集合中，需要核对绝对集数映射"); }
                             if(!chapterNumber.equals(Integer.toString(episode))) target.getEpisodeMapping().put(embyKey,chapterNumber);
                         }
                         attributes.getEpisodes().clear(); attributes.getEpisodes().add(chapterNumber); attributes.setChapterType(kind);

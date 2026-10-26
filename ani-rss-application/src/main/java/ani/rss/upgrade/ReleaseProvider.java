@@ -16,13 +16,16 @@ public class ReleaseProvider {
     public boolean scanStep(Target target) {
         String id="garden:"+target.getId();
         Cursor cursor=repository.get("upgrade_scan_cursors",id,Cursor.class).orElseGet(Cursor::new);
+        if(cursor.getSearchRevision()<1) {
+            cursor.setSearchRevision(1); cursor.setComplete(false); cursor.setOffset(0); cursor.setAliasIndex(-1);
+            cursor.setFull(true); cursor.setLastFull(0); cursor.setWatermark(0); cursor.getQueryAliases().clear();
+        }
         if(cursor.isComplete()) { cursor.setOffset(0); cursor.setComplete(false); cursor.setAliasIndex(-1); cursor.getQueryAliases().clear(); cursor.setFull(cursor.getLastFull()<System.currentTimeMillis()-86400000L); cursor.setScanStarted(System.currentTimeMillis()); }
         if(cursor.getScanStarted()==0) cursor.setScanStarted(System.currentTimeMillis());
         int pageNumber=cursor.getOffset()+1;
         String url="https://api.animes.garden/resources?pageSize=100&duplicate=false&page="+pageNumber;
         if(!cursor.isFull()&&cursor.getWatermark()>0) url+="&after="+UpgradeHttp.query(java.time.Instant.ofEpochMilli(cursor.getWatermark()-172800000L).toString());
-        List<String> aliases=new ArrayList<>(); for(String name:List.of(Objects.toString(target.getTitle(),""),Objects.toString(target.getOriginalTitle(),""))) if(!name.isBlank()&&!aliases.contains(name)) aliases.add(name);
-        for(String name:target.getAliases()) if(!name.isBlank()&&!aliases.contains(name)&&aliases.size()<8) aliases.add(name);
+        List<String> aliases=new ArrayList<>(SourceIdentityRules.aliases(target));
         if(cursor.getAliasIndex()>=0&&!cursor.getQueryAliases().isEmpty()) aliases=new ArrayList<>(cursor.getQueryAliases());
         else if(cursor.getAliasIndex()>=0&&ai!=null) {
             try { for(String name:ai.aliases(target)) if(!aliases.contains(name)&&aliases.size()<8) aliases.add(name); }
@@ -41,6 +44,7 @@ public class ReleaseProvider {
             pageComplete=response.getAsJsonObject("pagination").get("complete").getAsBoolean();
             if(!pageComplete&&resources.isEmpty()) throw new UpgradeHttp.SourceFailure("GARDEN_PAGE_INCOMPLETE",true);
         }
+        int matchedPage=0;
         for(JsonElement element:resources) {
             JsonObject item=element.getAsJsonObject();
             String title=UpgradeHttp.string(item,"title"); if(title==null) throw new UpgradeHttp.SourceFailure("GARDEN_RESOURCE_TITLE_MISSING",false);
@@ -48,6 +52,10 @@ public class ReleaseProvider {
             String boundSubject=UpgradeHttp.string(item,"subjectId");
             if(boundSubject!=null&&!target.getSubjectId().equals(boundSubject)) continue;
             if(cursor.getAliasIndex()>=0&&!target.getSubjectId().equals(boundSubject)&&!verifiedTitle(target,title)) continue;
+            matchedPage++;
+            if(cursor.getAliasIndex()>=0&&cursor.getAliasIndex()<aliases.size())
+                r.getEvidence().add(new Evidence("REGISTERED_ALIAS_MATCH","identity",aliases.get(cursor.getAliasIndex())));
+            if(target.getSubjectId().equals(boundSubject)) r.getEvidence().add(new Evidence("PROVIDER_SUBJECT_BINDING","identity",boundSubject));
             r.setSourceId(UpgradeHttp.string(item,"id"));
             r.setProvider(UpgradeHttp.string(item,"provider")); r.setProviderId(UpgradeHttp.string(item,"providerId")); r.setPublisher(item.has("publisher")&&item.get("publisher").isJsonObject()?UpgradeHttp.string(item.getAsJsonObject("publisher"),"name"):UpgradeHttp.string(item,"publisher"));
             String published=UpgradeHttp.string(item,"createdAt"); try { r.setPublishedAt(java.time.Instant.parse(published).toEpochMilli()); } catch(RuntimeException ignored) { }
@@ -60,13 +68,24 @@ public class ReleaseProvider {
             if(r.getInfoHash()==null) r.setInfoHash(ReleaseAnalysisService.canonicalHash(r.getTorrentUrl()));
             if(item.has("fansub")&&item.get("fansub").isJsonObject()) {
                 String name=UpgradeHttp.string(item.getAsJsonObject("fansub"),"name");
-                if(name!=null) { r.getGroups().clear(); r.getGroups().add(name); r.getEvidence().add(new Evidence("ANIMEGARDEN_FANSUB","groups",name)); }
+                if(name!=null) {
+                    List<String> provided=FansubNames.split(name);
+                    Set<String> providerKeys=new HashSet<>(provided.stream().map(FansubNames::key).toList());
+                    boolean corroboratedJoint=r.getGroups().size()>1&&r.getGroups().stream().map(FansubNames::key).anyMatch(providerKeys::contains);
+                    if(!corroboratedJoint) r.getGroups().clear();
+                    r.getGroups().addAll(provided); r.getEvidence().add(new Evidence("ANIMEGARDEN_FANSUB","groups",name));
+                }
             }
             accept(r);
         }
+        if(cursor.getAliasIndex()>=0&&cursor.getAliasIndex()<aliases.size()&&matchedPage>0)
+            repository.event(target.getId(),"REGISTERED_ALIAS_MATCH","已通过登记别名找到匹配发布："+aliases.get(cursor.getAliasIndex())+"（本页 "+matchedPage+" 条）");
         cursor.setId(id); cursor.setScope(target.getId()); cursor.setOffset(pageNumber);
         if(pageComplete==null?resources.size()<100:pageComplete) {
-            if(cursor.getAliasIndex()<0&&pageNumber==1&&resources.isEmpty()&&!aliases.isEmpty()) { cursor.setAliasIndex(0); cursor.setOffset(0); }
+            if(cursor.getAliasIndex()<0&&!aliases.isEmpty()) {
+                if(pageNumber==1&&resources.isEmpty()) repository.event(target.getId(),"SUBJECT_INDEX_EMPTY","作品索引为空，继续完整名称和已登记别名查询");
+                cursor.setAliasIndex(0); cursor.setOffset(0);
+            }
             else if(cursor.getAliasIndex()>=0&&cursor.getAliasIndex()+1<aliases.size()) { cursor.setAliasIndex(cursor.getAliasIndex()+1); cursor.setOffset(0); }
             else { cursor.setComplete(true); cursor.setLastSuccess(System.currentTimeMillis()); cursor.setWatermark(cursor.getScanStarted()); if(cursor.isFull()) cursor.setLastFull(System.currentTimeMillis()); }
         }
@@ -116,19 +135,55 @@ public class ReleaseProvider {
             } catch(RuntimeException e) { repository.event(target.getId(),"MIKAN_SOURCE_DEFERRED","蜜柑补充源暂时不可用，保留 AnimeGarden 和自定义 RSS 的处理结果"); }
         }
         for(String url:feeds) {
+            String feedId="rss:"+target.getId()+":"+cn.hutool.crypto.SecureUtil.sha256(url);
+            Cursor feed=repository.get("upgrade_scan_cursors",feedId,Cursor.class).orElseGet(Cursor::new);
+            if(feed.isComplete()&&feed.getLastSuccess()>System.currentTimeMillis()-900000L) continue;
+            feed.setId(feedId); feed.setScope(target.getId());
             // Each feed is parsed without the subscription episode de-duplication.
-            try { for(var raw:ItemsUtil.getItemsRaw(url)) {
+            try { var items=ItemsUtil.getItemsRaw(url); for(var raw:items) {
                 Release r=analysis.parse(raw.title(),target.getSubjectId(),"RSS"); r.setTargetId(target.getId());
                 r.setSourceId(raw.id()); r.setTorrentUrl(raw.enclosure()); r.setInfoHash(ReleaseAnalysisService.canonicalHash(raw.enclosure()));
                 accept(r);
-            } } catch(RuntimeException e) { repository.event(target.getId(),"RSS_SOURCE_DEFERRED","一个补充 RSS 获取失败，其他源继续检索"); }
+            }
+                feed.setComplete(true); feed.setLastSuccess(System.currentTimeMillis()); feed.setTotal(items.size()); feed.setError(null);
+            } catch(RuntimeException e) { feed.setComplete(false); feed.setError("RSS_FETCH_FAILED"); repository.event(target.getId(),"RSS_SOURCE_DEFERRED","一个补充 RSS 获取失败，其他源继续检索"); }
+            repository.save("upgrade_scan_cursors",feedId,target.getId(),null,feed.isComplete()?"COMPLETE":"DEFERRED",1,feed);
         }
     }
     public static boolean verifiedTitle(Target target,String title) {
-        String normalized=SubjectEpisodeResolver.normalized(title); List<String> names=new ArrayList<>(target.getAliases()); names.add(target.getTitle()); names.add(target.getOriginalTitle());
-        return names.stream().filter(Objects::nonNull).map(SubjectEpisodeResolver::normalized).anyMatch(n->n.length()>=4&&normalized.contains(n));
+        return SourceIdentityRules.titleMatches(target,title);
     }
-    public Release accept(Release r) {
+    /** Refresh only missing declared fields; user corrections and verified media remain authoritative. */
+    public void refreshStoredEvidence(Target target) {
+        for(Release r:repository.all("upgrade_releases",target.getId(),null,Release.class)) {
+            if("MERGED".equals(r.getState())) continue;
+            Release parsed=analysis.parse(r.getTitle(),r.getSubjectId(),r.getSource());
+            boolean protectedFields=r.getEvidence().stream().anyMatch(e->"USER_CORRECTION".equals(e.getSource())||"VERIFIED".equals(e.getVerificationLevel()));
+            String before=ani.rss.commons.GsonStatic.toJson(r);
+            if(SourceIdentityRules.bound(r)) r.getEvidence().removeIf(e->"SOURCE_IDENTITY_REJECTED".equals(e.getSource()));
+            if(!SourceIdentityRules.bound(r)&&Set.of("音乐","其他").contains(Objects.toString(target.getType(),""))&&"ANIMEGARDEN".equals(r.getSource())&&!verifiedTitle(target,r.getTitle())
+                    &&r.getEvidence().stream().noneMatch(e->"SOURCE_IDENTITY_REJECTED".equals(e.getSource())))
+                r.getEvidence().add(new Evidence("SOURCE_IDENTITY_REJECTED","identity","短英文标题不能证明该发布属于此作品，已有发布标题指向其他动画"));
+            if(!protectedFields) {
+                if(r.getEpisodes().isEmpty()||parsed.getEpisodes().size()>r.getEpisodes().size()&&parsed.getEpisodes().containsAll(r.getEpisodes())) r.setEpisodes(new TreeSet<>(parsed.getEpisodes()));
+                if(r.getResolution()==null) r.setResolution(parsed.getResolution());
+                if(r.getLanguages().isEmpty()) r.setLanguages(new TreeSet<>(parsed.getLanguages()));
+                if(r.getGroups().isEmpty()) r.setGroups(new TreeSet<>(parsed.getGroups()));
+                if(r.getContainer()==null) r.setContainer(parsed.getContainer());
+                if(r.getSubtitlePackaging()==null) r.setSubtitlePackaging(parsed.getSubtitlePackaging());
+                if(r.getSubtitleLayout()==null) r.setSubtitleLayout(parsed.getSubtitleLayout());
+                if(r.getSourceType()==null) r.setSourceType(parsed.getSourceType());
+                if(r.getCodec()==null) r.setCodec(parsed.getCodec());
+                if(parsed.getCorrection()!=null&&(r.getCorrection()==null||parsed.getCorrection()>r.getCorrection())) r.setCorrection(parsed.getCorrection());
+            }
+            if(r.getInfoHash()==null) r.setInfoHash(ReleaseAnalysisService.canonicalHash(r.getTorrentUrl()));
+            if(!before.equals(ani.rss.commons.GsonStatic.toJson(r))) {
+                r.setRevision(r.getRevision()+1); r.getEvidence().add(new Evidence("LOCAL_REANALYSIS","missingFields","从原始发布标题或种子地址补全，实际下载仍需核验"));
+                accept(r);
+            }
+        }
+    }
+    public synchronized Release accept(Release r) {
         String key=r.getTargetId()+":"+(r.getInfoHash()==null?r.getSource()+":"+r.getSourceId():r.getInfoHash());
         Release existing=repository.identity("upgrade_releases",key,Release.class).orElse(null);
         String sourceKey=r.getTargetId()+":"+r.getSource()+":"+r.getSourceId();
@@ -138,9 +193,18 @@ public class ReleaseProvider {
         if(existing==null&&provisional!=null) { existing=provisional; if(r.getInfoHash()!=null) existing.setInfoHash(r.getInfoHash()); if(r.getTorrentUrl()!=null) existing.setTorrentUrl(r.getTorrentUrl()); }
         String source=r.getSource(),sourceId=r.getSourceId();
         if(existing!=null&&!Objects.equals(existing.getId(),r.getId())) {
+            boolean protectedFields=existing.getEvidence().stream().anyMatch(e->"USER_CORRECTION".equals(e.getSource())||"VERIFIED".equals(e.getVerificationLevel()));
+            String before=ani.rss.commons.GsonStatic.toJson(existing);
             for(Evidence evidence:r.getEvidence()) if(!existing.getEvidence().contains(evidence)) existing.getEvidence().add(evidence);
             if(existing.getTorrentUrl()==null) existing.setTorrentUrl(r.getTorrentUrl());
             if(existing.getProviderId()==null&&Objects.equals(existing.getSource(),r.getSource())) { existing.setProvider(r.getProvider()); existing.setProviderId(r.getProviderId()); }
+            if(!protectedFields) {
+                if(existing.getEpisodes().isEmpty()) existing.setEpisodes(new TreeSet<>(r.getEpisodes()));
+                if(existing.getResolution()==null) existing.setResolution(r.getResolution());
+                if(existing.getLanguages().isEmpty()) existing.setLanguages(new TreeSet<>(r.getLanguages()));
+                if(existing.getGroups().isEmpty()) existing.setGroups(new TreeSet<>(r.getGroups()));
+            }
+            if(!before.equals(ani.rss.commons.GsonStatic.toJson(existing))) existing.setRevision(Math.max(existing.getRevision(),r.getRevision())+1);
             r=existing;
         } else if(r.getId()==null) r.setId(UUID.randomUUID().toString());
         if(provisional!=null&&!Objects.equals(provisional.getId(),r.getId())) {

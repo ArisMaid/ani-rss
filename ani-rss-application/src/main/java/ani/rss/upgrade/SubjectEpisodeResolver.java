@@ -65,10 +65,114 @@ public class SubjectEpisodeResolver {
     }
     public static boolean isMovie(Target target) { return Set.of("剧场版","Movie","电影").contains(Objects.toString(target.getType(),"")); }
     public static void normalizeChapters(Target target,Release release) {
+        release.getEvidence().removeIf(e->"CHAPTER_IDENTITY_UNRESOLVED".equals(e.getSource()));
+        release.getEvidence().removeIf(e->"SOURCE_SEASON_CONFLICT".equals(e.getSource()));
+        if(release.getEvidence().stream().anyMatch(e->"USER_CORRECTION".equals(e.getSource())&&Set.of("fields","episodes","season").contains(e.getField()))) return;
+        Integer expectedSeason=storySeason(target);
+        if(expectedSeason!=null&&release.getSeason()!=null&&!expectedSeason.equals(release.getSeason())) {
+            if(seasonLabelVariant(target,release)) {
+                release.getEvidence().add(new Evidence("SOURCE_SEASON_LABEL_MAPPING","season","发布采用连续总集号，章节表证明归属作品季号 "+expectedSeason));
+                release.setSeason(expectedSeason);
+            } else release.getEvidence().add(new Evidence("SOURCE_SEASON_CONFLICT","identity","作品季号="+expectedSeason+"；发布季号="+release.getSeason()));
+        }
+        if(release.getSeason()==null&&expectedSeason!=null&&SourceIdentityRules.titleMatches(target,release.getTitle())) release.setSeason(expectedSeason);
         if(isMovie(target)) { release.getEpisodes().clear(); release.getEpisodes().add("MOVIE"); release.setChapterType("MOVIE"); return; }
         boolean explicitSpecial=java.util.regex.Pattern.compile("(?i)\\bSP[ ._-]*\\d|特别篇|特別篇").matcher(Objects.toString(release.getTitle(),"")).find();
         if("SPECIAL".equals(release.getChapterType())&&!explicitSpecial&&Set.of("OVA","OAD").contains(Objects.toString(target.getType(),""))&&!release.getEpisodes().isEmpty()
                 &&release.getEpisodes().stream().allMatch(e->"NORMAL".equals(target.getChapterTypes().get("NORMAL:"+e)))) release.setChapterType("NORMAL");
+        if("NORMAL".equals(release.getChapterType())&&!target.getChapterTypes().isEmpty()) {
+            Set<String> mapped=new TreeSet<>();
+            for(String episode:release.getEpisodes()) {
+                String chapter=canonicalChapter(target,release.getSeason(),episode);
+                String canonicalName=SubjectEpisodeResolver.normalized(target.getTitle());
+                if(release.getSeason()==null&&!knownNormal(target,chapter)&&episode.matches("\\d+")&&canonicalName.length()>=4
+                        &&SubjectEpisodeResolver.normalized(release.getTitle()).contains(canonicalName)) {
+                    List<Integer> known=contiguousChapters(target); int local=Integer.parseInt(episode);
+                    if(!known.isEmpty()&&local>=1&&local<=known.size()) chapter=known.get(local-1).toString();
+                }
+                mapped.add(chapter);
+            }
+            if(!mapped.equals(release.getEpisodes())) {
+                release.getEvidence().add(new Evidence("CHAPTER_NUMBER_MAPPING","episodes",release.getEpisodes()+" -> "+mapped));
+                release.setEpisodes(mapped);
+            }
+            if(target.getSeasonStartChapter()!=null&&release.getEpisodes().size()>1&&Objects.equals(release.getSeason(),expectedSeason)
+                    &&Objects.toString(release.getTitle(),"").matches("(?s).*(?:总第|總第).*")) {
+                Set<String> scope=new TreeSet<>(); for(String chapter:release.getEpisodes()) if(knownNormal(target,chapter)) scope.add(chapter);
+                if(!scope.isEmpty()&&!scope.equals(release.getEpisodes())) {
+                    release.getEvidence().add(new Evidence("CHAPTER_SCOPE_FILTER","episodes","完整季度合集只安装本作品章节 "+scope)); release.setEpisodes(scope);
+                }
+            }
+            boolean corrected=release.getEvidence().stream().anyMatch(e->"USER_CORRECTION".equals(e.getSource())&&"episodes".equals(e.getField()));
+            if(!corrected&&release.getEpisodes().stream().anyMatch(e->!knownNormal(target,e)&&!target.getEpisodeMapping().containsValue(e)))
+                release.getEvidence().add(new Evidence("CHAPTER_IDENTITY_UNRESOLVED","episodes","发布章节不在已知作品章节集合中，继续补充映射证据"));
+        }
+    }
+    public static Integer inferredSeason(Target target) {
+        Integer story=storySeason(target); return story==null?target.getSeason():story;
+    }
+    public static Integer storySeason(Target target) {
+        Set<Integer> seasons=new HashSet<>();
+        List<String> names=new ArrayList<>(target.getAliases()); names.add(target.getTitle()); names.add(target.getOriginalTitle());
+        for(String name:names) { Integer season=new ReleaseAnalysisService().parse(name,target.getSubjectId(),"METADATA").getSeason(); if(season!=null) seasons.add(season); }
+        return seasons.size()==1?seasons.iterator().next():null;
+    }
+    private static List<Integer> contiguousChapters(Target target) {
+        List<Integer> chapters=target.getChapterTypes().entrySet().stream().filter(e->"NORMAL".equals(e.getValue()))
+                .map(Map.Entry::getKey).filter(k->k.matches("(?:NORMAL:)?\\d+"))
+                .map(k->Integer.valueOf(k.replace("NORMAL:",""))).distinct().sorted().toList();
+        if(chapters.isEmpty()||chapters.get(0)<=1||chapters.get(chapters.size()-1)-chapters.get(0)+1!=chapters.size()) return List.of();
+        return chapters;
+    }
+    public static String canonicalChapter(Target target,Integer season,String number) {
+        String explicit=target.getEpisodeMapping().get(season+":"+number); if(explicit!=null) return explicit;
+        if(knownNormal(target,number)) return number;
+        if(target.getSeasonStartChapter()!=null&&season!=null&&season.equals(inferredSeason(target))&&number.matches("\\d+")) {
+            String mapped=Integer.toString(Integer.parseInt(number)+target.getSeasonStartChapter()-1);
+            if(knownNormal(target,mapped)) return mapped;
+            return number;
+        }
+        List<Integer> chapters=contiguousChapters(target);
+        if(!chapters.isEmpty()&&season!=null&&season.equals(inferredSeason(target))&&number.matches("\\d+")) {
+            int local=Integer.parseInt(number); if(local>=1&&local<=chapters.size()) return chapters.get(local-1).toString();
+        }
+        return number;
+    }
+    private static boolean knownNormal(Target target,String chapter) {
+        return target.getChapterTypes().containsKey("NORMAL:"+chapter)||"NORMAL".equals(target.getChapterTypes().get(chapter));
+    }
+    public static boolean seasonLabelVariant(Target target,Release release) {
+        if(!"NORMAL".equals(release.getChapterType())||release.getEpisodes().isEmpty()||!release.getEpisodes().stream().allMatch(e->knownNormal(target,e))) return false;
+        List<Integer> chapters=contiguousChapters(target);
+        String name=normalized(target.getTitle());
+        return !chapters.isEmpty()||name.length()>=4&&normalized(release.getTitle()).contains(name);
+    }
+    public static String displayChapter(Target target,Integer season,String number) {
+        List<String> explicit=target.getEpisodeMapping().entrySet().stream().filter(e->e.getValue().equals(number)&&e.getKey().startsWith(season+":"))
+                .map(e->e.getKey().substring(e.getKey().indexOf(':')+1)).toList();
+        if(explicit.size()==1) return explicit.get(0);
+        if(target.getSeasonStartChapter()!=null&&season!=null&&season.equals(inferredSeason(target))&&number.matches("\\d+")&&knownNormal(target,number))
+            return Integer.toString(Integer.parseInt(number)-target.getSeasonStartChapter()+1);
+        List<Integer> chapters=contiguousChapters(target);
+        if(!chapters.isEmpty()&&season!=null&&season.equals(inferredSeason(target))&&number.matches("\\d+")&&chapters.contains(Integer.valueOf(number)))
+            return Integer.toString(Integer.parseInt(number)-chapters.get(0)+1);
+        return number;
+    }
+    /** A declared complete season's absolute range anchors split-cour local numbering. */
+    public static void learnSeasonStart(Target target,List<Release> facts) {
+        Integer season=inferredSeason(target); if(season==null) return;
+        List<Integer> known=contiguousChapters(target); if(known.isEmpty()) return;
+        Map<Integer,String> anchors=new LinkedHashMap<>();
+        for(Release fact:facts) {
+            Release declared=new ReleaseAnalysisService().parse(fact.getTitle(),target.getSubjectId(),"SEASON_RANGE");
+            if(!season.equals(declared.getSeason())||!Objects.toString(fact.getTitle(),"").matches("(?s).*(?:总第|總第).*")) continue;
+            if(!Objects.toString(fact.getTitle(),"").matches("(?s).*(?:合集|全[集（( ]|全集).*")) continue;
+            List<Integer> chapters=declared.getEpisodes().stream().filter(e->e.matches("\\d+")).map(Integer::valueOf).sorted().toList();
+            if(chapters.size()<known.size()||chapters.isEmpty()||chapters.get(chapters.size()-1)-chapters.get(0)+1!=chapters.size()||!chapters.containsAll(known)) continue;
+            anchors.putIfAbsent(chapters.get(0),fact.getTitle());
+        }
+        if(anchors.size()==1) { var anchor=anchors.entrySet().iterator().next(); target.setSeasonStartChapter(anchor.getKey()); target.setSeasonStartEvidence(anchor.getValue()); }
+        else if(anchors.size()>1) target.setState("NEEDS_REVIEW");
     }
     public static Optional<String> exactChapterNumber(Target target,String name,String kind) {
         String normalized=normalized(name); if(normalized.length()<4) return Optional.empty();

@@ -75,7 +75,8 @@ public class MikanQuarterCatalog {
         for(var link:document.select("a[href]")) {
             String href=link.absUrl("href");
             if(href.isBlank()) continue;
-            URI uri=URI.create(href);
+            URI uri;
+            try { uri=URI.create(href); } catch(IllegalArgumentException invalidNavigation) { continue; }
             if("/RSS/Bangumi".equalsIgnoreCase(uri.getPath())&&sameSource(href)&&Objects.toString(uri.getQuery(),"").matches("(?i)(?:.*&)?bangumiId="+mikanId.group(1)+"(?:&.*)?")) feeds.add(href);
         }
         if(feeds.isEmpty()) throw new UpgradeHttp.SourceFailure("MIKAN_RSS_LINK_MISSING",false);

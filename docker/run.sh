@@ -3,6 +3,12 @@
 export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
 
+if ffmpeg -version >/dev/null 2>&1 && ffprobe -version >/dev/null 2>&1; then
+    echo "Media verification dependencies: ffmpeg and ffprobe available."
+else
+    echo "Media verification dependencies unavailable; configure executable paths before automatic replacement." >&2
+fi
+
 FOLDER="./"
 JAR_FILE_NAME="ani-rss.jar"
 JAR_FILE=$FOLDER$JAR_FILE_NAME

@@ -1,6 +1,7 @@
 FROM eclipse-temurin:17-jre-jammy
 
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && ffmpeg -version >/dev/null && ffprobe -version >/dev/null
 
 COPY docker/run.sh /run.sh
 COPY docker/exec.sh /exec.sh

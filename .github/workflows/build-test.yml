@@ -20,10 +20,10 @@ jobs:
           cache: maven
       - uses: pnpm/action-setup@v4
         with:
-          version: '12.10.1'
+          version: '12.15.0'
       - uses: actions/setup-node@v5
         with:
-          node-version: '26.11.0'
+          node-version: '26.12.1'
           cache: pnpm
           cache-dependency-path: ani-rss-ui/pnpm-lock.yaml
       - name: Build with Project

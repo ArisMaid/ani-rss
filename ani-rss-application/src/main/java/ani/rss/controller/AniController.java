@@ -96,6 +96,16 @@ public class AniController extends BaseController {
     @Operation(summary = "修改订阅")
     @PostMapping("/setAni")
     public Result<Void> setAni(@RequestBody Ani ani) {
+        HttpServletRequest request = Global.REQUEST.get();
+        return setAni(ani, request != null && Boolean.parseBoolean(request.getParameter("move")));
+    }
+
+    /** Called only by the API-key authenticated MCP transport; media is never moved. */
+    public Result<Void> setAniFromMcp(Ani ani) {
+        return setAni(ani, false);
+    }
+
+    private Result<Void> setAni(Ani ani, boolean move) {
         ani.setTitle(ani.getTitle().trim())
                 .setUrl(ani.getUrl().trim());
         AniUtil.verify(ani);
@@ -113,11 +123,8 @@ public class AniController extends BaseController {
         if (first.isEmpty()) {
             return Result.error("修改失败");
         }
-        HttpServletRequest request = Global.REQUEST.get();
-
         // 移动视频文件
-        String move = request.getParameter("move");
-        if (Boolean.parseBoolean(move)) {
+        if (move) {
             Ani get = ObjectUtil.clone(first.get());
             ThreadUtil.execute(() -> {
                 String downloadPath = downloadService.getDownloadPath(get);

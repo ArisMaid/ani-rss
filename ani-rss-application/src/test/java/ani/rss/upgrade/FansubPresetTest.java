@@ -37,6 +37,21 @@ class FansubPresetTest {
         var p=preferred(); p.setAllowedGroups(Set.of("悠哈璃羽"));
         assertEquals(QualityPolicyEngine.Verdict.UPGRADE,engine.evaluate(p,r,null).verdict());
     }
+    @Test void expandedAliasesWorkForJointGroupsAndHardConditions() {
+        var p=preferred();
+        p.setAllowedGroups(Set.of("喵萌奶茶屋"));
+        assertEquals(QualityPolicyEngine.Verdict.UPGRADE,engine.evaluate(p,release("Nekomoe kissaten & LoliHouse",1080,"CHS"),null).verdict());
+        p.setBlockedGroups(Set.of("动漫国字幕组")); p.setAllowedGroups(Set.of());
+        assertEquals(QualityPolicyEngine.Verdict.REJECTED,engine.evaluate(p,release("DMG & SweetSub",1080,"CHS"),null).verdict());
+        var seen=new HashMap<String,String>();
+        for(var g:QualityPolicyPresets.catalog().groups()) {
+            var names=new ArrayList<>(g.aliases()); names.add(g.name());
+            for(var name:names) {
+                var old=seen.put(FansubNames.key(name),g.name());
+                assertTrue(old==null || old.equals(g.name()),"Ambiguous alias: "+name);
+            }
+        }
+    }
     @Test void presetEditsCannotMutateCatalogOrOtherDrafts() {
         var catalog=QualityPolicyPresets.catalog(); var preset=catalog.presets().get(0); var draft=preset.policy();
         draft.getGroups().clear(); draft.getGroupAliases().clear(); draft.setMinimumResolution(0);

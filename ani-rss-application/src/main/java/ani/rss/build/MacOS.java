@@ -16,6 +16,9 @@ import java.nio.file.StandardCopyOption;
 
 @Slf4j
 public class MacOS implements Runnable {
+    // Upstream macOS 27 launcher fix; pin to avoid stale main.zip caches.
+    private static final String LAUNCHER_REVISION = "2729d5b8e598bc03db9059b73548648d0542ff23";
+    private static final String LAUNCHER_DIRECTORY = "ani-rss-macos-" + LAUNCHER_REVISION;
     @Override
     public void run() {
         String basedir = System.getProperty("basedir");
@@ -23,10 +26,10 @@ public class MacOS implements Runnable {
         File target = new File(basedir, "target");
         Assert.isTrue(target.exists(), "target not exists");
 
-        File macosZip = new File(target, "ani-rss-macos-main.zip");
+        File macosZip = new File(target, LAUNCHER_DIRECTORY + ".zip");
 
         if (!macosZip.exists()) {
-            String url = "https://github.com/wushuo894/ani-rss-macos/archive/refs/heads/main.zip";
+            String url = "https://github.com/wushuo894/ani-rss-macos/archive/" + LAUNCHER_REVISION + ".zip";
             HttpUtil.downloadFile(url, macosZip);
         }
 
@@ -34,14 +37,14 @@ public class MacOS implements Runnable {
 
         File jarFile = new File(target, "ani-rss.jar");
 
-        Path path = Path.of(target.getPath(), "ani-rss-macos-main/ani-rss.app/Contents/MacOS/ani-rss.jar");
+        Path path = Path.of(target.getPath(), LAUNCHER_DIRECTORY + "/ani-rss.app/Contents/MacOS/ani-rss.jar");
 
         FileUtil.copy(Paths.get(jarFile.getPath()), path, StandardCopyOption.REPLACE_EXISTING);
 
         OsInfo osInfo = SystemUtil.getOsInfo();
 
         if (osInfo.isMac()) {
-            String appDir = Path.of(target.getPath(), "ani-rss-macos-main/ani-rss.app").toString();
+            String appDir = Path.of(target.getPath(), LAUNCHER_DIRECTORY + "/ani-rss.app").toString();
 
             RuntimeUtil.execForStr("chmod", "-R", "755", appDir);
             RuntimeUtil.execForStr("xattr", "-cr", appDir);

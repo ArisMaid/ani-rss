@@ -20,7 +20,7 @@ jobs:
           echo "version=v$version" >> $GITHUB_ENV
       - name: Create DMG
         run: |
-          bash ./ani-rss-application/target/ani-rss-macos-main/create-dmg.sh
+          bash ./ani-rss-application/target/ani-rss-macos-2729d5b8e598bc03db9059b73548648d0542ff23/create-dmg.sh
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
@@ -30,4 +30,4 @@ jobs:
           append_body: false
           token: ${{ secrets.GITHUB_TOKEN }}
           files: |
-            ./ani-rss-application/target/ani-rss-macos-main/ani-rss.dmg
+            ./ani-rss-application/target/ani-rss-macos-2729d5b8e598bc03db9059b73548648d0542ff23/ani-rss.dmg

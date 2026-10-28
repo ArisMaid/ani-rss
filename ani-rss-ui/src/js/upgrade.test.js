@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest'
-import {defaultPolicy, mappingText, moveDimension, parseMappings, quarterDateRange, mikanSeasonChoices, applyPolicyPreset, applyFansubPreference} from './upgrade.js'
+import {defaultPolicy, mappingText, moveDimension, parseMappings, quarterDateRange, mikanSeasonChoices, applyPolicyPreset, applyFansubPreference, applyParameterPreset, parameterPresets, mergeFansubAliases, parameterLabel} from './upgrade.js'
 describe('upgrade settings and rule controls', () => {
     it('applies a full preset to a draft while preserving the existing identity and revision', () => {
         const current = {...defaultPolicy(), id: 'saved', revision: 9, name: '我的规则'}
@@ -18,6 +18,18 @@ describe('upgrade settings and rule controls', () => {
         expect(result.groups).toEqual(['桜都字幕组', 'SweetSub', '后备组'])
         expect(result.groupAliases).toEqual({'桜都': '桜都字幕组', Custom: '后备组'})
         expect(current.groups).toEqual(['桜都', '后备组'])
+    })
+    it('applies parameter chips without resetting unrelated restrictions or dimension priority', () => {
+        const current = {...defaultPolicy(), id:'saved', revision:4, groups:['Custom'], blockedGroups:['Blocked'], requiredLanguages:['CHT']}
+        const next = applyParameterPreset(current, parameterPresets.find(p => p.id === 'hevc'))
+        expect(next).toMatchObject({id:'saved', revision:4, groups:['Custom'], blockedGroups:['Blocked'], requiredLanguages:['CHT'], codecs:['HEVC','AV1','AVC']})
+        expect(next.dimensions).toEqual([...current.dimensions, 'CODEC'])
+        expect(applyParameterPreset(next, parameterPresets.find(p => p.id === 'avc')).dimensions).toEqual(next.dimensions)
+        next.groups.push('draft')
+        expect(current.groups).toEqual(['Custom'])
+        expect(parameterLabel('packaging', 'SOFT')).toContain('内封')
+        expect(parameterLabel('resolutions', 2160)).toContain('4K')
+        expect(mergeFansubAliases({'ｄｍｇ':'Custom'}, [{name:'动漫国字幕组', aliases:['DMG','動漫國']}])).toEqual({'ｄｍｇ':'Custom', '動漫國':'动漫国字幕组'})
     })
     it('derives whole quarter dates including leap years without local timezone drift', () => {
         expect(quarterDateRange(2024, '冬')).toEqual({startDate: '2024-01-01', endDate: '2024-03-31'})

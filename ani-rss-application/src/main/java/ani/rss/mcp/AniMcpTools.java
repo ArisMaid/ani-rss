@@ -7,7 +7,6 @@ import ani.rss.entity.dto.AniBTQueryDTO;
 import ani.rss.entity.dto.RssToAniDTO;
 import ani.rss.entity.web.Result;
 import ani.rss.entity.web.ResultCode;
-import ani.rss.exception.ResultException;
 import ani.rss.mcp.dto.DeleteSubscriptionDTO;
 import ani.rss.mcp.dto.ListSubscriptionDTO;
 import ani.rss.mcp.dto.SearchMikanDTO;
@@ -174,9 +173,21 @@ public class AniMcpTools {
         return animeGardenService.group(bgmId);
     }
 
+    @McpTool(name = "rss_to_subscription",
+            description = "将 RSS 转换为完整订阅；可调整 season、offset、totalEpisodeNumber、qualityPolicyId 等字段后传给 preview_subscription_items 或 add_subscription",
+            annotations = @McpTool.McpAnnotations(title = "RSS 转订阅", readOnlyHint = true,
+                    destructiveHint = false, idempotentHint = true, openWorldHint = true))
+    public Ani rssToSubscription(@McpToolParam RssToAniDTO dto) {
+        try {
+            return AniUtil.getAni(dto);
+        } catch (Exception e) {
+            throw new IllegalStateException("RSS 转订阅失败：" + e.getMessage(), e);
+        }
+    }
+
     @McpTool(
             name = "preview_subscription_items",
-            description = "预览某个 RSS 订阅最终会命中的原始剧集条目",
+            description = "预览完整订阅最终命中的条目；请先调用 rss_to_subscription，再按需调整订阅参数",
             annotations = @McpTool.McpAnnotations(
                     title = "预览订阅条目",
                     readOnlyHint = true,
@@ -185,19 +196,19 @@ public class AniMcpTools {
                     openWorldHint = true
             )
     )
-    public SubscriptionItemsPreviewVO previewSubscriptionItems(@McpToolParam RssToAniDTO dto) {
+    public SubscriptionItemsPreviewVO previewSubscriptionItems(@McpToolParam(description = "由 rss_to_subscription 返回并按需调整的完整订阅") Map<String, Object> subscription) {
         try {
-            Ani ani = AniUtil.getAni(dto);
+            Ani ani = subscriptionToAni(subscription);
             List<Item> items = ItemsUtil.getItems(ani);
             return new SubscriptionItemsPreviewVO(ani, items);
         } catch (Exception e) {
-            throw mcpException("RSS解析失败", e);
+            throw new IllegalStateException("订阅预览失败：" + e.getMessage(), e);
         }
     }
 
     @McpTool(
             name = "add_subscription",
-            description = "添加一个 ANI-RSS 订阅。需要预览命中条目时请先调用 preview_subscription_items",
+            description = "添加完整订阅；请先调用 rss_to_subscription，再调整季号、偏移、总集数等参数，可先预览条目；不会覆盖已有订阅",
             annotations = @McpTool.McpAnnotations(
                     title = "添加订阅",
                     readOnlyHint = false,
@@ -206,13 +217,16 @@ public class AniMcpTools {
                     openWorldHint = false
             )
     )
-    public Ani addSubscription(@McpToolParam RssToAniDTO dto) {
+    public Ani addSubscription(@McpToolParam(description = "由 rss_to_subscription 返回并按需调整的完整订阅") Map<String, Object> subscription) {
         try {
-            Ani ani = AniUtil.getAni(dto);
-            aniController.addAni(ani);
+            Ani ani = subscriptionToAni(subscription);
+            Result<Void> result = aniController.addAni(ani);
+            if (!Objects.equals(result.getCode(), ResultCode.HTTP_OK)) {
+                throw new IllegalStateException("创建订阅失败：" + result.getMessage());
+            }
             return ani;
         } catch (Exception e) {
-            throw mcpException("创建订阅失败", e);
+            throw new IllegalStateException("创建订阅失败：" + e.getMessage(), e);
         }
     }
 
@@ -301,6 +315,21 @@ public class AniMcpTools {
         }
     }
 
+    private static Ani subscriptionToAni(Map<String, Object> subscription) {
+        if (subscription == null || subscription.isEmpty()) {
+            throw new IllegalArgumentException("请先调用 rss_to_subscription 获取完整订阅");
+        }
+        JsonObject json = GsonStatic.GSON.toJsonTree(subscription).getAsJsonObject();
+        canonicalizeAlias(json, "downloadPath", "customDownloadPathTemplate");
+        canonicalizeAlias(json, "customAlistPath", "customUploadEnable");
+        canonicalizeAlias(json, "alistPath", "customUploadPathTarget");
+        normalizeDate(json, "releaseDate");
+        if (json.has("tmdb") && json.get("tmdb").isJsonObject()) normalizeDate(json.getAsJsonObject("tmdb"), "date");
+        Ani ani = GsonStatic.fromJson(json, Ani.class);
+        AniUtil.verify(ani);
+        return ani;
+    }
+
     private static void canonicalizeAlias(JsonObject changes, String alias, String canonical) {
         JsonElement value = changes.remove(alias);
         if (value != null && !changes.has(canonical)) {
@@ -332,8 +361,4 @@ public class AniMcpTools {
                 .getAsJsonObject().get("releaseDate"));
     }
 
-    private ResultException mcpException(String action, Exception e) {
-        log.error(e.getMessage(), e);
-        return ResultException.exception(action);
-    }
 }

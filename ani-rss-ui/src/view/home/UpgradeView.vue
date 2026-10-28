@@ -192,7 +192,8 @@
     <el-dialog v-model="policyDialog" :title="policyForm.id ? '编辑质量规则' : '新增质量规则'" width="min(820px, 94vw)" top="6vh">
       <div class="policy-body">
       <el-form label-width="130px">
-        <el-form-item label="规则预设"><div class="preset-controls"><el-select v-model="selectedPreset" aria-label="规则预设" placeholder="选择预设，再应用到当前草稿"><el-option v-for="p in presetCatalog.presets || []" :key="p.id" :value="p.id" :label="p.name"/></el-select><el-button :disabled="!selectedPreset" @click="usePreset">应用预设</el-button></div><p class="hint">{{ selectedPresetInfo?.description || '预设可继续编辑，保存后才生效。' }}</p></el-form-item>
+        <el-form-item label="规则预设"><div class="preset-controls"><el-select v-model="selectedPreset" filterable aria-label="规则预设" placeholder="选择预设，再应用到当前草稿"><el-option v-for="p in presetCatalog.presets || []" :key="p.id" :value="p.id" :label="p.name"/></el-select><el-button :disabled="!selectedPreset" @click="usePreset">应用预设</el-button></div><p class="hint">{{ selectedPresetInfo?.description || '预设可继续编辑，保存后才生效。' }}</p></el-form-item>
+        <el-form-item label="参数标签预设"><div class="preset-controls"><el-select v-model="selectedParameter" filterable aria-label="参数标签预设" placeholder="选择单项参数"><el-option v-for="p in parameterPresets" :key="p.id" :value="p.id" :label="p.name"/></el-select><el-button :disabled="!selectedParameter" @click="useParameterPreset">应用参数</el-button></div><p class="hint">{{ selectedParameterInfo?.description || '只替换所列参数；缺少的参与维度追加到末尾，可继续调整优先级。' }}</p></el-form-item>
         <el-form-item label="名称"><el-input v-model="policyForm.name"/></el-form-item>
         <el-form-item label="维度优先级">
           <div class="dimension-list"><div v-for="(d, index) in policyForm.dimensions" :key="d" draggable="true" @dragstart="dragIndex = index" @dragover.prevent @drop.prevent="policyForm.dimensions = moveDimension(policyForm.dimensions, dragIndex, index)">
@@ -202,11 +203,11 @@
         <el-form-item label="参与维度"><el-checkbox-group v-model="policyForm.dimensions"><el-checkbox v-for="(name, key) in dimensionLabels" :key="key" :value="key">{{ name }}</el-checkbox></el-checkbox-group></el-form-item>
         <el-form-item v-for="field in ['subtitles','groups','resolutions','sources','packaging','codecs']" :key="field" :label="fieldLabels[field]">
           <div class="ranking-editor">
-            <el-select v-model="policyForm[field]" multiple filterable allow-create default-first-option :aria-label="fieldLabels[field]"><el-option v-for="value in rankOptions(field)" :key="value" :value="value" :label="String(value)"/></el-select>
-            <div v-if="field === 'groups'" class="fansub-preset"><el-button size="small" :disabled="!presetCatalog.groups?.length" @click="useFansubPreference">使用六组偏好顺序</el-button><span class="hint">桜都 → 绿茶 → 北宇治 → 悠哈璃羽 → SweetSub → LoliHouse；其他组可作后备。</span></div>
+            <el-select v-model="policyForm[field]" multiple filterable allow-create default-first-option :aria-label="fieldLabels[field]"><el-option v-for="value in rankOptions(field)" :key="value" :value="value" :label="optionLabel(field, value)"/></el-select>
+            <div v-if="field === 'groups'" class="fansub-preset"><el-button size="small" :disabled="!presetCatalog.groups?.length" @click="useFansubPreference">使用六组偏好顺序</el-button><span class="hint">桜都 → 绿茶 → 北宇治 → 悠哈璃羽 → SweetSub → LoliHouse；其他组可搜索名称或别名；选择时不改变已有顺序。</span></div>
             <div class="ranking-list" :aria-label="`${fieldLabels[field]}优先级`">
               <div v-for="(value, index) in policyForm[field]" :key="value" draggable="true" @dragstart="rankDrag = {field, index}" @dragover.prevent @drop.prevent="reorderRank(field, rankDrag.field === field ? rankDrag.index : -1, index)">
-                <span>{{ index + 1 }}. {{ value }}</span>
+                <span>{{ index + 1 }}. {{ parameterLabel(field, value) }}</span>
                 <el-button size="small" :disabled="index === 0" :aria-label="`提高${fieldLabels[field]}${value}优先级`" @click="reorderRank(field, index, index - 1)">↑</el-button>
                 <el-button size="small" :disabled="index === policyForm[field].length - 1" :aria-label="`降低${fieldLabels[field]}${value}优先级`" @click="reorderRank(field, index, index + 1)">↓</el-button>
               </div>
@@ -215,9 +216,9 @@
         </el-form-item>
         <el-form-item label="最低分辨率"><el-input-number v-model="policyForm.minimumResolution" :min="0" :max="16384"/></el-form-item>
         <el-form-item label="必须中文字幕"><el-switch v-model="policyForm.requireChinese"/></el-form-item>
-        <el-form-item label="必须字幕语言"><el-select v-model="policyForm.requiredLanguages" multiple><el-option v-for="v in ['CHS','CHT','JPN']" :key="v" :value="v"/></el-select></el-form-item>
+        <el-form-item label="必须字幕语言"><el-select v-model="policyForm.requiredLanguages" multiple><el-option v-for="v in ['CHS','CHT','JPN']" :key="v" :value="v" :label="parameterLabel('requiredLanguages', v)"/></el-select></el-form-item>
         <el-form-item label="必须双语同屏"><el-switch v-model="policyForm.requireBilingual"/></el-form-item>
-        <el-form-item v-for="field in ['allowedGroups','blockedGroups','containers']" :key="field" :label="{allowedGroups:'允许字幕组',blockedGroups:'禁止字幕组',containers:'允许容器'}[field]"><el-select v-model="policyForm[field]" multiple filterable allow-create><el-option v-for="value in rankOptions(field)" :key="value" :value="value"/></el-select></el-form-item>
+        <el-form-item v-for="field in ['allowedGroups','blockedGroups','containers']" :key="field" :label="{allowedGroups:'允许字幕组',blockedGroups:'禁止字幕组',containers:'允许容器'}[field]"><el-select v-model="policyForm[field]" multiple filterable allow-create><el-option v-for="value in rankOptions(field)" :key="value" :value="value" :label="optionLabel(field, value)"/></el-select></el-form-item>
         <el-form-item label="字幕组别名 JSON"><el-input v-model="aliasText" type="textarea" placeholder='{"喵萌奶茶屋":"喵萌奶茶屋"}'/></el-form-item>
       </el-form>
       <el-collapse><el-collapse-item title="字幕组预设来源与别名" name="fansub-sources"><p class="hint">{{ presetCatalog.note }} 资料核对：{{ presetCatalog.updatedAt }}</p><p v-for="group in presetCatalog.groups || []" :key="group.name"><a :href="group.source" target="_blank" rel="noopener noreferrer" class="source-link">{{ group.name }} ↗</a><span class="hint"> · {{ group.aliases.join('、') || '英文名称忽略大小写' }}</span></p></el-collapse-item></el-collapse>
@@ -252,7 +253,7 @@ import {ElMessage, ElMessageBox} from 'element-plus'
 import api from '@/js/api.js'
 import PageHeaderView from '@/view/custom/PageHeaderView.vue'
 import SettingsItem from '@/view/custom/SettingsItem.vue'
-import {dimensionLabels, jobLabels, moveDimension, parseMappings, mappingText, defaultPolicy, seasonLabels, quarterDateRange, mikanSeasonChoices, applyPolicyPreset, applyFansubPreference} from '@/js/upgrade.js'
+import {dimensionLabels, jobLabels, moveDimension, parseMappings, mappingText, defaultPolicy, seasonLabels, quarterDateRange, mikanSeasonChoices, applyPolicyPreset, applyFansubPreference, parameterOptions, parameterLabel, parameterPresets, applyParameterPreset, mergeFansubAliases} from '@/js/upgrade.js'
 const base = '/api/v2/upgrade'
 const status = ref({}), loading = ref(false), busy = ref(false), tab = ref('overview')
 const config = ref({}), settings = ref(null), policyRows = ref([]), campaignRows = ref([]), modelRows = ref([])
@@ -264,6 +265,8 @@ const embyMappingText = ref(''), downloaderMappingText = ref(''), libraryText = 
 const campaignDialog = ref(false), campaignForm = ref({}), policyDialog = ref(false), policyForm = ref(defaultPolicy()), preview = ref(null), dragIndex = ref(-1)
 const rankDrag = ref({field: '', index: -1})
 const presetCatalog = ref({groups: [], presets: []}), selectedPreset = ref('')
+const selectedParameter = ref('')
+const selectedParameterInfo = computed(() => parameterPresets.find(p => p.id === selectedParameter.value))
 const selectedPresetInfo = computed(() => presetCatalog.value.presets.find(p => p.id === selectedPreset.value))
 const legacyCampaign = ref(false), mikanSeasons = ref([]), seasonEntries = ref([])
 const seasonLoading = ref(false), previewLoading = ref(false), seasonError = ref(''), previewError = ref('')
@@ -346,12 +349,17 @@ async function loadMikanPreview() {
 }
 async function saveCampaign() { busy.value = true; try { const c = campaignForm.value; await api[c.id ? 'put' : 'post'](`${base}/campaigns${c.id ? '/' + c.id : ''}`, c); campaignDialog.value = false; campaignRows.value = (await api.get(`${base}/campaigns`)).data } finally { busy.value = false } }
 async function toggleCampaign(row) { await api.put(`${base}/campaigns/${row.id}`, {...row, enabled: !row.enabled}); campaignRows.value = (await api.get(`${base}/campaigns`)).data }
-function editPolicy(row) { policyForm.value = row ? clone(row) : defaultPolicy(); selectedPreset.value = ''; policyDialog.value = true }
-function rankOptions(field) { return [...new Set([...(field === 'groups' || field.endsWith('Groups') ? presetCatalog.value.groups.map(g => g.name) : []), ...policyForm.value[field]])] }
+function editPolicy(row) { policyForm.value = row ? clone(row) : defaultPolicy(); selectedPreset.value = ''; selectedParameter.value = ''; policyDialog.value = true }
+function rankOptions(field) { return [...new Set([...(field === 'groups' || field.endsWith('Groups') ? presetCatalog.value.groups.map(g => g.name) : []), ...(parameterOptions[field] || []), ...policyForm.value[field]])] }
+function optionLabel(field, value) {
+  const group = presetCatalog.value.groups.find(g => g.name === value)
+  return group ? [group.name, ...group.aliases].join(' · ') : parameterLabel(field, value)
+}
+function useParameterPreset() { policyForm.value = applyParameterPreset(policyForm.value, selectedParameterInfo.value); preview.value = null }
 function usePreset() { policyForm.value = applyPolicyPreset(policyForm.value, selectedPresetInfo.value); aliasText.value = JSON.stringify(policyForm.value.groupAliases || {}, null, 2); preview.value = null }
-function useFansubPreference() { policyForm.value.groupAliases = JSON.parse(aliasText.value); policyForm.value = applyFansubPreference(policyForm.value, presetCatalog.value.groups); aliasText.value = JSON.stringify(policyForm.value.groupAliases, null, 2); preview.value = null }
+function useFansubPreference() { policyForm.value.groupAliases = JSON.parse(aliasText.value); policyForm.value = applyFansubPreference(policyForm.value, presetCatalog.value.groups.slice(0, 6)); aliasText.value = JSON.stringify(policyForm.value.groupAliases, null, 2); preview.value = null }
 function reorderRank(field, from, to) { policyForm.value[field] = moveDimension(policyForm.value[field], from, to) }
-async function savePolicy() { busy.value = true; try { const p = {...policyForm.value, groupAliases: JSON.parse(aliasText.value), resolutions: policyForm.value.resolutions.map(Number)}; await api[p.id ? 'put' : 'post'](`${base}/policies${p.id ? '/' + p.id : ''}`, p); policyDialog.value = false; policyRows.value = (await api.get(`${base}/policies`)).data; ElMessage.success('规则已保存') } catch(e) { if(e instanceof SyntaxError) ElMessage.error('字幕组别名 JSON 格式错误'); else if(e.status === 409) policyRows.value = (await api.get(`${base}/policies`)).data; else throw e } finally { busy.value = false } }
+async function savePolicy() { busy.value = true; try { const p = {...policyForm.value, groupAliases: mergeFansubAliases(JSON.parse(aliasText.value), presetCatalog.value.groups), resolutions: policyForm.value.resolutions.map(Number)}; await api[p.id ? 'put' : 'post'](`${base}/policies${p.id ? '/' + p.id : ''}`, p); policyDialog.value = false; policyRows.value = (await api.get(`${base}/policies`)).data; ElMessage.success('规则已保存') } catch(e) { if(e instanceof SyntaxError) ElMessage.error('字幕组别名 JSON 格式错误'); else if(e.status === 409) policyRows.value = (await api.get(`${base}/policies`)).data; else throw e } finally { busy.value = false } }
 async function deletePolicy(row) {
   try { await ElMessageBox.confirm(`删除规则“${row.name}”？已有媒体文件不会改变；正在被引用的规则需先解除引用。`, '删除质量规则', {confirmButtonText: '删除规则', cancelButtonText: '取消', type: 'warning'}) }
   catch(reason) { if(reason === 'cancel' || reason === 'close') return; throw reason }
@@ -362,7 +370,7 @@ async function deletePolicy(row) {
 }
 async function previewPolicy() {
   const common = {subjectId: 'example', episodes: ['1'], languages: ['CHS'], container: 'mkv', chapterType: 'NORMAL', correction: 1}
-  preview.value = (await api.post(`${base}/evaluate`, {policy: {...policyForm.value, groupAliases: JSON.parse(aliasText.value)}, candidate: {...common, groups: [policyForm.value.groups[0] || 'A组'], resolution: 1080}, current: {...common, groups: [policyForm.value.groups[1] || 'B组'], resolution: 2160}})).data
+  preview.value = (await api.post(`${base}/evaluate`, {policy: {...policyForm.value, groupAliases: mergeFansubAliases(JSON.parse(aliasText.value), presetCatalog.value.groups)}, candidate: {...common, groups: [policyForm.value.groups[0] || 'A组'], resolution: 1080}, current: {...common, groups: [policyForm.value.groups[1] || 'B组'], resolution: 2160}})).data
 }
 async function showCandidates(target) { selectedTarget.value = target; targetCoverage.value = null; candidateOffset.value = 0; versionOffset.value = 0; await Promise.all([loadCandidates(), loadVersions(), api.get(`${base}/targets/${encodeURIComponent(target.id)}/coverage`).then(response => { targetCoverage.value = response.data })]) }
 async function loadVersions() { versionPage.value = (await api.get(`${base}/versions?targetId=${encodeURIComponent(selectedTarget.value.id)}&offset=${versionOffset.value}`)).data }
@@ -450,4 +458,11 @@ onBeforeUnmount(stopTimer)
 .ranking-list span { min-width: 0; overflow-wrap: anywhere; }
 .detail { max-height: 60vh; overflow: auto; white-space: pre-wrap; word-break: break-word; }
 @media(max-width: 700px) { .tab-scroll-content { padding: 18px 4px 30px; } .mode-controls { gap: 14px; } .season-preview { padding: 12px; } .campaign-body { padding-right: 4px; } }
+@media(max-width: 540px) {
+  .policy-body :deep(.el-form-item) { display: block; }
+  .policy-body :deep(.el-form-item__label) { width: auto !important; justify-content: flex-start; height: auto; margin-bottom: 6px; }
+  .policy-body :deep(.el-form-item__content) { margin-left: 0 !important; min-width: 0; }
+  .preset-controls { flex-wrap: wrap; }
+  .preset-controls :deep(.el-select) { flex-basis: 180px; }
+}
 </style>

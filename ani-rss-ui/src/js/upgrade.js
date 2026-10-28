@@ -58,7 +58,51 @@ export function applyFansubPreference(current, groups) {
     const next = JSON.parse(JSON.stringify(current))
     const preferred = groups.map(group => group.name)
     next.groups = [...preferred, ...next.groups.filter(name => !preferred.includes(name) && !groups.some(group => group.aliases.includes(name)))]
-    next.groupAliases = {...Object.fromEntries(groups.flatMap(group => group.aliases.map(alias => [alias, group.name]))), ...next.groupAliases}
+    next.groupAliases = mergeFansubAliases(next.groupAliases, groups)
     if(!next.dimensions.includes('GROUP')) next.dimensions.push('GROUP')
     return next
+}
+
+// Values are the quality engine's canonical tokens, not filename regexes.
+export const parameterOptions = {
+    subtitles: ['CHS+CHT+JPN', 'CHS+JPN', 'CHS+CHT', 'CHS', 'CHT+JPN', 'CHT', 'JPN'],
+    resolutions: [2160, 1080, 720, 480], sources: ['BD', 'WEB', 'TV', 'DVD'],
+    packaging: ['SOFT', 'EXTERNAL', 'HARD'], codecs: ['AV1', 'HEVC', 'AVC'],
+    requiredLanguages: ['CHS', 'CHT', 'JPN'], containers: ['mkv', 'mp4', 'avi', 'webm', 'ts']
+}
+const tokenLabels = {CHS:'简体', CHT:'繁体', JPN:'日文', BD:'蓝光', WEB:'网络片源', TV:'电视', DVD:'DVD',
+    SOFT:'内封字幕', EXTERNAL:'外挂字幕', HARD:'内嵌字幕', HEVC:'H.265', AVC:'H.264', AV1:'AV1'}
+export function parameterLabel(field, value) {
+    if(field === 'resolutions') return `${value}p${value === 2160 ? ' / 4K' : ''}`
+    const text = String(value).split('+').map(v => tokenLabels[v] || v).join(' + ')
+    return text === String(value) ? text : `${text} · ${value}`
+}
+export const parameterPresets = [
+    {id:'chs', name:'必须简体', description:'替换必须字幕语言为简体。', values:{requireChinese:true, requiredLanguages:['CHS'], requireBilingual:false}},
+    {id:'cht', name:'必须繁体', description:'替换必须字幕语言为繁体。', values:{requireChinese:true, requiredLanguages:['CHT'], requireBilingual:false}},
+    {id:'dual-chinese', name:'必须简繁', description:'必须同时包含简体与繁体。', values:{requireChinese:true, requiredLanguages:['CHS','CHT'], requireBilingual:false}},
+    {id:'chs-jpn', name:'简日双语同屏', description:'必须简体、日文字幕及双语同屏证据；日语音轨不能代替字幕。', values:{requireChinese:true, requiredLanguages:['CHS','JPN'], requireBilingual:true}},
+    {id:'1080', name:'1080p 优先', description:'最低 1080p，排序为 1080p → 2160p → 720p → 480p。', dimension:'RESOLUTION', values:{minimumResolution:1080, resolutions:[1080,2160,720,480]}},
+    {id:'4k', name:'4K 优先', description:'最低 1080p，排序为 2160p → 1080p → 720p → 480p；不是仅接受 4K。', dimension:'RESOLUTION', values:{minimumResolution:1080, resolutions:[2160,1080,720,480]}},
+    {id:'720', name:'允许 720p', description:'最低 720p，优先 1080p，其次 720p、2160p、480p。', dimension:'RESOLUTION', values:{minimumResolution:720, resolutions:[1080,720,2160,480]}},
+    {id:'bd', name:'BD 优先', description:'来源排序 BD → WEB → TV → DVD。', dimension:'SOURCE', values:{sources:['BD','WEB','TV','DVD']}},
+    {id:'web', name:'WEB 优先', description:'来源排序 WEB → BD → TV → DVD。', dimension:'SOURCE', values:{sources:['WEB','BD','TV','DVD']}},
+    {id:'soft', name:'内封优先', description:'封装排序 内封 → 外挂 → 内嵌。', dimension:'PACKAGING', values:{packaging:['SOFT','EXTERNAL','HARD']}},
+    {id:'external', name:'外挂优先', description:'封装排序 外挂 → 内封 → 内嵌。', dimension:'PACKAGING', values:{packaging:['EXTERNAL','SOFT','HARD']}},
+    {id:'hard', name:'内嵌优先', description:'封装排序 内嵌 → 内封 → 外挂。', dimension:'PACKAGING', values:{packaging:['HARD','SOFT','EXTERNAL']}},
+    {id:'hevc', name:'HEVC / H.265 优先', description:'编码排序 HEVC → AV1 → AVC。', dimension:'CODEC', values:{codecs:['HEVC','AV1','AVC']}},
+    {id:'avc', name:'AVC / H.264 优先', description:'编码排序 AVC → HEVC → AV1。', dimension:'CODEC', values:{codecs:['AVC','HEVC','AV1']}},
+    {id:'av1', name:'AV1 优先', description:'编码排序 AV1 → HEVC → AVC。', dimension:'CODEC', values:{codecs:['AV1','HEVC','AVC']}},
+    {id:'mkv-mp4', name:'仅 MKV / MP4', description:'允许容器替换为 MKV 与 MP4，其他容器将被拒绝。', values:{containers:['mkv','mp4']}}
+]
+export function applyParameterPreset(current, preset) {
+    if(!preset?.values) return current
+    const next = JSON.parse(JSON.stringify({...current, ...preset.values}))
+    if(preset.dimension && !next.dimensions.includes(preset.dimension)) next.dimensions.push(preset.dimension)
+    return next
+}
+export function mergeFansubAliases(current, groups) {
+    const key = value => value.normalize('NFKC').trim().toLowerCase()
+    const custom = new Set(Object.keys(current || {}).map(key))
+    return {...Object.fromEntries(groups.flatMap(g => g.aliases.filter(a => !custom.has(key(a))).map(a => [a, g.name]))), ...current}
 }

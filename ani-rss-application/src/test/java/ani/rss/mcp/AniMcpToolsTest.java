@@ -49,6 +49,35 @@ class AniMcpToolsTest {
     }
 
     @Test
+    void completeAddPreservesUserAdjustedFieldsAndUtcDates() {
+        when(controller.addAni(any())).thenReturn(Result.success());
+        long instant = LocalDate.of(2026, 4, 15).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        var input = Map.<String,Object>of("title", "New", "url", "https://example.test/rss", "season", 2,
+                "offset", -12, "totalEpisodeNumber", 24, "releaseDate", java.time.Instant.ofEpochMilli(instant).toString(),
+                "tmdb", Map.of("date", instant), "downloadPath", "/custom");
+        Ani result = tools.addSubscription(input);
+        assertEquals(2, result.getSeason()); assertEquals(-12, result.getOffset());
+        assertEquals(24, result.getTotalEpisodeNumber()); assertEquals("/custom", result.getCustomDownloadPathTemplate());
+        assertEquals("2026-04-15", GsonStatic.GSON.toJsonTree(result).getAsJsonObject().get("releaseDate").getAsString());
+        when(controller.addAni(any())).thenReturn(Result.error("重复订阅"));
+        assertTrue(assertThrows(IllegalStateException.class, () -> tools.addSubscription(input)).getMessage().contains("重复订阅"));
+        assertThrows(IllegalStateException.class, () -> tools.addSubscription(Map.of("url", "https://example.test/rss")));
+    }
+
+    @Test
+    void previewUsesAdjustedSubscriptionWithoutResolvingRssAgain() {
+        try (var items = mockStatic(ani.rss.util.other.ItemsUtil.class)) {
+            items.when(() -> ani.rss.util.other.ItemsUtil.getItems(any(Ani.class))).thenAnswer(invocation -> {
+                Ani ani = invocation.getArgument(0);
+                assertEquals(3, ani.getSeason()); assertEquals(-24, ani.getOffset());
+                return List.of();
+            });
+            assertNotNull(tools.previewSubscriptionItems(Map.of("title", "Preview", "url", "https://example.test/rss", "season", 3, "offset", -24)));
+            verifyNoInteractions(controller);
+        }
+    }
+
+    @Test
     void partialEditPreservesForkFieldsAndSupportsClearingAndLegacyAlias() {
         when(controller.setAniFromMcp(any())).thenReturn(Result.success());
         Map<String, Object> changes = new LinkedHashMap<>();

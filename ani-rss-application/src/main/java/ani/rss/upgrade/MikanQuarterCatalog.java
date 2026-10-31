@@ -83,6 +83,12 @@ public class MikanQuarterCatalog {
         var aggregate=feeds.stream().filter(feed->!Objects.toString(URI.create(feed).getQuery(),"").toLowerCase(Locale.ROOT).contains("subgroupid=")).toList();
         return new Binding(ids.iterator().next(),aggregate.isEmpty()?new ArrayList<>(feeds):aggregate);
     }
+    /** Resolve only the title the user is cancelling, using the configured Mikan origin. */
+    public String exclusionSubject(String mikanId) {
+        if(mikanId==null||!mikanId.matches("[0-9]{1,18}")) throw new IllegalArgumentException("Mikan 作品 ID 无效");
+        String url=UpgradeHttp.base(ConfigUtil.snapshot().getMikanHost())+"/Home/Bangumi/"+mikanId;
+        return binding(UpgradeHttp.getText(url),url).subjectId();
+    }
     /** At most three detail requests per scheduler step, with durable snapshot and offset. */
     public boolean scanStep(Campaign campaign,SubjectCatalogProvider subjects) {
         String id="mikan-catalog:"+campaign.getId();
@@ -95,6 +101,9 @@ public class MikanQuarterCatalog {
         int stop=Math.min(cursor.getOffset()+3,cursor.getMikanEntries().size());
         for(int i=cursor.getOffset();i<stop;i++) {
             var entry=cursor.getMikanEntries().get(i);
+            if(campaign.getExcludedMikanSubjects()!=null&&campaign.getExcludedMikanSubjects().containsKey(entry.getMikanId())) {
+                cursor.setOffset(i+1); save(cursor); continue;
+            }
             try {
                 Binding binding=binding(UpgradeHttp.getText(entry.getUrl()),entry.getUrl());
                 var subject=subjects.detail(binding.subjectId());

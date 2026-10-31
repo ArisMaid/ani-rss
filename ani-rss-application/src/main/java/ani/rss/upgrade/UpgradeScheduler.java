@@ -161,6 +161,7 @@ public class UpgradeScheduler {
         if("METADATA".equals(job.getKind())) { try { metadata.enrich(t,job); complete(job,"元数据补缺与定向刷新完成"); } catch(Exception e) { throw new IOException("METADATA_REFRESH_DEFERRED",e); } return; }
         if("SUBJECT".equals(job.getKind())) { if(resolver.enrichStep(t)) complete(job,"作品详情与章节映射已保存"); return; }
         if("TARGET".equals(job.getKind())) {
+            if(campaigns.excludedBySelection(t)) { complete(job,"作品已从季度订阅取消，保留现有档案与媒体"); return; }
             if(!resolver.enrichStep(t)) return;
             if(!UpgradeCampaignService.monitorOnly(t.getLibraryId())) emby.adopt(t);
             releases.rss(t);
@@ -241,6 +242,7 @@ public class UpgradeScheduler {
         evaluateTarget(t,false);
     }
     private void evaluateTarget(Target t,boolean allowExternalEvidence) {
+        if(campaigns.excludedBySelection(t)) return;
         releases.refreshStoredEvidence(t);
         var p=campaigns.effectivePolicy(t);
         // The transfer is isolated from the library. A missing container can be

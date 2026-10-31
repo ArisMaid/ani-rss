@@ -15,6 +15,7 @@
 | POST `/policies/{id}/evaluate` | `{"candidate":{...},"current":{...}}`；使用已保存规则 |
 | GET `/mikan/seasons` | 读取配置的 Mikan 站点实际年份／季度菜单，不生成不存在的季度 |
 | GET `/mikan/preview?year=2024&season=春` | 只读季度目录预览，返回 mikanId、title、category、url、cover；不创建订阅、目标或下载 |
+| GET `/mikan/exclusion-subject?mikanId=1` | 只读核对单部作品，返回 mikanId、subjectId；使用配置的 Mikan 地址，映射缺失时返回失败 |
 | GET／POST `/campaigns` | 列出／创建季度订阅或兼容的日期任务；启用的新任务立即排入目录发现 |
 | PUT `/campaigns/{id}` | 提交完整任务及 revision；缩小范围或暂停不删除媒体 |
 | POST `/campaigns/{id}/scan` | 异步发现与候选检索，202 返回操作 ID |
@@ -84,6 +85,8 @@ Mikan 季度订阅示例：
 ```json
 {"name":"2024 春季动画","catalogSource":"MIKAN","mikanYear":2024,"mikanSeason":"春","libraryId":"123","policyId":"已保存规则 ID","priority":10,"enabled":true,"revision":1}
 ```
+
+`excludedMikanSubjects` 为可选的 Mikan ID → Bangumi ID 映射，例如 `{"1":"101"}`，旧记录默认空映射，表示不取消任何作品。页面取消勾选时调用身份核对接口后保存该映射；解析中禁止保存，失败保持原选择。后台 Mikan 目录与 Bangumi 补全均跳过取消项，任务选择和候选自动计算也遵守此映射。映射仅在此任务生效，其他任务可继续订阅同作品。重新勾选删除映射；不改变同一季度时暂停和编辑不重新访问来源。取消不删除档案或媒体，保存与现有安装锁协调并更新相关作品修订号，已开始的安装仍按恢复流程完成。
 
 `mikanSeason` 使用冬／春／夏／秋，分别对应 1–3／4–6／7–9／10–12 月。后端根据年份、季度生成 startDate／endDate，忽略客户端传入的日期；新建或改变季度时核对实际上游菜单。暂停、改规则或优先级且不改变所选季度时不依赖上游在线。复用 Mikan 列表缓存且不触发评分预热和原版订阅。
 

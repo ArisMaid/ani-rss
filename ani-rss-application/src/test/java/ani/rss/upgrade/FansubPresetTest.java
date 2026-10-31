@@ -55,7 +55,7 @@ class FansubPresetTest {
     @Test void presetEditsCannotMutateCatalogOrOtherDrafts() {
         var catalog=QualityPolicyPresets.catalog(); var preset=catalog.presets().get(0); var draft=preset.policy();
         draft.getGroups().clear(); draft.getGroupAliases().clear(); draft.setMinimumResolution(0);
-        assertEquals(6,preset.policy().getGroups().size()); assertEquals(1080,preferred().getMinimumResolution());
+        assertEquals(13,preset.policy().getGroups().size()); assertEquals(1080,preferred().getMinimumResolution());
         for(var item:catalog.presets()) engine.validate(item.policy());
     }
 }

@@ -18,6 +18,7 @@ public class UpgradeCampaignService {
     @org.springframework.beans.factory.annotation.Autowired
     public UpgradeCampaignService(UpgradeRepository repository,QualityPolicyEngine policies,MikanQuarterCatalog mikan) { this.repository=repository; this.policies=policies; this.mikan=mikan; }
     public List<ani.rss.entity.Mikan.Season> mikanSeasons() { return mikan.seasons(); }
+    public String exclusionSubject(String mikanId) { return mikan.exclusionSubject(mikanId); }
     public List<MikanCatalogEntry> mikanPreview(int year,String season) { return mikan.preview(year,season); }
     public synchronized QualityPolicyEngine.Policy savePolicy(String id,QualityPolicyEngine.Policy policy) {
         policies.validate(policy);
@@ -58,9 +59,14 @@ public class UpgradeCampaignService {
     public synchronized Campaign saveCampaign(String id,Campaign campaign) {
         if(campaign==null||campaign.getName()==null||campaign.getName().isBlank()||campaign.getName().length()>120)
             throw new IllegalArgumentException("请输入日期任务名称");
+        Campaign previous=id==null?null:repository.get("upgrade_campaigns",id,Campaign.class).orElse(null);
+        Map<String,String> exclusions=campaign.getExcludedMikanSubjects();
+        if(exclusions==null) exclusions=Map.of();
+        if(exclusions.size()>1000||exclusions.entrySet().stream().anyMatch(e->e.getKey()==null||!e.getKey().matches("[0-9]{1,18}")||e.getValue()==null||!e.getValue().matches("[0-9]{1,18}")))
+            throw new IllegalArgumentException("取消作品的 Mikan 与 Bangumi ID 无效或数量过多");
+        campaign.setExcludedMikanSubjects("MIKAN".equals(campaign.getCatalogSource())?new LinkedHashMap<>(exclusions):new LinkedHashMap<>());
         MikanQuarterCatalog.normalize(campaign);
         if("MIKAN".equals(campaign.getCatalogSource())) {
-            Campaign previous=id==null?null:repository.get("upgrade_campaigns",id,Campaign.class).orElse(null);
             // Pausing or changing a policy must remain possible during a source outage.
             if(previous==null||!Objects.equals(previous.getCatalogSource(),campaign.getCatalogSource())||!Objects.equals(previous.getMikanYear(),campaign.getMikanYear())||!Objects.equals(previous.getMikanSeason(),campaign.getMikanSeason())) mikan.validateSelection(campaign);
         }
@@ -75,18 +81,30 @@ public class UpgradeCampaignService {
         campaign.setPolicyId(requested);
         if(id==null) { id=UUID.randomUUID().toString(); campaign.setCreatedAt(System.currentTimeMillis()); campaign.setRevision(1); }
         else {
-            Campaign previous=repository.get("upgrade_campaigns",id,Campaign.class).orElseThrow(()->new IllegalArgumentException("日期任务不存在"));
+            if(previous==null) throw new IllegalArgumentException("日期任务不存在");
             if(previous.getRevision()!=campaign.getRevision()) UpgradeModeService.conflict(previous.getRevision());
             campaign.setCreatedAt(previous.getCreatedAt()); campaign.setRevision(previous.getRevision()+1);
         }
-        campaign.setId(id); repository.save("upgrade_campaigns",id,null,null,campaign.isEnabled()?"ENABLED":"PAUSED",campaign.getRevision(),campaign);
-        Cursor cursor=new Cursor(); cursor.setId("catalog:"+id); cursor.setScope(id);
-        repository.save("upgrade_scan_cursors",cursor.getId(),id,null,"PENDING",1,cursor);
-        if("MIKAN".equals(campaign.getCatalogSource())) {
-            Cursor mikanCursor=new Cursor(); mikanCursor.setId("mikan-catalog:"+id); mikanCursor.setScope(id);
-            repository.save("upgrade_scan_cursors",mikanCursor.getId(),id,null,"PENDING",1,mikanCursor);
+        final String savedId=id;
+        try(var lease=UpgradeFileCoordinator.lease()) {
+            return DatabaseManager.transaction(connection -> {
+                campaign.setId(savedId); repository.save("upgrade_campaigns",savedId,null,null,campaign.isEnabled()?"ENABLED":"PAUSED",campaign.getRevision(),campaign);
+                Cursor cursor=new Cursor(); cursor.setId("catalog:"+savedId); cursor.setScope(savedId);
+                repository.save("upgrade_scan_cursors",cursor.getId(),savedId,null,"PENDING",1,cursor);
+                if("MIKAN".equals(campaign.getCatalogSource())) {
+                    Cursor mikanCursor=new Cursor(); mikanCursor.setId("mikan-catalog:"+savedId); mikanCursor.setScope(savedId);
+                    repository.save("upgrade_scan_cursors",mikanCursor.getId(),savedId,null,"PENDING",1,mikanCursor);
+                }
+                Set<String> affected=new HashSet<>(campaign.getExcludedMikanSubjects().values());
+                if(previous!=null&&previous.getExcludedMikanSubjects()!=null) affected.addAll(previous.getExcludedMikanSubjects().values());
+                for(String sid:affected) for(Target target:repository.targetsForSubject(sid)) {
+                    if(!Objects.equals(target.getLibraryId(),campaign.getLibraryId())) continue;
+                    target.setRevision(target.getRevision()+1);
+                    repository.save("upgrade_targets",target.getId(),target.getLibraryId(),target.getSubjectId()+":"+target.getLibraryId(),target.getState(),target.getRevision(),target);
+                }
+                return campaign;
+            });
         }
-        return campaign;
     }
     public QualityPolicyEngine.Policy effectivePolicy(Target target) {
         String id=nonBlank(target.getPolicyOverride());
@@ -100,6 +118,10 @@ public class UpgradeCampaignService {
     public boolean eligible(Target target) {
         if(target.isExcluded()) return false;
         return selectCampaign(target)!=null;
+    }
+    public boolean excludedBySelection(Target target) {
+        return !eligible(target)&&repository.all("upgrade_campaigns",null,"ENABLED",Campaign.class).stream()
+                .anyMatch(c->Objects.equals(c.getLibraryId(),target.getLibraryId())&&c.excludesSubject(target.getSubjectId()));
     }
     private Campaign selectCampaign(Target target) {
         return selectCampaign(target,repository.all("upgrade_campaigns",null,"ENABLED",Campaign.class));
@@ -117,6 +139,7 @@ public class UpgradeCampaignService {
     private Campaign selectCampaign(Target target,List<Campaign> enabled) {
         if(target.getPremiereDate()==null) return null;
         return enabled.stream()
+                .filter(c->!c.excludesSubject(target.getSubjectId()))
                 .filter(c->Objects.equals(c.getLibraryId(),target.getLibraryId())&&target.getPremiereDate().compareTo(c.getStartDate())>=0&&Objects.toString(target.getPremiereUpper(),target.getPremiereDate()).compareTo(c.getEndDate())<=0)
                 .sorted(Comparator.comparingInt(Campaign::getPriority).reversed().thenComparingLong(Campaign::getCreatedAt).thenComparing(Campaign::getId)).findFirst().orElse(null);
     }

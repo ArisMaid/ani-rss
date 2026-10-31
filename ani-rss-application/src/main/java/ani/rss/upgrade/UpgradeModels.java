@@ -20,6 +20,11 @@ public final class UpgradeModels {
         private String catalogSource;
         private Integer mikanYear;
         private String mikanSeason;
+        // Mikan ID -> verified Bangumi ID, scoped to this campaign.
+        private Map<String,String> excludedMikanSubjects = new LinkedHashMap<>();
+        public boolean excludesSubject(String subjectId) {
+            return excludedMikanSubjects != null && excludedMikanSubjects.containsValue(subjectId);
+        }
         private String policyId;
         private String libraryId;
         private int priority;

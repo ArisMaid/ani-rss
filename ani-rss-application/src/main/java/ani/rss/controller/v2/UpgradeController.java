@@ -71,6 +71,11 @@ public class UpgradeController {
     }
     @Auth @GetMapping("/campaigns") public List<Campaign> campaigns() { return repository.list("upgrade_campaigns",null,null,0,200,Campaign.class); }
     @Auth @GetMapping("/mikan/seasons") public Object mikanSeasons() { return campaigns.mikanSeasons(); }
+    @Auth @GetMapping("/mikan/exclusion-subject") public Map<String,String> exclusionSubject(@RequestParam String mikanId) {
+        try { return Map.of("mikanId",mikanId,"subjectId",campaigns.exclusionSubject(mikanId)); }
+        catch(UpgradeHttp.SourceFailure e) { throw new ani.rss.exception.ApiProblemException(HttpStatus.BAD_GATEWAY,
+                "MIKAN_EXCLUSION_LOOKUP_FAILED","无法核对该作品的 Bangumi 身份，请检查来源后重试",null,Map.of("retryable",e.retryable())); }
+    }
     @Auth @GetMapping("/mikan/preview") public Object mikanPreview(@RequestParam int year,@RequestParam String season) { return campaigns.mikanPreview(year,season); }
     @Auth @PostMapping("/campaigns") public Campaign createCampaign(@RequestBody Campaign c) { Campaign saved=campaigns.saveCampaign(null,c); if(saved.isEnabled()) scheduler.enqueue("CATALOG",saved.getId()); return saved; }
     @Auth @PutMapping("/campaigns/{id}") public Campaign updateCampaign(@PathVariable String id,@RequestBody Campaign c) { Campaign saved=campaigns.saveCampaign(id,c); if(saved.isEnabled()) scheduler.enqueue("CATALOG",saved.getId()); return saved; }

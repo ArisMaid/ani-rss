@@ -70,6 +70,53 @@ class MikanQuarterCatalogTest {
         saved.setEnabled(false); assertFalse(service.saveCampaign(saved.getId(),saved).isEnabled());
         saved.setMikanSeason("夏"); assertThrows(UpgradeHttp.SourceFailure.class,()->service.saveCampaign(saved.getId(),saved));
     }
+    @Test void cancellationSurvivesRestartAndBothDiscoveryPathsWithoutGlobalExclusion() {
+        when(mikan.catalog(any())).thenReturn(directory(2));
+        var service=new UpgradeCampaignService(repository,new QualityPolicyEngine(),catalog);
+        var policy=service.savePolicy(null,new QualityPolicyEngine.Policy());
+        Campaign c=campaign(); c.setPolicyId(policy.getId()); c.setExcludedMikanSubjects(Map.of("1","101"));
+        c=service.saveCampaign(null,c);
+        DatabaseManager.reopen();
+        Campaign restored=repository.get("upgrade_campaigns",c.getId(),Campaign.class).orElseThrow();
+        assertEquals(Map.of("1","101"),restored.getExcludedMikanSubjects());
+        var subjects=new SubjectCatalogProvider(repository,catalog);
+        assertNull(subjects.accept(restored,subject(1,"2024-04-03"),"BANGUMI_SEARCH"));
+        try(var http=mockStatic(UpgradeHttp.class,CALLS_REAL_METHODS)) {
+            http.when(()->UpgradeHttp.getText(anyString())).thenReturn(html(2));
+            http.when(()->UpgradeHttp.get(anyString(),anyMap())).thenReturn(subject(2,"2024-04-03"));
+            assertTrue(catalog.scanStep(restored,subjects));
+            http.verify(()->UpgradeHttp.getText("https://mikanani.me/Home/Bangumi/1"),never());
+            assertTrue(repository.identity("upgrade_targets","101:library",Target.class).isEmpty());
+            Target selected=repository.identity("upgrade_targets","102:library",Target.class).orElseThrow();
+            assertTrue(service.eligible(selected));
+        }
+        Target existing=new Target(); existing.setId("old"); existing.setSubjectId("101"); existing.setLibraryId("library"); existing.setPremiereDate("2024-04-03");
+        repository.save("upgrade_targets","old","library","101:library","MONITORING",1,existing);
+        assertFalse(service.eligible(existing));
+        Campaign second=campaign(); second.setPolicyId(policy.getId()); service.saveCampaign(null,second);
+        assertTrue(service.eligible(existing)); assertFalse(existing.isExcluded());
+    }
+    @Test void cancellationBindingUsesOnlyConfiguredOriginAndReportsSourceFailure() {
+        try(var http=mockStatic(UpgradeHttp.class,CALLS_REAL_METHODS)) {
+            http.when(()->UpgradeHttp.getText("https://mikanani.me/Home/Bangumi/1")).thenReturn(html(1));
+            assertEquals("101",catalog.exclusionSubject("1"));
+            assertThrows(IllegalArgumentException.class,()->catalog.exclusionSubject("../admin"));
+            http.when(()->UpgradeHttp.getText("https://mikanani.me/Home/Bangumi/2")).thenReturn("<html>No identity</html>");
+            assertThrows(UpgradeHttp.SourceFailure.class,()->catalog.exclusionSubject("2"));
+        }
+    }
+    @Test void editingCancellationInvalidatesPendingTargetDecisionsAndAllowsResubscribe() {
+        var service=new UpgradeCampaignService(repository,new QualityPolicyEngine(),catalog);
+        var policy=service.savePolicy(null,new QualityPolicyEngine.Policy());
+        Campaign c=campaign(); c.setPolicyId(policy.getId()); c=service.saveCampaign(null,c);
+        Target t=new Target(); t.setId("kept"); t.setSubjectId("101"); t.setLibraryId("library"); t.setPremiereDate("2024-04-03");
+        repository.save("upgrade_targets","kept","library","101:library","MONITORING",1,t);
+        c.setExcludedMikanSubjects(Map.of("1","101")); c=service.saveCampaign(c.getId(),c);
+        assertFalse(service.eligible(t)); assertTrue(service.excludedBySelection(t));
+        assertEquals(2,repository.get("upgrade_targets","kept",Target.class).orElseThrow().getRevision());
+        c.setExcludedMikanSubjects(Map.of()); service.saveCampaign(c.getId(),c);
+        assertTrue(service.eligible(t)); assertEquals(3,repository.get("upgrade_targets","kept",Target.class).orElseThrow().getRevision());
+    }
     @Test void boundedDiscoveryResumesPersistedSnapshotWithoutRefetchingAlreadyVisitedTitles() {
         when(mikan.catalog(any())).thenReturn(directory(5)); Campaign c=campaign(); var subjects=new SubjectCatalogProvider(repository,catalog);
         try(var http=mockStatic(UpgradeHttp.class,CALLS_REAL_METHODS)) {

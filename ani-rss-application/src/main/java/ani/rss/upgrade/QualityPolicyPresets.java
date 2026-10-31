@@ -31,9 +31,9 @@ public final class QualityPolicyPresets {
                 new Fansub("霜庭云花",List.of("霜庭雲花"),"https://mikanani.me/Home/PublishGroup/346"),
                 new Fansub("拨雪寻春",List.of("撥雪尋春","Haruhana","HaruhanaSub"),"https://github.com/HaruhanaSub/HaruhanaSub"));
         List<Preset> presets=new ArrayList<>();
-        var preferred=policy(groups); preferred.setName("1080p 简体 · 六组偏好");
+        var preferred=policy(groups); preferred.setName("1080p 简体 · 全部字幕组");
         preferred.setDimensions(List.of(QualityPolicyEngine.Dimension.RESOLUTION,QualityPolicyEngine.Dimension.GROUP,QualityPolicyEngine.Dimension.SUBTITLES));
-        presets.add(new Preset("1080p-chs-preferred",preferred.getName(),"1080p 优先、最低 1080p，必须含简体；按六组顺序比较，其他组为后备。",preferred));
+        presets.add(new Preset("1080p-chs-preferred",preferred.getName(),"1080p 优先、最低 1080p，必须含简体；原六组优先，其余预设组按后备顺序比较，可自行调整。",preferred));
         var bilingual=policy(groups); bilingual.setName("1080p 简日字幕优先");
         bilingual.setDimensions(List.of(QualityPolicyEngine.Dimension.RESOLUTION,QualityPolicyEngine.Dimension.SUBTITLES,QualityPolicyEngine.Dimension.GROUP));
         bilingual.setRequiredLanguages(new TreeSet<>(List.of("CHS","JPN")));
@@ -45,7 +45,7 @@ public final class QualityPolicyPresets {
         var traditional=policy(groups); traditional.setName("1080p 繁体优先");
         traditional.setRequiredLanguages(new TreeSet<>(Set.of("CHT")));
         traditional.setSubtitles(List.of("CHS+CHT+JPN","CHT+JPN","CHS+CHT","CHT","CHS+JPN","CHS"));
-        presets.add(new Preset("1080p-cht",traditional.getName(),"最低 1080p，必须繁体字幕；保留六组偏好。",traditional));
+        presets.add(new Preset("1080p-cht",traditional.getName(),"最低 1080p，必须繁体字幕；原六组优先，包含全部预设组。",traditional));
         var archive=policy(groups); archive.setName("收藏 · BD 与内封优先");
         archive.setDimensions(List.of(QualityPolicyEngine.Dimension.SOURCE,QualityPolicyEngine.Dimension.RESOLUTION,QualityPolicyEngine.Dimension.SUBTITLES,QualityPolicyEngine.Dimension.PACKAGING,QualityPolicyEngine.Dimension.GROUP));
         archive.setResolutions(List.of(2160,1080,720,480));
@@ -54,13 +54,13 @@ public final class QualityPolicyPresets {
         compatible.setDimensions(List.of(QualityPolicyEngine.Dimension.RESOLUTION,QualityPolicyEngine.Dimension.CODEC,QualityPolicyEngine.Dimension.SUBTITLES,QualityPolicyEngine.Dimension.GROUP));
         compatible.setCodecs(List.of("AVC","HEVC","AV1"));
         presets.add(new Preset("compatible-avc",compatible.getName(),"最低 1080p、必须简体；同分辨率优先 H.264 / AVC，不保证所有设备均可直放。",compatible));
-        return new Catalog("2026-10-28",groups,presets,"原有六组顺序保留，扩展组只作为可选项，不代表质量排名。支持按名称与别名搜索；联合发布按最高排名参与组比较。预设只修改草稿，保存后生效。");
+        return new Catalog("2026-10-28",groups,presets,"原有六组顺序保留，整套预设包含全部字幕组，扩展组作为后备顺序，不代表质量排名。支持按名称与别名搜索；联合发布按最高排名参与组比较。预设只修改草稿，保存后生效。");
     }
     private static QualityPolicyEngine.Policy policy(List<Fansub> groups) {
         var p=new QualityPolicyEngine.Policy();
         p.setMinimumResolution(1080); p.setRequiredLanguages(new TreeSet<>(Set.of("CHS")));
         p.setResolutions(new ArrayList<>(List.of(1080,2160,720,480)));
-        p.setGroups(new ArrayList<>(groups.subList(0,6).stream().map(Fansub::name).toList()));
+        p.setGroups(new ArrayList<>(groups.stream().map(Fansub::name).toList()));
         Map<String,String> aliases=new LinkedHashMap<>();
         groups.forEach(group->group.aliases().forEach(alias->aliases.put(alias,group.name())));
         p.setGroupAliases(aliases); return p;

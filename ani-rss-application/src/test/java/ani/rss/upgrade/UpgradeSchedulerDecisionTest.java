@@ -27,6 +27,15 @@ class UpgradeSchedulerDecisionTest {
         assertEquals("UPGRADE",repository.get("upgrade_releases","a",Release.class).orElseThrow().getState());
         assertTrue(repository.all("upgrade_jobs","t",null,Job.class).isEmpty());
     }
+    @Test void cancelledTitleDoesNotRunQueuedDiscoveryOrSubmitDownloads() throws Exception {
+        Campaign campaign=repository.get("upgrade_campaigns","c",Campaign.class).orElseThrow(); campaign.setExcludedMikanSubjects(Map.of("1","100"));
+        repository.save("upgrade_campaigns","c",null,null,"ENABLED",2,campaign);
+        Job scan=new Job(); scan.setId("cancelled-scan"); scan.setKind("TARGET"); scan.setTargetId("t");
+        scheduler.process(scan);
+        assertEquals(JobState.COMPLETED,scan.getState()); verifyNoInteractions(downloads);
+        scheduler.evaluateTarget(target);
+        assertTrue(repository.all("upgrade_jobs","t",null,Job.class).stream().noneMatch(j->"UPGRADE".equals(j.getKind())));
+    }
     @Test void monitorOnlyTargetCollectsDecisionsWithoutCreatingTransferJobs() {
         target.setLibraryId("UNASSIGNED");
         var campaign=repository.get("upgrade_campaigns","c",Campaign.class).orElseThrow(); campaign.setLibraryId("UNASSIGNED");

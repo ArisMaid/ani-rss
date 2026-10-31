@@ -61,6 +61,7 @@ public class SubjectCatalogProvider {
             String sid=UpgradeHttp.string(subject,"id");
             String date=UpgradeHttp.string(subject,"date");
             if(sid==null) throw new UpgradeHttp.SourceFailure("BANGUMI_SUBJECT_ID_MISSING",false);
+            if(campaign.excludesSubject(sid)) return null;
             LocalDate premiere=null,upper=null;
             try { premiere=LocalDate.parse(date); upper=premiere; } catch(RuntimeException e) {
                 try { YearMonth month=YearMonth.parse(date); premiere=month.atDay(1); upper=month.atEndOfMonth(); } catch(RuntimeException ignored) { }

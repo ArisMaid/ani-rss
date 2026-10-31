@@ -167,10 +167,12 @@
         <el-alert v-if="seasonError" :title="seasonError" type="error" :closable="false" show-icon/>
         <SettingsItem label="首播范围"><span>{{ quarterRange || '请先选择年份和季度' }}</span></SettingsItem>
         <section class="season-preview" v-loading="previewLoading">
-          <div class="settings-section-heading"><h3>季度目录预览</h3><span class="hint">{{ seasonEntries.length }} 部有资源条目的作品</span></div>
-          <p class="hint">目录来自 Mikan；保存后核对 Bangumi 身份与首播日期，补充无资源动画。持续播出的往年作品按首播范围排除。</p>
+          <div class="settings-section-heading"><h3>季度目录预览</h3><span class="hint">目录 {{ seasonEntries.length }} 部 · 已选 {{ selectedSeasonCount }} 部 · 已取消 {{ seasonEntries.length - selectedSeasonCount }} 部</span></div>
+          <p class="hint">目录来自 Mikan；保存后核对 Bangumi 身份与首播日期，补充无资源动画。持续播出的往年作品按首播范围排除。取消勾选可排除此订阅中的指定作品，保存后生效；后续新发现作品默认订阅。</p>
+          <p v-if="resolvingTitles.size" class="hint">正在核对取消作品的身份，请稍候；核对完成后可保存。</p>
           <el-alert v-if="previewError" :title="previewError" type="error" :closable="false"/>
-          <el-table v-else :data="seasonEntries" max-height="230" empty-text="选择年份和季度后读取 Mikan 目录">
+          <el-table v-else :data="seasonEntries" row-key="mikanId" max-height="300" empty-text="选择年份和季度后读取 Mikan 目录">
+            <el-table-column label="订阅" width="70"><template #default="{row}"><el-checkbox :model-value="!campaignForm.excludedMikanSubjects?.[row.mikanId] && !resolvingTitles.has(row.mikanId)" :aria-label="`订阅${row.title}`" :disabled="busy || resolvingTitles.has(row.mikanId)" @change="value => setCampaignTitle(row, value)"/></template></el-table-column>
             <el-table-column prop="title" label="作品" min-width="200"/><el-table-column prop="category" label="更新分组" width="105"/>
             <el-table-column label="来源" width="85"><template #default="{row}"><a :href="row.url" target="_blank" rel="noopener noreferrer" class="source-link">Mikan ↗</a></template></el-table-column>
           </el-table>
@@ -203,8 +205,8 @@
         <el-form-item label="参与维度"><el-checkbox-group v-model="policyForm.dimensions"><el-checkbox v-for="(name, key) in dimensionLabels" :key="key" :value="key">{{ name }}</el-checkbox></el-checkbox-group></el-form-item>
         <el-form-item v-for="field in ['subtitles','groups','resolutions','sources','packaging','codecs']" :key="field" :label="fieldLabels[field]">
           <div class="ranking-editor">
-            <el-select v-model="policyForm[field]" multiple filterable allow-create default-first-option :aria-label="fieldLabels[field]"><el-option v-for="value in rankOptions(field)" :key="value" :value="value" :label="optionLabel(field, value)"/></el-select>
-            <div v-if="field === 'groups'" class="fansub-preset"><el-button size="small" :disabled="!presetCatalog.groups?.length" @click="useFansubPreference">使用六组偏好顺序</el-button><span class="hint">桜都 → 绿茶 → 北宇治 → 悠哈璃羽 → SweetSub → LoliHouse；其他组可搜索名称或别名；选择时不改变已有顺序。</span></div>
+            <el-select v-model="policyForm[field]" multiple filterable allow-create default-first-option :filter-method="isFansubField(field) ? query => fansubSearch[field] = query : undefined" @visible-change="visible => { if(!visible) fansubSearch[field] = '' }" :aria-label="fieldLabels[field]"><el-option v-for="value in rankOptions(field)" :key="value" :value="value" :label="parameterLabel(field, value)"><span>{{ optionLabel(field, value) }}</span></el-option></el-select>
+            <div v-if="field === 'groups'" class="fansub-preset"><el-button size="small" :disabled="!presetCatalog.groups?.length" @click="useFansubPreference(true)">应用全部 {{ presetCatalog.groups?.length || 0 }} 组</el-button><el-button size="small" :disabled="!presetCatalog.groups?.length" @click="useFansubPreference(false)">原六组优先</el-button><span class="hint">目录 {{ presetCatalog.groups?.length || 0 }} 组 · 当前排序 {{ policyForm.groups.length }} 组。原六组优先，其余组按后备顺序加入；可搜索别名，顺序可继续调整。</span></div>
             <div class="ranking-list" :aria-label="`${fieldLabels[field]}优先级`">
               <div v-for="(value, index) in policyForm[field]" :key="value" draggable="true" @dragstart="rankDrag = {field, index}" @dragover.prevent @drop.prevent="reorderRank(field, rankDrag.field === field ? rankDrag.index : -1, index)">
                 <span>{{ index + 1 }}. {{ parameterLabel(field, value) }}</span>
@@ -218,7 +220,7 @@
         <el-form-item label="必须中文字幕"><el-switch v-model="policyForm.requireChinese"/></el-form-item>
         <el-form-item label="必须字幕语言"><el-select v-model="policyForm.requiredLanguages" multiple><el-option v-for="v in ['CHS','CHT','JPN']" :key="v" :value="v" :label="parameterLabel('requiredLanguages', v)"/></el-select></el-form-item>
         <el-form-item label="必须双语同屏"><el-switch v-model="policyForm.requireBilingual"/></el-form-item>
-        <el-form-item v-for="field in ['allowedGroups','blockedGroups','containers']" :key="field" :label="{allowedGroups:'允许字幕组',blockedGroups:'禁止字幕组',containers:'允许容器'}[field]"><el-select v-model="policyForm[field]" multiple filterable allow-create><el-option v-for="value in rankOptions(field)" :key="value" :value="value" :label="optionLabel(field, value)"/></el-select></el-form-item>
+        <el-form-item v-for="field in ['allowedGroups','blockedGroups','containers']" :key="field" :label="{allowedGroups:'允许字幕组',blockedGroups:'禁止字幕组',containers:'允许容器'}[field]"><el-select v-model="policyForm[field]" multiple filterable allow-create :aria-label="{allowedGroups:'允许字幕组',blockedGroups:'禁止字幕组',containers:'允许容器'}[field]" :filter-method="isFansubField(field) ? query => fansubSearch[field] = query : undefined" @visible-change="visible => { if(!visible) fansubSearch[field] = '' }"><el-option v-for="value in rankOptions(field)" :key="value" :value="value" :label="parameterLabel(field, value)"><span>{{ optionLabel(field, value) }}</span></el-option></el-select></el-form-item>
         <el-form-item label="字幕组别名 JSON"><el-input v-model="aliasText" type="textarea" placeholder='{"喵萌奶茶屋":"喵萌奶茶屋"}'/></el-form-item>
       </el-form>
       <el-collapse><el-collapse-item title="字幕组预设来源与别名" name="fansub-sources"><p class="hint">{{ presetCatalog.note }} 资料核对：{{ presetCatalog.updatedAt }}</p><p v-for="group in presetCatalog.groups || []" :key="group.name"><a :href="group.source" target="_blank" rel="noopener noreferrer" class="source-link">{{ group.name }} ↗</a><span class="hint"> · {{ group.aliases.join('、') || '英文名称忽略大小写' }}</span></p></el-collapse-item></el-collapse>
@@ -263,6 +265,7 @@ const targetOffset = ref(0), candidateOffset = ref(0), jobOffset = ref(0), versi
 const targetCoverage = ref(null)
 const embyMappingText = ref(''), downloaderMappingText = ref(''), libraryText = ref('')
 const campaignDialog = ref(false), campaignForm = ref({}), policyDialog = ref(false), policyForm = ref(defaultPolicy()), preview = ref(null), dragIndex = ref(-1)
+const fansubSearch = ref({})
 const rankDrag = ref({field: '', index: -1})
 const presetCatalog = ref({groups: [], presets: []}), selectedPreset = ref('')
 const selectedParameter = ref('')
@@ -274,7 +277,11 @@ const tabDescriptions = {overview: '运行模式、任务覆盖与扫描进度',
 const mikanYears = computed(() => [...new Set(mikanSeasons.value.map(s => s.year))].sort((a, b) => b - a))
 const mikanQuarters = computed(() => mikanSeasonChoices(mikanSeasons.value, campaignForm.value.mikanYear))
 const quarterRange = computed(() => { const range = quarterDateRange(campaignForm.value.mikanYear, campaignForm.value.mikanSeason); return range ? `${range.startDate} 至 ${range.endDate}` : '' })
-const canSaveCampaign = computed(() => campaignForm.value.name?.trim() && campaignForm.value.libraryId && (campaignForm.value.catalogSource !== 'MIKAN' || (!seasonLoading.value && !previewLoading.value && !seasonError.value && mikanQuarters.value.some(s => s.season === campaignForm.value.mikanSeason))))
+const canSaveCampaign = computed(() => campaignForm.value.name?.trim() && !resolvingTitles.value.size && campaignForm.value.libraryId && (campaignForm.value.catalogSource !== 'MIKAN' || (!seasonLoading.value && !previewLoading.value && !seasonError.value && mikanQuarters.value.some(s => s.season === campaignForm.value.mikanSeason))))
+const resolvingTitles = ref(new Set())
+const selectedSeasonCount = computed(() => seasonEntries.value.filter(row => !campaignForm.value.excludedMikanSubjects?.[row.mikanId]).length)
+let campaignSelectionGeneration = 0, campaignSelectionKey = ''
+watch(campaignDialog, open => { if(!open) ++campaignSelectionGeneration })
 let seasonRequest = 0, previewRequest = 0, suggestedCampaignName = ''
 const targetDialog = ref(false), targetForm = ref({}), episodeMapText = ref('{}'), rssText = ref('')
 const detailDialog = ref(false), detailTitle = ref(''), detail = ref({}), correctionText = ref('')
@@ -314,8 +321,8 @@ async function setMode(mode) {
   } catch(e) { if(e.status === 409) { await loadStatus(); await loadSettings() } else throw e } finally { busy.value = false }
 }
 async function action(path) { await api.post(base + path, {}); await Promise.all([loadStatus(), loadJobs()]) }
-function newCampaign() { suggestedCampaignName = ''; legacyCampaign.value = false; campaignForm.value = {name: '', catalogSource: 'MIKAN', mikanYear: null, mikanSeason: null, policyId: null, libraryId: settings.value?.libraryIds?.[0] || 'UNASSIGNED', priority: 0, enabled: true}; campaignDialog.value = true; loadMikanSeasons() }
-function editCampaign(row) { suggestedCampaignName = ''; legacyCampaign.value = row.catalogSource !== 'MIKAN'; campaignForm.value = {...clone(row), catalogSource: row.catalogSource || 'DATE'}; campaignDialog.value = true; loadMikanSeasons() }
+function newCampaign() { ++campaignSelectionGeneration; resolvingTitles.value = new Set(); campaignSelectionKey = ''; suggestedCampaignName = ''; legacyCampaign.value = false; campaignForm.value = {name: '', catalogSource: 'MIKAN', mikanYear: null, mikanSeason: null, policyId: null, libraryId: settings.value?.libraryIds?.[0] || 'UNASSIGNED', priority: 0, enabled: true, excludedMikanSubjects: {}}; campaignDialog.value = true; loadMikanSeasons() }
+function editCampaign(row) { ++campaignSelectionGeneration; resolvingTitles.value = new Set(); campaignSelectionKey = `${row.mikanYear}:${row.mikanSeason}`; suggestedCampaignName = ''; legacyCampaign.value = row.catalogSource !== 'MIKAN'; campaignForm.value = {...clone(row), excludedMikanSubjects: clone(row.excludedMikanSubjects || {}), catalogSource: row.catalogSource || 'DATE'}; campaignDialog.value = true; loadMikanSeasons() }
 async function loadMikanSeasons() {
   if(campaignForm.value.catalogSource !== 'MIKAN') { ++seasonRequest; ++previewRequest; seasonLoading.value = false; previewLoading.value = false; return }
   const request = ++seasonRequest; ++previewRequest; seasonLoading.value = true; previewLoading.value = false; seasonError.value = ''; previewError.value = ''; seasonEntries.value = []
@@ -339,6 +346,9 @@ function changeMikanYear() {
 }
 async function loadMikanPreview() {
   const request = ++previewRequest, {mikanYear: year, mikanSeason: season} = campaignForm.value
+  const key = `${year}:${season}`
+  if(campaignSelectionKey && campaignSelectionKey !== key) { ++campaignSelectionGeneration; campaignForm.value.excludedMikanSubjects = {}; resolvingTitles.value = new Set() }
+  campaignSelectionKey = key
   seasonEntries.value = []; previewError.value = ''; seasonError.value = ''; previewLoading.value = false
   if(!quarterDateRange(year, season)) return
   if(!campaignForm.value.name.trim() || campaignForm.value.name === suggestedCampaignName) { suggestedCampaignName = `${year} 年${season}季动画`; campaignForm.value.name = suggestedCampaignName }
@@ -347,17 +357,38 @@ async function loadMikanPreview() {
   catch(e) { if(request === previewRequest) previewError.value = `季度目录读取失败：${e.message}。可点击刷新目录重试。` }
   finally { if(request === previewRequest) previewLoading.value = false }
 }
-async function saveCampaign() { busy.value = true; try { const c = campaignForm.value; await api[c.id ? 'put' : 'post'](`${base}/campaigns${c.id ? '/' + c.id : ''}`, c); campaignDialog.value = false; campaignRows.value = (await api.get(`${base}/campaigns`)).data } finally { busy.value = false } }
+async function setCampaignTitle(row, selected) {
+  const generation = campaignSelectionGeneration
+  if(selected) { delete campaignForm.value.excludedMikanSubjects[row.mikanId]; return }
+  resolvingTitles.value.add(row.mikanId)
+  try {
+    const {data} = await api.get(`${base}/mikan/exclusion-subject?mikanId=${encodeURIComponent(row.mikanId)}`, {silent: true})
+    if(generation === campaignSelectionGeneration && campaignDialog.value) campaignForm.value.excludedMikanSubjects[row.mikanId] = data.subjectId
+  } catch(e) { if(generation === campaignSelectionGeneration && campaignDialog.value) ElMessage.error(`无法取消“${row.title}”：${e.message}。作品仍保持订阅，请重试。`) }
+  finally { if(generation === campaignSelectionGeneration) resolvingTitles.value.delete(row.mikanId) }
+}
+async function saveCampaign() { if(resolvingTitles.value.size) return; busy.value = true; try { const c = campaignForm.value; await api[c.id ? 'put' : 'post'](`${base}/campaigns${c.id ? '/' + c.id : ''}`, c); campaignDialog.value = false; campaignRows.value = (await api.get(`${base}/campaigns`)).data } finally { busy.value = false } }
 async function toggleCampaign(row) { await api.put(`${base}/campaigns/${row.id}`, {...row, enabled: !row.enabled}); campaignRows.value = (await api.get(`${base}/campaigns`)).data }
-function editPolicy(row) { policyForm.value = row ? clone(row) : defaultPolicy(); selectedPreset.value = ''; selectedParameter.value = ''; policyDialog.value = true }
-function rankOptions(field) { return [...new Set([...(field === 'groups' || field.endsWith('Groups') ? presetCatalog.value.groups.map(g => g.name) : []), ...(parameterOptions[field] || []), ...policyForm.value[field]])] }
+function editPolicy(row) { policyForm.value = row ? clone(row) : defaultPolicy(); selectedPreset.value = ''; selectedParameter.value = ''; fansubSearch.value = {}; policyDialog.value = true }
+const isFansubField = field => field === 'groups' || field.endsWith('Groups')
+function rankOptions(field) {
+  const values = [...new Set([...(isFansubField(field) ? presetCatalog.value.groups.map(g => g.name) : []), ...(parameterOptions[field] || []), ...policyForm.value[field]])]
+  const query = (fansubSearch.value[field] || '').normalize('NFKC').toLowerCase().trim()
+  return isFansubField(field) && query ? values.filter(value => optionLabel(field, value).normalize('NFKC').toLowerCase().includes(query)) : values
+}
 function optionLabel(field, value) {
   const group = presetCatalog.value.groups.find(g => g.name === value)
   return group ? [group.name, ...group.aliases].join(' · ') : parameterLabel(field, value)
 }
 function useParameterPreset() { policyForm.value = applyParameterPreset(policyForm.value, selectedParameterInfo.value); preview.value = null }
 function usePreset() { policyForm.value = applyPolicyPreset(policyForm.value, selectedPresetInfo.value); aliasText.value = JSON.stringify(policyForm.value.groupAliases || {}, null, 2); preview.value = null }
-function useFansubPreference() { policyForm.value.groupAliases = JSON.parse(aliasText.value); policyForm.value = applyFansubPreference(policyForm.value, presetCatalog.value.groups.slice(0, 6)); aliasText.value = JSON.stringify(policyForm.value.groupAliases, null, 2); preview.value = null }
+function useFansubPreference(all) {
+  try {
+    policyForm.value.groupAliases = JSON.parse(aliasText.value)
+    policyForm.value = applyFansubPreference(policyForm.value, all ? presetCatalog.value.groups : presetCatalog.value.groups.slice(0, 6))
+    aliasText.value = JSON.stringify(policyForm.value.groupAliases, null, 2); preview.value = null
+  } catch(e) { if(e instanceof SyntaxError) ElMessage.error('字幕组别名 JSON 格式错误'); else throw e }
+}
 function reorderRank(field, from, to) { policyForm.value[field] = moveDimension(policyForm.value[field], from, to) }
 async function savePolicy() { busy.value = true; try { const p = {...policyForm.value, groupAliases: mergeFansubAliases(JSON.parse(aliasText.value), presetCatalog.value.groups), resolutions: policyForm.value.resolutions.map(Number)}; await api[p.id ? 'put' : 'post'](`${base}/policies${p.id ? '/' + p.id : ''}`, p); policyDialog.value = false; policyRows.value = (await api.get(`${base}/policies`)).data; ElMessage.success('规则已保存') } catch(e) { if(e instanceof SyntaxError) ElMessage.error('字幕组别名 JSON 格式错误'); else if(e.status === 409) policyRows.value = (await api.get(`${base}/policies`)).data; else throw e } finally { busy.value = false } }
 async function deletePolicy(row) {

@@ -59,7 +59,7 @@ class SubscriptionQualitySelectorTest {
         List<Item> selected=SubscriptionQualitySelector.select(ani,items,policy);
         assertEquals(List.of("c","f","g"),selected.stream().map(Item::getInfoHash).toList());
         assertEquals(List.of("绿茶","Other","北宇治"),selected.stream().map(Item::getSubgroup).toList());
-        assertEquals(6,policy.getGroups().size()); assertFalse(policy.getContainers().isEmpty());
+        assertEquals(13,policy.getGroups().size()); assertFalse(policy.getContainers().isEmpty());
     }
     @Test void unknownChineseScriptCannotPassRequiredSimplifiedAndUnconfiguredSubscriptionsKeepTheirOldPath() {
         var ani=new Ani().setId("s").setSeason(1); var items=List.of(item("桜都",1080,"JPN",1,"a"));

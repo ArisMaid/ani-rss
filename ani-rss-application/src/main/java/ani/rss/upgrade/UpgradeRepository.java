@@ -85,6 +85,65 @@ public class UpgradeRepository {
     }
 
     private static long longField(com.google.gson.JsonObject fields,String name) { return fields.has(name)&&!fields.get(name).isJsonNull()?fields.get(name).getAsLong():0; }
+    public Optional<UpgradeModels.Job> transferConsumer(UpgradeModels.Job owner) {
+        return DatabaseManager.withConnection(c->{
+            String sql="""
+                    SELECT payload FROM upgrade_jobs WHERE id<>? AND cancel_requested=0
+                      AND state NOT IN ('COMPLETED','CANCELLED','FAILED','NOT_BETTER')
+                      AND json_extract(payload,'$.remoteTaskId')=? AND json_extract(payload,'$.downloaderIdentity')=? LIMIT 1
+                    """;
+            try(var s=c.prepareStatement(sql)) {
+                s.setString(1,owner.getId()); s.setString(2,owner.getRemoteTaskId()); s.setString(3,owner.getDownloaderIdentity());
+                try(var r=s.executeQuery()) { return r.next()?Optional.of(GsonStatic.fromJson(r.getString(1),UpgradeModels.Job.class)):Optional.empty(); }
+            }
+        });
+    }
+    public List<UpgradeModels.Job> dueJobs(long now,boolean automatic) {
+        return DatabaseManager.withConnection(c -> {
+            String sql="""
+                    SELECT payload,cancel_requested FROM upgrade_jobs
+                    WHERE state IN ('DISCOVERED','ANALYZING','ELIGIBLE','QUEUED','DOWNLOADING','VERIFYING','READY_TO_COMMIT',
+                          'INSTALLING','INSTALLED','CLEANING_OLD','NO_RESOURCE','WAITING_EVIDENCE','WAITING_AI','RETRY_WAIT',
+                          'PAUSED','CLEANUP_PENDING','CANCELLED','FAILED','NOT_BETTER','NEEDS_REVIEW') AND retry_at<=? AND (retry_at>0 OR COALESCE(json_extract(payload,'$.retryAt'),0)<=?) AND (
+                      (cancel_requested=1 AND (state<>'CANCELLED' OR json_extract(payload,'$.remoteTaskId') IS NOT NULL
+                        OR json_extract(payload,'$.reservedBytes')>0 OR json_extract(payload,'$.reasonCode')='CANCEL_STOP_PENDING'))
+                      OR (state NOT IN ('CANCELLED','FAILED','NOT_BETTER','NEEDS_REVIEW')
+                        AND (? OR state<>'PAUSED' OR COALESCE(json_extract(payload,'$.kind'),'UPGRADE')<>'UPGRADE')))
+                    ORDER BY updated_at,id LIMIT 12
+                    """;
+            try(var s=c.prepareStatement(sql)) {
+                s.setLong(1,now); s.setLong(2,now); s.setBoolean(3,automatic);
+                try(var r=s.executeQuery()) {
+                    List<UpgradeModels.Job> result=new ArrayList<>();
+                    while(r.next()) {
+                        var job=GsonStatic.fromJson(r.getString(1),UpgradeModels.Job.class);
+                        job.setCancelRequested(r.getBoolean(2));
+                        result.add(job);
+                    }
+                    return result;
+                }
+            }
+        });
+    }
+    public boolean commitPending(String exceptJobId) {
+        return DatabaseManager.withConnection(c -> {
+            String sql = "SELECT 1 FROM upgrade_jobs WHERE state IN ('INSTALLING','INSTALLED','CLEANING_OLD','CLEANUP_PENDING') "
+                    + "AND (? IS NULL OR id<>?) LIMIT 1";
+            try (var query = c.prepareStatement(sql)) {
+                query.setString(1, exceptJobId);
+                query.setString(2, exceptJobId);
+                try (var result = query.executeQuery()) { return result.next(); }
+            }
+        });
+    }
+    public long jobCount(String state) {
+        return DatabaseManager.withConnection(c->{
+            try(var s=c.prepareStatement("SELECT COUNT(*) FROM upgrade_jobs WHERE state=?")) {
+                s.setString(1,state);
+                try(var r=s.executeQuery()) { r.next(); return r.getLong(1); }
+            }
+        });
+    }
     public boolean cancelRequested(String id) {
         return DatabaseManager.withConnection(c->{ try(var s=c.prepareStatement("SELECT cancel_requested FROM upgrade_jobs WHERE id=?")) { s.setString(1,id); try(var r=s.executeQuery()) { return r.next()&&r.getBoolean(1); } } });
     }

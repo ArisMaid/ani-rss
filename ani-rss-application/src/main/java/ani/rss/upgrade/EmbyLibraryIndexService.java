@@ -45,53 +45,91 @@ public class EmbyLibraryIndexService {
         if(cursor.isComplete()) { cursor.setOffset(0); cursor.setFull(cursor.getLastFull()<System.currentTimeMillis()-86400000L); cursor.setShard(UUID.randomUUID().toString()); cursor.setComplete(false); cursor.setScanStarted(System.currentTimeMillis()); }
         if(cursor.getShard()==null) cursor.setShard(UUID.randomUUID().toString());
         cursor.setId(cursorId); cursor.setScope(libraryId);
+        if(cursor.getScanStarted()==0) cursor.setScanStarted(System.currentTimeMillis());
         String url="/Items?ParentId="+UpgradeHttp.query(libraryId)+"&Recursive=true&IncludeItemTypes=Series,Season,Episode,Movie,Video&Fields=ProviderIds,Path,MediaSources,MediaStreams,ParentId,PremiereDate,OriginalTitle,DateLastMediaAdded,LockedFields&SortBy=SortName&SortOrder=Ascending&Limit=200&StartIndex="+cursor.getOffset();
-        if(!cursor.isFull()&&cursor.getLastSuccess()>0) url+="&MinDateLastSaved="+UpgradeHttp.query(java.time.Instant.ofEpochMilli(cursor.getLastSuccess()-600000).toString());
+        if(!cursor.isFull()&&cursor.getLastSuccess()>0) url+="&MinDateLastSaved="+UpgradeHttp.query(java.time.Instant.ofEpochMilli((cursor.getWatermark()>0?cursor.getWatermark():cursor.getLastSuccess())-600000).toString());
+        int offset=cursor.getOffset();
         try {
-        JsonObject page=get(s,url);
-        if(!page.has("Items")||!page.has("TotalRecordCount")) throw new UpgradeHttp.SourceFailure("EMBY_SCHEMA_CHANGED",false);
-        JsonArray items=page.getAsJsonArray("Items"); int total=page.get("TotalRecordCount").getAsInt();
-        if(items.isEmpty()&&cursor.getOffset()<total) throw new UpgradeHttp.SourceFailure("EMBY_PAGE_INCOMPLETE",true);
-        for(JsonElement element:items) {
-            JsonObject item=element.getAsJsonObject(); String id=UpgradeHttp.string(item,"Id");
-            if(id==null) throw new UpgradeHttp.SourceFailure("EMBY_ITEM_ID_MISSING",false);
-            item.addProperty("upgradeLibraryId",libraryId); item.addProperty("upgradeIndexBatch",cursor.getShard());
-            repository.save("emby_library_items",cursor.getShard()+":"+id,libraryId,cursor.getShard()+":"+id,"INDEXING",1,item);
-        }
-        cursor.setOffset(cursor.getOffset()+items.size()); cursor.setTotal(total);
-        cursor.setComplete(cursor.getOffset()>=total);
-        if(cursor.isComplete()) {
-            // Incremental pages have their own staging batch too. A failed page
-            // can never overwrite the last usable snapshot.
-            List<JsonObject> previous=cursor.isFull()||cursor.getCompletedBatch()==null?List.of():batchItems(libraryId,cursor.getCompletedBatch());
-            Set<String> changed=new HashSet<>();
-            List<JsonObject> received=batchItems(libraryId,cursor.getShard());
-            for(JsonObject item:received) changed.add(UpgradeHttp.string(item,"Id"));
-            if(received.size()!=cursor.getOffset()) throw new UpgradeHttp.SourceFailure("EMBY_PAGE_DUPLICATED",true);
-            DatabaseManager.transaction(connection->{
-                for(JsonObject item:previous) {
-                    String itemId=UpgradeHttp.string(item,"Id"); if(changed.contains(itemId)) continue;
-                    item.addProperty("upgradeIndexBatch",cursor.getShard());
-                    repository.save("emby_library_items",cursor.getShard()+":"+itemId,libraryId,cursor.getShard()+":"+itemId,"INDEXED",1,item);
+            JsonObject page=get(s,url);
+            if(!page.has("Items")||!page.has("TotalRecordCount")) throw new UpgradeHttp.SourceFailure("EMBY_SCHEMA_CHANGED",false);
+            JsonArray items=page.getAsJsonArray("Items");
+            int total=page.get("TotalRecordCount").getAsInt();
+            if((offset>0&&total!=cursor.getTotal())||offset+items.size()>total)
+                throw new UpgradeHttp.SourceFailure("EMBY_PAGE_TOTAL_CHANGED",true);
+            if(items.isEmpty()&&offset<total) throw new UpgradeHttp.SourceFailure("EMBY_PAGE_INCOMPLETE",true);
+            return DatabaseManager.transaction(c->{
+                for(JsonElement element:items) {
+                    JsonObject item=element.getAsJsonObject(); String id=UpgradeHttp.string(item,"Id");
+                    if(id==null||id.isBlank()) throw new UpgradeHttp.SourceFailure("EMBY_ITEM_ID_MISSING",false);
+                    saveItem(libraryId,cursor.getShard(),item);
                 }
-                cursor.setLastSuccess(System.currentTimeMillis());
-                if(cursor.isFull()) cursor.setLastFull(System.currentTimeMillis());
-                cursor.setCompletedBatch(cursor.getShard()); cursor.setError(null);
-                repository.save("upgrade_scan_cursors",cursorId,libraryId,null,"COMPLETE",1,cursor);
-                return null;
+                cursor.setOffset(offset+items.size()); cursor.setTotal(total);
+                cursor.setComplete(cursor.getOffset()==total);
+                if(cursor.isComplete()) {
+                    if(cursor.isFull()||cursor.getCompletedBatch()==null) {
+                        if(batchSize(libraryId,cursor.getShard())!=total) throw new UpgradeHttp.SourceFailure("EMBY_PAGE_DUPLICATED",true);
+                        cursor.setCompletedBatch(cursor.getShard()); cursor.setLastFull(System.currentTimeMillis());
+                    } else if(total>0) {
+                        List<JsonObject> changed=batchItems(libraryId,cursor.getShard());
+                        if(changed.size()!=total) throw new UpgradeHttp.SourceFailure("EMBY_PAGE_DUPLICATED",true);
+                        for(JsonObject item:changed) saveItem(libraryId,cursor.getCompletedBatch(),item);
+                        discardBatch(libraryId,cursor.getShard());
+                    }
+                    cursor.setWatermark(cursor.getScanStarted()); cursor.setLastSuccess(System.currentTimeMillis()); cursor.setError(null);
+                    // A version references the Emby item, not an old snapshot. Readers use completedBatch.
+                    if(cursor.isFull()) try(var prune=c.prepareStatement("DELETE FROM emby_library_items WHERE parent_id=? AND (id<? OR id>=?)")) {
+                        prune.setString(1,libraryId); prune.setString(2,cursor.getCompletedBatch()+":"); prune.setString(3,cursor.getCompletedBatch()+";"); prune.executeUpdate();
+                    }
+                }
+                repository.save("upgrade_scan_cursors",cursorId,libraryId,null,cursor.isComplete()?"COMPLETE":"INDEXING",1,cursor);
+                return cursor.isComplete();
             });
-        }
-        repository.save("upgrade_scan_cursors",cursorId,libraryId,null,cursor.isComplete()?"COMPLETE":"INDEXING",1,cursor);
-        return cursor.isComplete();
         } catch(RuntimeException error) {
-            cursor.setComplete(false); cursor.setError(Objects.toString(error.getMessage(),"EMBY_SCAN_FAILED"));
-            repository.save("upgrade_scan_cursors",cursorId,libraryId,null,"STALE",1,cursor);
+            // Discard in-memory cursor changes from a rolled back page.
+            Cursor retry=repository.get("upgrade_scan_cursors",cursorId,Cursor.class).orElseGet(Cursor::new);
+            retry.setId(cursorId); retry.setScope(libraryId); retry.setError(Objects.toString(error.getMessage(),"EMBY_SCAN_FAILED"));
+            if(retry.isComplete()||Set.of("EMBY_PAGE_DUPLICATED","EMBY_PAGE_TOTAL_CHANGED","EMBY_PAGE_INCOMPLETE").contains(retry.getError())) {
+                String abandoned=cursor.getShard();
+                if(abandoned!=null&&!abandoned.equals(retry.getCompletedBatch())) discardBatch(libraryId,abandoned);
+                retry.setScanStarted(0);
+                retry.setOffset(0); retry.setShard(null); retry.setFull(cursor.isFull());
+            }
+            retry.setComplete(false);
+            repository.save("upgrade_scan_cursors",cursorId,libraryId,null,"STALE",1,retry);
             throw error;
         }
     }
-    private List<JsonObject> batchItems(String libraryId,String batch) {
-        return repository.all("emby_library_items",libraryId,null,JsonObject.class).stream()
-                .filter(item->Objects.equals(batch,UpgradeHttp.string(item,"upgradeIndexBatch"))).toList();
+    private static void discardBatch(String library,String batch) {
+        DatabaseManager.withConnection(c->{
+            try(var remove=c.prepareStatement("DELETE FROM emby_library_items WHERE parent_id=? AND id>=? AND id<?")) {
+                remove.setString(1,library); remove.setString(2,batch+":"); remove.setString(3,batch+";"); return remove.executeUpdate();
+            }
+        });
+    }
+    private void saveItem(String library,String batch,JsonObject item) {
+        String id=batch+":"+UpgradeHttp.string(item,"Id");
+        item.addProperty("upgradeLibraryId",library); item.addProperty("upgradeIndexBatch",batch);
+        repository.save("emby_library_items",id,library,id,"INDEXED",1,item);
+    }
+    private int batchSize(String library,String batch) {
+        return DatabaseManager.withConnection(c->{
+            try(var s=c.prepareStatement("SELECT COUNT(*) FROM emby_library_items WHERE parent_id=? AND id>=? AND id<?")) {
+                s.setString(1,library); s.setString(2,batch+":"); s.setString(3,batch+";");
+                try(var r=s.executeQuery()) { r.next(); return r.getInt(1); }
+            }
+        });
+    }
+    private List<JsonObject> batchItems(String library,String batch) {
+        return DatabaseManager.withConnection(c->{
+            try(var s=c.prepareStatement("SELECT payload FROM emby_library_items WHERE parent_id=? AND id>=? AND id<? ORDER BY id")) {
+                s.setString(1,library); s.setString(2,batch+":"); s.setString(3,batch+";");
+                try(var r=s.executeQuery()) {
+                    List<JsonObject> items=new ArrayList<>();
+                    while(r.next()) items.add(JsonParser.parseString(r.getString(1)).getAsJsonObject());
+                    return items;
+                }
+            }
+        });
     }
     public boolean fresh(String libraryId) {
         return repository.get("upgrade_scan_cursors","emby:"+libraryId,Cursor.class)

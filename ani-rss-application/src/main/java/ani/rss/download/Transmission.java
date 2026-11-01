@@ -62,7 +62,8 @@ public class Transmission implements BaseDownload {
         RpcResponse response=rpc(config,TransmissionRpcBody.torrentGet(),state);
         JsonObject payload=TransmissionRpcCodec.payload(response.body(),state.dialect());
         TransmissionTorrentsInfo.Arguments arguments=GsonStatic.fromJson(payload.toString(),TransmissionTorrentsInfo.Arguments.class);
-        return DownloaderResult.success(Optional.ofNullable(arguments.getTorrents()).orElseGet(List::of).stream()
+        if(arguments==null||arguments.getTorrents()==null) return DownloaderResult.failed("TRANSMISSION_INVALID_RESPONSE",true);
+        return DownloaderResult.success(arguments.getTorrents().stream()
                 .map(TransmissionTorrentsInfo.Torrent::toTorrentsInfo).toList());
     }
     private final ConcurrentMap<String, SessionState> sessions = new ConcurrentHashMap<>();

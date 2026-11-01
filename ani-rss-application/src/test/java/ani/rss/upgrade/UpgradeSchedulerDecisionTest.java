@@ -44,6 +44,20 @@ class UpgradeSchedulerDecisionTest {
         assertTrue(repository.all("upgrade_jobs","t",null,Job.class).isEmpty());
         assertEquals("MONITORING",target.getState()); verifyNoInteractions(downloads);
     }
+    @Test void removingTheLibraryStopsNewAndAlreadyQueuedDownloads() throws Exception {
+        ConfigUtil.CONFIG.getUpgrade().setLibraryIds(List.of());
+        scheduler.evaluateTarget(target);
+        assertTrue(repository.all("upgrade_jobs", target.getId(), null, Job.class).isEmpty());
+        Job queued = new Job();
+        queued.setId("pending");
+        queued.setTargetId(target.getId());
+        queued.setKind("UPGRADE");
+        queued.setState(JobState.QUEUED);
+        scheduler.process(queued);
+        assertEquals(JobState.PAUSED, queued.getState());
+        assertEquals("LIBRARY_REQUIRED", queued.getReasonCode());
+        verifyNoInteractions(downloads);
+    }
     @TempDir Path directory;
     private String prior;
     private Config original;

@@ -32,6 +32,15 @@ class MikanQuarterCatalogTest {
         return new Mikan().setSeasons(List.of(new Mikan.Season().setYear(2024).setSeason("春"),new Mikan.Season().setYear(2013).setSeason("秋")))
                 .setWeeks(List.of(new Mikan.Week().setWeekLabel("OVA").setItems(items))).setTotalItem(size);
     }
+    @Test void excludingAnEntryNeedsOnlyOneVerifiedSubjectLink() {
+        String url="https://mikanani.me/Home/Bangumi/17";
+        String html="<div class='bangumi-info'><a href='https://bgm.tv/subject/777'>Bangumi</a></div>";
+        try(var http=mockStatic(UpgradeHttp.class,CALLS_REAL_METHODS)) {
+            http.when(()->UpgradeHttp.getText(url)).thenReturn(html);
+            assertEquals("777",catalog.exclusionSubject("17"));
+            assertEquals("MIKAN_RSS_LINK_MISSING",assertThrows(UpgradeHttp.SourceFailure.class,()->MikanQuarterCatalog.binding(html,url)).getMessage());
+        }
+    }
     Campaign campaign() {
         Campaign c=new Campaign(); c.setId("c"); c.setName("2024 春"); c.setCatalogSource("MIKAN"); c.setMikanYear(2024); c.setMikanSeason("春"); c.setLibraryId("library"); MikanQuarterCatalog.normalize(c); return c;
     }

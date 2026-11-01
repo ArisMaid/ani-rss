@@ -28,7 +28,7 @@ public class RenameUtil {
     public static Boolean rename(Ani ani, Item item) {
         Config config = ConfigUtil.CONFIG;
 
-        int offset = ani.getOffset();
+        int offset = SubscriptionQualitySelector.sourceOffset(ani,item);
         int season = ani.getSeason();
         String title = ani.getTitle();
         Boolean ova = ani.getOva();

@@ -29,6 +29,23 @@ class UpgradeEmbyIndexTest {
     }
     @AfterEach void after() { DatabaseManager.close(); BeanUtil.copyProperties(original,ConfigUtil.CONFIG); if(prior==null) System.clearProperty("CONFIG"); else System.setProperty("CONFIG",prior); }
 
+    @Test void duplicatePageRestartsAtZeroAndEmptyDeltasKeepOneSealedBatch() {
+        try(var http=mockStatic(UpgradeHttp.class,CALLS_REAL_METHODS)) {
+            http.when(()->UpgradeHttp.get(anyString(),anyMap())).thenReturn(page(2,item("a","A"),item("b","B")));
+            assertTrue(emby.scanStep("library"));
+            http.when(()->UpgradeHttp.get(anyString(),anyMap())).thenReturn(page(0));
+            for(int pass=0;pass<3;pass++) assertTrue(emby.scanStep("library"));
+            assertEquals(2,repository.all("emby_library_items","library",null,JsonObject.class).size());
+            http.when(()->UpgradeHttp.get(anyString(),anyMap())).thenReturn(page(2,item("c","C")),page(2,item("c","C")));
+            assertFalse(emby.scanStep("library"));
+            assertEquals("EMBY_PAGE_DUPLICATED",assertThrows(UpgradeHttp.SourceFailure.class,()->emby.scanStep("library")).getMessage());
+            assertEquals(0,repository.get("upgrade_scan_cursors","emby:library",Cursor.class).orElseThrow().getOffset());
+            assertEquals(2,repository.all("emby_library_items","library",null,JsonObject.class).size());
+            http.when(()->UpgradeHttp.get(contains("StartIndex=0"),anyMap())).thenReturn(page(2,item("c","C"),item("d","D")));
+            assertTrue(emby.scanStep("library")); assertTrue(emby.fresh("library"));
+            assertEquals(4,repository.all("emby_library_items","library",null,JsonObject.class).size());
+        }
+    }
     @Test void failedIncrementalPageCannotChangeLastSealedSnapshotAndRecoveryRetainsUnchangedItems() {
         try(var http=mockStatic(UpgradeHttp.class,CALLS_REAL_METHODS)) {
             http.when(()->UpgradeHttp.get(anyString(),anyMap())).thenReturn(page(2,item("old","Original"),item("unchanged","Keep")));
@@ -44,7 +61,7 @@ class UpgradeEmbyIndexTest {
             http.when(()->UpgradeHttp.get(anyString(),anyMap())).thenReturn(page(201,item("last","Last")));
             assertTrue(emby.scanStep("library")); assertTrue(emby.fresh("library"));
             String next=repository.get("upgrade_scan_cursors","emby:library",Cursor.class).orElseThrow().getCompletedBatch();
-            assertNotEquals(batch,next);
+            assertEquals(batch,next);
             assertEquals("Changed",UpgradeHttp.string(repository.get("emby_library_items",next+":old",JsonObject.class).orElseThrow(),"Name"));
             assertTrue(repository.get("emby_library_items",next+":unchanged",JsonObject.class).isPresent());
         }

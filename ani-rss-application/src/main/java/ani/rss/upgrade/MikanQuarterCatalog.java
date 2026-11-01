@@ -61,9 +61,27 @@ public class MikanQuarterCatalog {
     }
     public record Binding(String subjectId,List<String> feeds) { public Binding { feeds=List.copyOf(feeds); } }
     public static Binding binding(String html,String url) {
-        var document=Jsoup.parse(html,url); Set<String> ids=new LinkedHashSet<>();
+        var document=Jsoup.parse(html,url);
         var mikanId=Pattern.compile("/Home/Bangumi/(\\d+)$").matcher(URI.create(url).getPath());
         if(!mikanId.find()) throw new IllegalArgumentException("Mikan 条目地址无效");
+        String subject=subjectId(document);
+        Set<String> feeds=new LinkedHashSet<>();
+        for(var link:document.select("a[href]")) {
+            String href=link.absUrl("href");
+            if(href.isBlank()) continue;
+            URI uri;
+            try { uri=URI.create(href); } catch(IllegalArgumentException invalidNavigation) { continue; }
+            if(!"/RSS/Bangumi".equalsIgnoreCase(uri.getPath())||!sameSource(href)) continue;
+            var ids=Arrays.stream(Objects.toString(uri.getQuery(),"").split("&"))
+                    .filter(param->param.regionMatches(true,0,"bangumiId=",0,10)).map(param->param.substring(10)).toList();
+            if(ids.equals(List.of(mikanId.group(1)))) feeds.add(href);
+        }
+        if(feeds.isEmpty()) throw new UpgradeHttp.SourceFailure("MIKAN_RSS_LINK_MISSING",false);
+        var aggregate=feeds.stream().filter(feed->!Objects.toString(URI.create(feed).getQuery(),"").toLowerCase(Locale.ROOT).contains("subgroupid=")).toList();
+        return new Binding(subject,aggregate.isEmpty()?new ArrayList<>(feeds):aggregate);
+    }
+    private static String subjectId(org.jsoup.nodes.Document document) {
+        Set<String> ids=new LinkedHashSet<>();
         for(var link:document.select(".bangumi-info a[href]")) {
             URI uri;
             try { uri=URI.create(link.absUrl("href")); } catch(RuntimeException e) { continue; }
@@ -71,23 +89,13 @@ public class MikanQuarterCatalog {
             var match=Pattern.compile("^/subject/(\\d+)/?$").matcher(Objects.toString(uri.getPath(),"")); if(match.matches()) ids.add(match.group(1));
         }
         if(ids.size()!=1) throw new UpgradeHttp.SourceFailure(ids.isEmpty()?"MIKAN_SUBJECT_LINK_MISSING":"MIKAN_SUBJECT_LINK_CONFLICT",false);
-        Set<String> feeds=new LinkedHashSet<>();
-        for(var link:document.select("a[href]")) {
-            String href=link.absUrl("href");
-            if(href.isBlank()) continue;
-            URI uri;
-            try { uri=URI.create(href); } catch(IllegalArgumentException invalidNavigation) { continue; }
-            if("/RSS/Bangumi".equalsIgnoreCase(uri.getPath())&&sameSource(href)&&Objects.toString(uri.getQuery(),"").matches("(?i)(?:.*&)?bangumiId="+mikanId.group(1)+"(?:&.*)?")) feeds.add(href);
-        }
-        if(feeds.isEmpty()) throw new UpgradeHttp.SourceFailure("MIKAN_RSS_LINK_MISSING",false);
-        var aggregate=feeds.stream().filter(feed->!Objects.toString(URI.create(feed).getQuery(),"").toLowerCase(Locale.ROOT).contains("subgroupid=")).toList();
-        return new Binding(ids.iterator().next(),aggregate.isEmpty()?new ArrayList<>(feeds):aggregate);
+        return ids.iterator().next();
     }
     /** Resolve only the title the user is cancelling, using the configured Mikan origin. */
     public String exclusionSubject(String mikanId) {
         if(mikanId==null||!mikanId.matches("[0-9]{1,18}")) throw new IllegalArgumentException("Mikan 作品 ID 无效");
         String url=UpgradeHttp.base(ConfigUtil.snapshot().getMikanHost())+"/Home/Bangumi/"+mikanId;
-        return binding(UpgradeHttp.getText(url),url).subjectId();
+        return subjectId(Jsoup.parse(UpgradeHttp.getText(url),url));
     }
     /** At most three detail requests per scheduler step, with durable snapshot and offset. */
     public boolean scanStep(Campaign campaign,SubjectCatalogProvider subjects) {
@@ -112,7 +120,7 @@ public class MikanQuarterCatalog {
                 Target target=subjects.accept(campaign,subject,"BANGUMI_DETAIL");
                 if(target!=null) {
                     if(entry.getTitle()!=null&&!entry.getTitle().isBlank()&&!target.getAliases().contains(entry.getTitle())) target.getAliases().add(entry.getTitle());
-                    Set<String> feeds=new LinkedHashSet<>(target.getRssUrls()); feeds.addAll(binding.feeds()); target.setRssUrls(new ArrayList<>(feeds));
+                    Set<String> feeds=new LinkedHashSet<>(target.getRssUrls()); feeds.addAll(binding.feeds()); target.getVerifiedRssUrls().addAll(binding.feeds()); target.setRssUrls(new ArrayList<>(feeds));
                     repository.save("upgrade_targets",target.getId(),target.getLibraryId(),target.getSubjectId()+":"+target.getLibraryId(),target.getState(),target.getRevision(),target);
                 }
             } catch(UpgradeHttp.SourceFailure failure) {

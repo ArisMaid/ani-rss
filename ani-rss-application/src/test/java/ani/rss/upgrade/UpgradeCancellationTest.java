@@ -34,7 +34,7 @@ class UpgradeCancellationTest {
         job.setDownloaderType(ConfigUtil.snapshot().getDownloadToolType()); job.setDownloaderIdentity(UpgradeDownloadService.downloaderIdentity(ConfigUtil.snapshot()));
         job.setRemoteTaskId("remote"); job.setReservedBytes(100); job.setStagingPath(temporary.toString()); save(job);
         release=new Release(); release.setInfoHash("a".repeat(40));
-        task=new TorrentsInfo().setId("remote").setHash(release.getInfoHash());
+        task=new TorrentsInfo().setId("remote").setHash(release.getInfoHash()).setSavePath(temporary.toString());
         client=mock(DownloaderClient.class); when(client.inventory()).thenReturn(DownloaderResult.success(List.of(task))); when(client.delete(task,false)).thenReturn(DownloaderResult.success(null));
         torrents=mockStatic(TorrentUtil.class); torrents.when(TorrentUtil::client).thenReturn(client);
     }
@@ -73,6 +73,37 @@ class UpgradeCancellationTest {
         assertEquals(JobState.CANCELLED,job.getState()); assertEquals("CANCEL_STOP_PENDING",job.getReasonCode()); assertEquals(100,job.getReservedBytes()); assertEquals("remote",job.getRemoteTaskId()); assertTrue(job.getRetryAt()>System.currentTimeMillis());
         when(client.delete(task,false)).thenReturn(DownloaderResult.success(null)); scheduler.cancelTransfer(job);
         assertEquals("CANCELLED_TRANSFER_STOPPED",job.getReasonCode()); assertEquals(0,job.getReservedBytes());
+    }
+    @Test void metadataOnlyMagnetCannotStartOrRecoverBeforeItsFilesMatchThePolicy() {
+        var policy=new QualityPolicyEngine.Policy(); policy.setContainers(Set.of("mkv")); policy.setId("mkv-only");
+        repository.save("upgrade_policies",policy.getId(),null,null,"ACTIVE",1,policy);
+        var ani=new ani.rss.entity.Ani().setQualityPolicyId(policy.getId());
+        var service=mock(ani.rss.service.DownloadService.class); when(service.findAniByDownloadPath(task)).thenReturn(Optional.of(ani));
+        var adapter=spy(new ani.rss.download.qBittorrent(service,ConfigUtil.snapshot().setRename(false)));
+        task.setTagList(List.of(SubscriptionQualitySelector.CONTAINER_CHECK_TAG));
+        var file=new ani.rss.entity.torrent.qBittorrentTorrentsInfo.FileEntity().setName("episode.mp4");
+        doReturn(List.of(file)).when(adapter).files(task,false);
+        assertFalse(adapter.rename(task)); assertFalse(adapter.recoverResult(task).isSuccess());
+        verify(adapter,never()).start(any());
+        file.setName("episode.mkv"); doReturn(true).when(adapter).start(task); assertTrue(adapter.rename(task));
+    }
+    @Test void disablingRenameStillSelectsTheRequestedChaptersBeforeStartingTheBatch() {
+        var subscription = new ani.rss.entity.Ani().setOffset(0).setOva(false).setCustomPriorityKeywordsEnable(false);
+        var service = mock(ani.rss.service.DownloadService.class);
+        when(service.findAniByDownloadPath(task)).thenReturn(Optional.of(subscription));
+        var adapter = spy(new qBittorrent(service, ConfigUtil.snapshot().setRename(false)));
+        task.setName("Example").setTagList(List.of(SubscriptionQualitySelector.COLLECTION_TAG,
+                "ani-rss-offset=-12", "ani-rss-chapters=2"));
+        var first = new ani.rss.entity.torrent.qBittorrentTorrentsInfo.FileEntity().setIndex(0).setName("Example S01E13.mkv");
+        var second = new ani.rss.entity.torrent.qBittorrentTorrentsInfo.FileEntity().setIndex(1).setName("Example S01E14.mkv");
+        doReturn(List.of(first, second)).when(adapter).files(task, true);
+        doReturn(true).when(adapter).setFilePriority(task.getHash(), 0, 0);
+        doReturn(true).when(adapter).start(task);
+        assertTrue(adapter.rename(task));
+        var order = inOrder(adapter);
+        order.verify(adapter).setFilePriority(task.getHash(), 0, 0);
+        order.verify(adapter).start(task);
+        verify(adapter, never()).renameFile(anyString(), anyString(), anyString());
     }
     @Test void correctionDtoRejectsIdentityAndEnumsButAllowsAnExplicitContentEdition() {
         var scheduler=mock(UpgradeScheduler.class);

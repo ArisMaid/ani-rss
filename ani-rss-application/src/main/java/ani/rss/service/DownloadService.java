@@ -105,7 +105,8 @@ public class DownloadService {
                 ? List.of() : torrentsResult.value();
 
         int currentDownloadCount = 0;
-        List<Item> items = ItemsUtil.getItems(ani);
+        List<Item> items = ItemsUtil.scanItems(ani);
+        Set<String> containers=SubscriptionQualitySelector.containers(ani);
         Set<String> alreadyCoveredHashes=new HashSet<>();
 
         if(SubscriptionQualitySelector.enabled(ani)&&items.stream().anyMatch(i->new ReleaseAnalysisService().parse(i.getTitle(),ani.getBgmUrl(),"RSS").getEpisodes().size()>1)) {
@@ -236,7 +237,7 @@ public class DownloadService {
             }
 
             // 仅在主RSS更新后删除备用RSS
-            if (delete && master && deleteStandbyRSSOnly) {
+            if (delete && master && deleteStandbyRSSOnly && containersVerified(containers,torrent)) {
                 TorrentsInfo standbyRSS = torrentsInfos
                         .stream()
                         .filter(torrentsInfo -> {
@@ -336,7 +337,7 @@ public class DownloadService {
             if (!isCurrentRuntimeSubscription(ani)) {
                 return false;
             }
-            deleteStandbyRss(ani, item);
+            if(containersVerified(containers,saveTorrent)) deleteStandbyRss(ani, item);
 
             if (!download(ani, item, savePath, saveTorrent)) {
                 missingEpisodeRecoveryService.markSubmissionResult(ani, item, false,
@@ -534,6 +535,17 @@ public class DownloadService {
         }
     }
 
+    private static boolean containersVerified(Set<String> allowed,File input) {
+        if(allowed.isEmpty()) return true;
+        if(!input.isFile()||input.length()==0||!"torrent".equalsIgnoreCase(FileUtil.extName(input))) return false;
+        try {
+            return SubscriptionQualitySelector.permitsFiles(allowed,Arrays.asList(TorrentMetadata.from(input).getFilenames()));
+        } catch(java.io.IOException|RuntimeException e) {
+            log.warn("无法核对种子文件清单 {}",input.getName());
+            return false;
+        }
+    }
+
     private boolean downloadInternal(Ani ani, Item item, String savePath, File torrentFile, boolean notify) {
         ani = ObjectUtil.clone(ani);
 
@@ -547,6 +559,14 @@ public class DownloadService {
 
         if (!torrentFile.exists()) {
             log.error("种子下载出现问题 {} {}", name, FileUtils.getAbsolutePath(torrentFile));
+            return false;
+        }
+        var allowed=SubscriptionQualitySelector.containers(ani);
+        String declared=allowed.isEmpty()?null:new ReleaseAnalysisService().parse(item.getTitle(),ani.getBgmUrl(),"SUBSCRIPTION_RSS").getContainer();
+        if(declared!=null&&!allowed.contains(declared)) return false;
+        boolean metadataOnly=torrentFile.length()==0||"txt".equalsIgnoreCase(FileUtil.extName(torrentFile));
+        if(!containersVerified(allowed,torrentFile)&&!(metadataOnly&&"qBittorrent".equalsIgnoreCase(ConfigUtil.CONFIG.getDownloadToolType()))) {
+            log.warn("容器白名单未通过或缺少可核对的种子文件清单，保留现有版本 {}",name);
             return false;
         }
         ThreadUtil.sleep(1000);

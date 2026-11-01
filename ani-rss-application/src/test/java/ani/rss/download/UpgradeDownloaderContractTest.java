@@ -26,6 +26,31 @@ class UpgradeDownloaderContractTest {
         response="{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"payload-gid\"}";
         var result=new Aria2(config()).submit(submission()); assertTrue(result.isSuccess()); assertEquals("payload-gid",result.remoteTaskId()); assertTrue(bodies.get(0).contains("aria2.addUri")); assertTrue(bodies.get(0).contains("/staging/operation"));
     }
+    @Test void ariaInventoryIncludesTasksBeyondTheFirstWaitingPage() {
+        List<Integer> offsets = new ArrayList<>();
+        server.removeContext("/");
+        server.createContext("/", exchange -> {
+            var request = JsonParser.parseString(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
+            var page = new JsonArray();
+            if ("aria2.tellWaiting".equals(request.get("method").getAsString())) {
+                int offset = request.getAsJsonArray("params").get(1).getAsInt();
+                offsets.add(offset);
+                for (int i = offset; i < Math.min(offset + 1000, 1001); i++) {
+                    JsonObject task = new JsonObject();
+                    task.addProperty("gid", "task-" + i);
+                    task.addProperty("dir", "/staging");
+                    page.add(task);
+                }
+            }
+            byte[] bytes = ("{\"result\":" + page + "}").getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (var out = exchange.getResponseBody()) { out.write(bytes); }
+        });
+        var tasks = new Aria2(config()).inventory().value();
+        assertEquals(List.of(0, 1000), offsets);
+        assertEquals(1001, tasks.size());
+        assertEquals("task-1000", tasks.get(1000).getId());
+    }
     @Test void ariaMetadataRecordCannotPretendToBeFinishedVideoTransfer() {
         var metadata=GsonStatic.fromJson("{\"gid\":\"metadata\",\"status\":\"complete\",\"dir\":\"/staging\",\"completedLength\":100,\"totalLength\":100,\"files\":[]}",Aria2TorrentsInfo.Torrent.class).toTorrentsInfo(); assertEquals("ARIA2_METADATA",metadata.getCategory());
     }

@@ -46,10 +46,24 @@ public class Aria2 implements BaseDownload {
     public DownloaderResult<List<TorrentsInfo>> inventory() {
         List<TorrentsInfo> result=new ArrayList<>();
         result.addAll(getTorrentsInfos(Aria2RpcBody.tellActive(),true));
-        result.addAll(getTorrentsInfos(Aria2RpcBody.tellWaiting(),true));
-        result.addAll(getTorrentsInfos(Aria2RpcBody.tellStopped(),true));
+        result.addAll(inventoryPages(Aria2RpcBody.tellWaiting()));
+        result.addAll(inventoryPages(Aria2RpcBody.tellStopped()));
         result.sort(Comparator.comparing(t->"ARIA2_METADATA".equals(t.getCategory())));
         return DownloaderResult.success(result);
+    }
+    private List<TorrentsInfo> inventoryPages(Aria2RpcBody request) {
+        List<TorrentsInfo> tasks=new ArrayList<>();
+        Set<String> seen=new HashSet<>();
+        int limit=(int)request.getParams().get(2);
+        for(int offset=0;;offset+=limit) {
+            request.getParams().set(1,offset);
+            var page=getTorrentsInfos(request,true);
+            if(page.size()>limit) throw DownloaderOperationException.failed("ARIA2_INVALID_RESPONSE",true);
+            for(var task:page) if(task.getId()==null||!seen.add(task.getId()))
+                throw DownloaderOperationException.failed("ARIA2_INVENTORY_CHANGED",true);
+            tasks.addAll(page);
+            if(page.size()<limit) return tasks;
+        }
     }
     private volatile Config config;
 
@@ -105,6 +119,7 @@ public class Aria2 implements BaseDownload {
 
                     List<Aria2TorrentsInfo.Torrent> result = aria2TorrentsInfo.getResult();
                     if (result == null) {
+                        if(includeMetadata) throw DownloaderOperationException.failed("ARIA2_INVALID_RESPONSE",true);
                         return List.of();
                     }
 

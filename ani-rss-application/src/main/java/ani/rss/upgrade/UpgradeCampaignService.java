@@ -89,22 +89,36 @@ public class UpgradeCampaignService {
         try(var lease=UpgradeFileCoordinator.lease()) {
             return DatabaseManager.transaction(connection -> {
                 campaign.setId(savedId); repository.save("upgrade_campaigns",savedId,null,null,campaign.isEnabled()?"ENABLED":"PAUSED",campaign.getRevision(),campaign);
-                Cursor cursor=new Cursor(); cursor.setId("catalog:"+savedId); cursor.setScope(savedId);
-                repository.save("upgrade_scan_cursors",cursor.getId(),savedId,null,"PENDING",1,cursor);
-                if("MIKAN".equals(campaign.getCatalogSource())) {
-                    Cursor mikanCursor=new Cursor(); mikanCursor.setId("mikan-catalog:"+savedId); mikanCursor.setScope(savedId);
-                    repository.save("upgrade_scan_cursors",mikanCursor.getId(),savedId,null,"PENDING",1,mikanCursor);
+                if(needsCatalogScan(previous,campaign)) {
+                    resetCursor("catalog:"+savedId,savedId);
+                    if("MIKAN".equals(campaign.getCatalogSource())) resetCursor("mikan-catalog:"+savedId,savedId);
                 }
-                Set<String> affected=new HashSet<>(campaign.getExcludedMikanSubjects().values());
-                if(previous!=null&&previous.getExcludedMikanSubjects()!=null) affected.addAll(previous.getExcludedMikanSubjects().values());
+                Set<String> before=previous==null||previous.getExcludedMikanSubjects()==null?Set.of():new HashSet<>(previous.getExcludedMikanSubjects().values());
+                Set<String> after=new HashSet<>(campaign.getExcludedMikanSubjects().values());
+                Set<String> affected=new HashSet<>(after);
+                affected.addAll(before);
+                if(previous!=null&&Objects.equals(previous.getLibraryId(),campaign.getLibraryId()))
+                    affected.removeIf(sid->before.contains(sid)==after.contains(sid));
                 for(String sid:affected) for(Target target:repository.targetsForSubject(sid)) {
-                    if(!Objects.equals(target.getLibraryId(),campaign.getLibraryId())) continue;
+                    if(!Objects.equals(target.getLibraryId(),campaign.getLibraryId())&&(previous==null||!Objects.equals(previous.getLibraryId(),target.getLibraryId()))) continue;
+                    target.setNextScan(0);
                     target.setRevision(target.getRevision()+1);
                     repository.save("upgrade_targets",target.getId(),target.getLibraryId(),target.getSubjectId()+":"+target.getLibraryId(),target.getState(),target.getRevision(),target);
                 }
                 return campaign;
             });
         }
+    }
+    private void resetCursor(String id,String campaign) {
+        Cursor cursor=new Cursor(); cursor.setId(id); cursor.setScope(campaign);
+        repository.save("upgrade_scan_cursors",id,campaign,null,"PENDING",1,cursor);
+    }
+    public static boolean needsCatalogScan(Campaign previous,Campaign current) {
+        if(previous==null||!Objects.equals(previous.getStartDate(),current.getStartDate())
+                ||!Objects.equals(previous.getEndDate(),current.getEndDate())||!Objects.equals(previous.getLibraryId(),current.getLibraryId())
+                ||!Objects.equals(previous.getCatalogSource(),current.getCatalogSource())) return true;
+        return previous.getExcludedMikanSubjects()!=null&&previous.getExcludedMikanSubjects().entrySet().stream()
+                .anyMatch(entry->!Objects.equals(current.getExcludedMikanSubjects().get(entry.getKey()),entry.getValue()));
     }
     public QualityPolicyEngine.Policy effectivePolicy(Target target) {
         String id=nonBlank(target.getPolicyOverride());

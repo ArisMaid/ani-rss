@@ -225,9 +225,30 @@ class UpgradeCommitServiceTest {
             assertTrue(requests.stream().anyMatch(request->request.contains("/Items/series/Refresh")&&request.contains("ReplaceAllMetadata=false")&&request.contains("ReplaceAllImages=false")&&request.contains("Recursive=false")));
         } finally { server.stop(0); }
     }
+    @Test void replacingABorrowedDownloadInsideStagingKeepsTheTaskAndItsSource() throws Exception {
+        Path staging=Files.createDirectories(temporary.resolve("staging"));
+        ConfigUtil.CONFIG.getUpgrade().setStagingRoot(staging.toString());
+        Path borrowed=Files.writeString(staging.resolve("ordinary.mkv"),"ordinary payload");
+        old.setSourcePath(borrowed.toString()); old.setDownloadHash("d".repeat(40)); old.setOrigin("AUTOMATIC_UPGRADE");
+        old.setDownloaderType(ConfigUtil.snapshot().getDownloadToolType());
+        repository.save("upgrade_versions",old.getId(),target.getId(),null,"ACTIVE",1,old);
+        var task=new ani.rss.entity.torrent.TorrentsInfo().setHash(old.getDownloadHash()).setSavePath(staging.toString());
+        var client=mock(DownloaderClient.class); when(client.inventory()).thenReturn(DownloaderResult.success(List.of(task))); torrents.when(TorrentUtil::client).thenReturn(client);
+        service.prepare(job,target,incoming,List.of(old)); service.commit(job,target);
+        assertEquals(JobState.COMPLETED,job.getState()); assertEquals("ordinary payload",Files.readString(borrowed));
+        assertFalse(Files.exists(oldFile)); verify(client,never()).delete(any(),anyBoolean());
+    }
     @Test void downloaderStopFailureKeepsOldAndNewUntilCleanupRetry() throws Exception {
+        old.setDownloaderType(ConfigUtil.snapshot().getDownloadToolType());
         old.setDownloadHash("b".repeat(40)); repository.save("upgrade_versions",old.getId(),target.getId(),null,"ACTIVE",1,old);
-        var task=new ani.rss.entity.torrent.TorrentsInfo().setId("old-task").setHash(old.getDownloadHash());
+        Job owner=new Job(); owner.setId("old-job"); owner.setTargetId(target.getId()); owner.setState(JobState.COMPLETED);
+        owner.setDownloaderType(old.getDownloaderType()); owner.setDownloaderIdentity(UpgradeDownloadService.downloaderIdentity(ConfigUtil.snapshot()));
+        owner.setRemoteTaskId("old-task"); service.saveJob(owner);
+        Release release=new Release(); release.setInfoHash(old.getDownloadHash());
+        var ownership=new UpgradeOwnershipService(); ownership.pending(owner,release,"/staging"); ownership.activate(owner);
+        JobFile installed=new JobFile(); installed.setAction("INSTALL"); installed.setVersionId(old.getId());
+        repository.save("upgrade_job_files","old-install",owner.getId(),null,"INSTALLED",1,installed);
+        var task=new ani.rss.entity.torrent.TorrentsInfo().setId("old-task").setHash(old.getDownloadHash()).setSavePath("/staging");
         DownloaderClient client=mock(DownloaderClient.class); torrents.when(TorrentUtil::client).thenReturn(client);
         when(client.inventory()).thenReturn(DownloaderResult.success(List.of(task))); when(client.delete(task,false)).thenReturn(DownloaderResult.failed("PAUSE_FAILED",true));
         service.prepare(job,target,incoming,List.of(old)); assertThrows(java.io.IOException.class,()->service.commit(job,target));

@@ -7,7 +7,6 @@ import java.util.*;
 public final class UpgradeCoverageService {
     private UpgradeCoverageService() {}
     public static Map<String,Object> assess(UpgradeRepository repository,Target target,QualityPolicyEngine.Policy policy) {
-        var discovery=UpgradeModels.snapshot(policy,QualityPolicyEngine.Policy.class); discovery.setContainers(Set.of());
         var engine=new QualityPolicyEngine(); Set<String> expected=new TreeSet<>(),eligible=new TreeSet<>(),installed=new TreeSet<>();
         String today=java.time.LocalDate.now(java.time.ZoneId.of(ani.rss.util.other.ConfigUtil.snapshot().getUpgrade().getTimezone())).toString();
         if(SubjectEpisodeResolver.isMovie(target)) expected.add("MOVIE:MOVIE");
@@ -21,7 +20,7 @@ public final class UpgradeCoverageService {
         for(Release saved:releases) {
             if("MERGED".equals(saved.getState())) continue;
             Release release=UpgradeModels.snapshot(saved,Release.class); SubjectEpisodeResolver.normalizeChapters(target,release);
-            var decision=engine.evaluate(discovery,release,null);
+            var decision=engine.discover(policy,release,null,null);
             if(decision.verdict()==QualityPolicyEngine.Verdict.UPGRADE) { qualifying++; release.getEpisodes().forEach(e->eligible.add(release.getChapterType()+":"+e)); }
             if(decision.verdict()==QualityPolicyEngine.Verdict.IDENTITY_CONFLICT) identityConflicts++;
             if(decision.verdict()==QualityPolicyEngine.Verdict.WAITING_EVIDENCE) evidencePending++;

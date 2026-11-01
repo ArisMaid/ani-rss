@@ -25,6 +25,24 @@ class UpgradeSourceContractTest {
         var wrong=new ReleaseAnalysisService().parse("[A] Example - 01 [1080p][CHS]","100","RSS"); wrong.getEvidence().add(new Evidence("SOURCE_IDENTITY_REJECTED","identity","other work"));
         assertEquals(QualityPolicyEngine.Verdict.IDENTITY_CONFLICT,new QualityPolicyEngine().evaluate(new QualityPolicyEngine.Policy(),wrong,null).verdict());
     }
+    @Test void aMixedFeedRetainsOnlyTheExactSeriesAndRechecksStoredCandidates() {
+        var repository=new UpgradeRepository();
+        var parser=new ReleaseAnalysisService();
+        var provider=new ReleaseProvider(repository,parser);
+        Target target=new Target(); target.setId("target"); target.setSubjectId("42"); target.setTitle("Blue Box");
+        String url="https://example.test/mixed"; target.setRssUrls(List.of(url));
+        var sequel=new ani.rss.util.other.ItemsUtil.RawRelease("b","[Group] Blue Box Returns S01E01 [1080p]","magnet:?xt=urn:btih:"+"b".repeat(40));
+        var match=new ani.rss.util.other.ItemsUtil.RawRelease("a","[Group] Blue Box S01E01 [720p]","magnet:?xt=urn:btih:"+"a".repeat(40));
+        try(var feeds=mockStatic(ani.rss.util.other.ItemsUtil.class)) {
+            feeds.when(()->ani.rss.util.other.ItemsUtil.getItemsRaw(url)).thenReturn(List.of(sequel,match));
+            provider.rss(target);
+        }
+        assertEquals(List.of(match.title()),repository.all("upgrade_releases","target",null,Release.class).stream().map(Release::getTitle).toList());
+        Release legacy=parser.parse(sequel.title(),"42","RSS"); legacy.setTargetId("target"); legacy.setSourceId("legacy");
+        provider.accept(legacy); provider.refreshStoredEvidence(target);
+        Release stored=repository.get("upgrade_releases",legacy.getId(),Release.class).orElseThrow();
+        assertTrue(stored.getEvidence().stream().anyMatch(e->"SOURCE_IDENTITY_REJECTED".equals(e.getSource())));
+    }
     @Test void actualTraditionalExternalSubtitleOverridesTheSimplifiedDeclarationInTheInstallManifest() throws Exception {
         var verification=new MediaVerificationService(); Assumptions.assumeTrue(verification.available("ffmpeg")&&verification.available("ffprobe"));
         Path video=directory.resolve("Example - 01.mkv"),subtitle=directory.resolve("Example - 01.cht.srt");
@@ -193,7 +211,7 @@ class UpgradeSourceContractTest {
     }
     @Test void mikanFeedsAreReusedBetweenDailyDiscoveryPasses() {
         var repository=new UpgradeRepository(); var provider=new ReleaseProvider(repository,new ReleaseAnalysisService());
-        Target target=new Target(); target.setId("t"); target.setSubjectId("100");
+        Target target=new Target(); target.setId("t"); target.setSubjectId("100"); target.setTitle("Example");
         Cursor cursor=new Cursor(); cursor.setId("mikan:t"); cursor.setLastSuccess(System.currentTimeMillis()); cursor.getDiscoveredFeeds().add("https://mikan.example/rss/100");
         repository.save("upgrade_scan_cursors",cursor.getId(),target.getId(),null,"COMPLETE",1,cursor);
         try(var feeds=mockStatic(ani.rss.util.other.ItemsUtil.class)) {

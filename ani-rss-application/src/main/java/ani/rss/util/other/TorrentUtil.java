@@ -10,6 +10,7 @@ import ani.rss.entity.Ani;
 import ani.rss.entity.Config;
 import ani.rss.entity.Item;
 import ani.rss.entity.torrent.TorrentsInfo;
+import ani.rss.upgrade.SubscriptionQualitySelector;
 import ani.rss.enums.StringEnum;
 import ani.rss.enums.TorrentsStateEnum;
 import ani.rss.enums.TorrentsTagEnum;
@@ -176,6 +177,7 @@ public class TorrentUtil {
         // existing regular cache file so download, recovery, and media
         // access all resolve the same local input regardless of that link
         // representation change.
+        if (SubscriptionQualitySelector.enabled(ani) && torrentCache.isFile() && torrentCache.length()>0) return torrentCache;
         if (magnetCache.isFile()) {
             return magnetCache;
         }
@@ -376,12 +378,11 @@ public class TorrentUtil {
         ani.rss.ownership.DownloadOwnership ownership =
                 ownershipService().requireOwned(downloaderType, torrentsInfo);
         Config config = ConfigUtil.CONFIG;
-        Boolean rename = config.getRename();
-        if (!rename) {
-            return;
-        }
-
-        List<String> tags = torrentsInfo.getTagList();
+        List<String> tags = java.util.Objects.requireNonNullElse(torrentsInfo.getTagList(),List.of());
+        boolean metadataOnly=!config.getRename();
+        boolean needsPreparation = tags.contains(SubscriptionQualitySelector.CONTAINER_CHECK_TAG)
+                || tags.contains(SubscriptionQualitySelector.COLLECTION_TAG);
+        if (metadataOnly && (!needsPreparation || tags.contains(SubscriptionQualitySelector.PREPARED_TAG))) return;
         if (tags.contains(TorrentsTagEnum.RENAME.getValue())) {
             return;
         }
@@ -390,7 +391,7 @@ public class TorrentUtil {
         Boolean renamed = activeClient.rename(torrentsInfo).isSuccess();
         markSnapshotDirty();
         if (renamed) {
-            addTags(torrentsInfo, TorrentsTagEnum.RENAME.getValue());
+            addTags(torrentsInfo, metadataOnly ? SubscriptionQualitySelector.PREPARED_TAG : TorrentsTagEnum.RENAME.getValue());
             ownershipService().captureFiles(ownership.ownershipId(), torrentsInfo);
         }
     }

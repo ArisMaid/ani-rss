@@ -138,8 +138,7 @@ public class UpgradeCommitService {
     public void commit(Job job,Target target) throws IOException {
         if(!COMMIT.tryLock()) throw new IOException("COMMIT_BUSY");
         try {
-            Set<JobState> recoveringStates=Set.of(JobState.INSTALLING,JobState.INSTALLED,JobState.CLEANING_OLD,JobState.CLEANUP_PENDING);
-            if(!recoveringStates.contains(job.getState())&&repository.all("upgrade_jobs",null,null,Job.class).stream().anyMatch(j->!Objects.equals(j.getId(),job.getId())&&recoveringStates.contains(j.getState()))) throw new IOException("PREVIOUS_COMMIT_RECOVERY_PENDING");
+            if (!job.getState().commitStarted() && repository.commitPending(job.getId())) throw new IOException("PREVIOUS_COMMIT_RECOVERY_PENDING");
             List<JobFile> files=repository.all("upgrade_job_files",job.getId(),null,JobFile.class);
             List<JobFile> installs=files.stream().filter(f->"INSTALL".equals(f.getAction())).toList();
             if(installs.isEmpty()) throw new IOException("INSTALL_MANIFEST_EMPTY");
@@ -151,6 +150,19 @@ public class UpgradeCommitService {
                 if(!recovering) {
                     var policy=repository.get("upgrade_policies",job.getPolicyId(),QualityPolicyEngine.Policy.class).orElseThrow();
                     Target latest=repository.get("upgrade_targets",target.getId(),Target.class).orElseThrow();
+                    Release release=repository.get("upgrade_releases",job.getReleaseId(),Release.class).orElse(null);
+                    if(job.getReleaseId()!=null&&release==null) throw new IOException("RELEASE_IDENTITY_MISSING");
+                    if(release!=null) {
+                        if(SourceIdentityRules.unverifiedRss(latest,release,release.getTitle())) throw new IOException("RSS_SUBJECT_IDENTITY_UNVERIFIED");
+                        for(JobFile file:installs) if("VIDEO".equals(file.getKind())
+                                &&SourceIdentityRules.unverifiedRss(latest,release,UpgradePaths.fileName(Path.of(file.getSource()))))
+                            throw new IOException("RSS_FILE_IDENTITY_UNVERIFIED");
+                    }
+                    if(job.getTargetRevision()>0) {
+                        var selections=new UpgradeCampaignService(repository,new QualityPolicyEngine());
+                        if(!config.getUpgrade().hasLibrary(latest.getLibraryId())||!selections.eligible(latest)||!Objects.equals(selections.effectivePolicy(latest).getId(),job.getPolicyId()))
+                            throw new IOException("POLICY_OR_TARGET_CHANGED");
+                    }
                     if(policy.getRevision()!=job.getPolicyRevision()||latest.isExcluded()||job.getTargetRevision()>0&&latest.getRevision()!=job.getTargetRevision()) throw new IOException("POLICY_OR_TARGET_CHANGED");
                     if(!Objects.equals(job.getBaselineFingerprint(),baseline(latest,installs))) {
                         job.setState(JobState.VERIFYING); job.setReasonCode("BASELINE_CHANGED"); job.setMessage("已有版本发生变化，重新校验已下载资源与当前基线"); job.setRetryAt(0); job.setRetryable(true); saveJob(job);
@@ -235,7 +247,7 @@ public class UpgradeCommitService {
         job.setState(JobState.CLEANING_OLD); saveJob(job);
         try {
             for(JobFile file:files) {
-                if(!Set.of("DELETE_OLD","DELETE_SOURCE").contains(file.getAction())||"DELETED".equals(file.getState())) continue;
+                if(!Set.of("DELETE_OLD","DELETE_SOURCE").contains(file.getAction())||Set.of("DELETED","RETAINED_SHARED_SOURCE").contains(file.getState())) continue;
                 if("DELETE_OLD".equals(file.getAction())&&repository.all("upgrade_versions",null,"ACTIVE",Version.class).stream().anyMatch(v->Objects.equals(v.getPath(),file.getSource())&&(v.isProtectedVersion()||!Objects.equals(v.getTargetId(),job.getTargetId())))) throw new IOException("OLD_PATH_SHARED_OR_PROTECTED");
                 if("DELETE_SOURCE".equals(file.getAction())) {
                     boolean referenced=repository.all("upgrade_versions",null,"ACTIVE",Version.class).stream().anyMatch(v->!job.getVersionIds().contains(v.getId())&&(Objects.equals(v.getSourcePath(),file.getSource())||Objects.equals(v.getPath(),file.getSource())));
@@ -248,7 +260,9 @@ public class UpgradeCommitService {
                     if(a.size()!=file.getSize()||a.lastModifiedTime().toMillis()!=file.getModifiedAt()
                             ||!Objects.equals(Objects.toString(a.fileKey(),null),file.getFileKey())
                             ||!MediaVerificationService.sha256(old).equals(file.getSha256())) throw new IOException("OLD_FILE_CHANGED");
-                    stopAssociatedTasks(file);
+                    if(!mayRemoveFile(job,file)) {
+                        file.setState("RETAINED_SHARED_SOURCE"); saveFile(file); continue;
+                    }
                     paths.requireSafe(old,Path.of(file.getAllowedRoot()),true);
                     var stopped=Files.readAttributes(old,BasicFileAttributes.class,LinkOption.NOFOLLOW_LINKS);
                     if(stopped.size()!=file.getSize()||stopped.lastModifiedTime().toMillis()!=file.getModifiedAt()||!Objects.equals(Objects.toString(stopped.fileKey(),null),file.getFileKey())||!MediaVerificationService.sha256(old).equals(file.getSha256())) throw new IOException("OLD_FILE_CHANGED_AFTER_STOP");
@@ -259,31 +273,55 @@ public class UpgradeCommitService {
                 file.setState("DELETED"); file.setError(null); saveFile(file);
                 if("DELETE_OLD".equals(file.getAction())) repository.get("upgrade_versions",file.getVersionId(),Version.class).ifPresent(v->{ v.setActive(false); repository.save("upgrade_versions",v.getId(),v.getTargetId(),null,"RETIRED",1,v); });
             }
-            job.setState(JobState.COMPLETED); job.setReasonCode("UPGRADE_COMPLETE"); job.setMessage("新版已安装，清单内旧文件已全部删除"); job.setRetryable(false); saveJob(job);
+            job.setState(JobState.COMPLETED); job.setReasonCode("UPGRADE_COMPLETE"); job.setMessage("新版已安装，旧文件已按归属完成清理"); job.setRetryable(false); saveJob(job);
             repository.event(job.getId(),"UPGRADE_COMPLETE",job.getMessage());
         } catch(IOException|RuntimeException e) {
             job.setState(JobState.CLEANUP_PENDING); job.setReasonCode("OLD_CLEANUP_FAILED"); job.setMessage("新版可用，旧文件清理待重试："+Objects.toString(e.getMessage(),"IO_ERROR")); job.setRetryable(true); saveJob(job);
             throw e;
         }
     }
-    private void stopAssociatedTasks(JobFile file) throws IOException {
+    private boolean mayRemoveFile(Job replacement,JobFile file) throws IOException {
+        boolean source="DELETE_SOURCE".equals(file.getAction());
         Version version=repository.get("upgrade_versions",file.getVersionId(),Version.class).orElse(null);
-        if((ConfigUtil.snapshot().getDownloadToolHost()==null||ConfigUtil.snapshot().getDownloadToolHost().isBlank())&&version!=null&&"EMBY_ADOPTED".equals(version.getOrigin())&&version.getDownloadHash()==null) return;
+        if(version==null) return false;
+        var config=ConfigUtil.snapshot();
+        var ownership=new UpgradeOwnershipService();
+        var transfer=ownership.installedTransfer(version).orElse(null);
+        boolean separateLink=!source&&!Objects.equals(version.getSourcePath(),file.getSource());
+        boolean exclusive=transfer!=null&&Objects.equals(transfer.job().getDownloaderIdentity(),UpgradeDownloadService.downloaderIdentity(config))
+                &&repository.transferConsumer(transfer.job()).isEmpty()
+                &&repository.all("upgrade_versions",null,"ACTIVE",Version.class).stream().noneMatch(other->
+                        !replacement.getVersionIds().contains(other.getId())&&version.getDownloadHash().equalsIgnoreCase(other.getDownloadHash()));
+        if(source) {
+            String root=config.getUpgrade().getStagingRoot();
+            if(!exclusive||root==null||root.isBlank()||!Path.of(file.getSource()).toAbsolutePath().normalize()
+                    .startsWith(Path.of(root).toAbsolutePath().normalize().resolve(".ani-rss-upgrade").resolve(transfer.job().getId()))) return false;
+        } else if(!exclusive&&!separateLink) return false;
+        if(!exclusive&&(config.getDownloadToolHost()==null||config.getDownloadToolHost().isBlank())) return separateLink;
+
         DownloaderClient client=TorrentUtil.client();
         if(client==null) throw new IOException("DOWNLOADER_UNAVAILABLE_FOR_CLEANUP");
-        var result=client.inventory();
-        if(!result.isSuccess()) throw new IOException("DOWNLOADER_SNAPSHOT_FAILED");
-        UpgradeSettings settings=ConfigUtil.snapshot().getUpgrade();
-        for(TorrentsInfo task:result.value()) {
-            boolean associated=version!=null&&version.getDownloadHash()!=null&&version.getDownloadHash().equalsIgnoreCase(task.getHash());
-            if(!associated&&task.getFilesSupplier()!=null) {
-                for(String remote:task.getFilesSupplier().get()) {
-                    String combined=Path.of(remote).isAbsolute()?remote:task.getSavePath()+"/"+remote;
-                    try { if(paths.map(combined,settings.getDownloaderMappings()).equals(Path.of(file.getSource()))) associated=true; }
-                    catch(IllegalArgumentException ignored) { }
-                }
-            }
-            if(associated&&!client.delete(task,false).isSuccess()) throw new IOException("OLD_TASK_STOP_FAILED");
+        var inventory=client.inventory();
+        if(!inventory.isSuccess()) throw new IOException("DOWNLOADER_SNAPSHOT_FAILED");
+        TorrentsInfo ownedTask=null;
+        for(TorrentsInfo task:inventory.value()) {
+            boolean sameHash=version.getDownloadHash()!=null&&version.getDownloadHash().equalsIgnoreCase(task.getHash());
+            if(exclusive&&sameHash&&!transfer.stopped()&&transfer.remoteId()!=null
+                    &&(transfer.remoteId().equals(task.getId())||transfer.remoteId().equalsIgnoreCase(task.getHash()))
+                    &&UpgradeOwnershipService.sameSaveRoot(task,transfer.saveRoot())) ownedTask=task;
+            else if(source&&sameHash||taskUsesPath(task,file,config)) return false;
         }
+        if(ownedTask!=null&&!client.delete(ownedTask,false).isSuccess()) throw new IOException("OLD_TASK_STOP_FAILED");
+        if(exclusive&&!transfer.stopped()) ownership.stopped(transfer.job());
+        return true;
+    }
+    private boolean taskUsesPath(TorrentsInfo task,JobFile file,ani.rss.entity.Config config) {
+        if(task.getFilesSupplier()==null||task.getSavePath()==null) return false;
+        for(String name:task.getFilesSupplier().get()) {
+            String remote=Path.of(name).isAbsolute()||name.startsWith("/")?name:task.getSavePath()+"/"+name;
+            try { if(paths.map(remote,config.getUpgrade().getDownloaderMappings()).equals(Path.of(file.getSource()))) return true; }
+            catch(IllegalArgumentException ignored) { }
+        }
+        return false;
     }
 }

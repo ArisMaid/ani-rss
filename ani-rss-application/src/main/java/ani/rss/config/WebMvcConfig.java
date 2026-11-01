@@ -2,6 +2,10 @@ package ani.rss.config;
 
 import ani.rss.commons.GsonStatic;
 import ani.rss.util.other.ConfigUtil;
+import ani.rss.service.TaskCoordinator;
+import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import cn.hutool.core.util.ClassUtil;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
@@ -10,6 +14,8 @@ import org.springframework.http.MediaType;
 import org.springframework.http.converter.HttpMessageConverters;
 import org.springframework.http.converter.json.GsonHttpMessageConverter;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.PathMatchConfigurer;
 import org.springframework.web.servlet.config.annotation.ResourceHandlerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
@@ -18,9 +24,30 @@ import org.springframework.web.util.pattern.PathPatternParser;
 
 import java.nio.charset.StandardCharsets;
 import java.io.File;
+import java.io.IOException;
 
 @Configuration
 public class WebMvcConfig implements WebMvcConfigurer {
+    @Resource
+    private TaskCoordinator coordinator;
+
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(new HandlerInterceptor() {
+            @Override
+            public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws IOException {
+                if (coordinator.enterWork()) return true;
+                response.sendError(HttpServletResponse.SC_SERVICE_UNAVAILABLE, "Restore in progress");
+                return false;
+            }
+
+            @Override
+            public void afterCompletion(HttpServletRequest request, HttpServletResponse response, Object handler, Exception failure) {
+                coordinator.leaveWork();
+            }
+        }).addPathPatterns("/api/v2/upgrade/**");
+    }
+
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
         File webuiDir = new File(ConfigUtil.getConfigDir(), "webui");

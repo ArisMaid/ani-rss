@@ -50,6 +50,21 @@ public class QualityPolicyEngine {
     }
 
     public Decision evaluate(Policy p, Release candidate, Release current) {
+        return evaluate(p,candidate,current,null,false);
+    }
+
+    /** Compare quality on an overlapping chapter. Commit checks coverage of the entire old file separately. */
+    public Decision evaluateOverlap(Policy p,Release candidate,Release current) {
+        String chapter=current.getEpisodes().stream().filter(candidate.getEpisodes()::contains).findFirst().orElse(null);
+        return evaluate(p,candidate,current,chapter,false);
+    }
+
+    /** Discovery can defer an unknown container. Known evidence always participates. */
+    public Decision discover(Policy p,Release candidate,Release current,String chapter) {
+        return evaluate(p,candidate,current,chapter,true);
+    }
+
+    private Decision evaluate(Policy p,Release candidate,Release current,String chapter,boolean discovery) {
         validate(p);
         List<String> why = new ArrayList<>();
         if(candidate!=null&&candidate.getEvidence().stream().anyMatch(e->"SOURCE_IDENTITY_REJECTED".equals(e.getSource())))
@@ -64,13 +79,13 @@ public class QualityPolicyEngine {
                 || !Objects.equals(candidate.getSeason(),current.getSeason())
                 || !Objects.equals(candidate.getChapterType(),current.getChapterType())
                 || !Objects.equals(candidate.getContentEdition(),current.getContentEdition())
-                || !candidate.getEpisodes().containsAll(current.getEpisodes())))
+                || !(chapter==null?candidate.getEpisodes().containsAll(current.getEpisodes()):candidate.getEpisodes().contains(chapter)&&current.getEpisodes().contains(chapter))))
             return decision(Verdict.IDENTITY_CONFLICT,"COVERAGE_IDENTITY_CONFLICT","identity",why,"作品、季、章节类型或多集覆盖不一致");
-        Condition hard = conditions(p,candidate,why);
+        Condition hard = conditions(p,candidate,why,discovery);
         if (hard==Condition.NO) return new Decision(Verdict.REJECTED,"HARD_CONDITION_FAILED","hardConditions",why);
         if (hard==Condition.UNKNOWN) return new Decision(Verdict.WAITING_EVIDENCE,"HARD_CONDITION_UNKNOWN","hardConditions",why);
         if (current==null) return decision(Verdict.UPGRADE,"FIRST_DOWNLOAD","coverage",why,"缺少已有版本，候选满足全部硬条件");
-        if (conditions(p,current,new ArrayList<>())==Condition.NO)
+        if (conditions(p,current,new ArrayList<>(),discovery)==Condition.NO)
             return decision(Verdict.UPGRADE,"REPAIR_HARD_CONDITION","hardConditions",why,"已有版本违反硬条件，新版本满足，执行修复升级");
         for (Dimension d:p.getDimensions()) {
             if (d==Dimension.GROUP && p.getGroups().isEmpty()) continue;
@@ -90,7 +105,7 @@ public class QualityPolicyEngine {
     private static Decision decision(Verdict v,String code,String field,List<String> why,String text) {
         why.add(text); return new Decision(v,code,field,List.copyOf(why));
     }
-    private Condition conditions(Policy p,Release r,List<String> why) {
+    private Condition conditions(Policy p,Release r,List<String> why,boolean discovery) {
         boolean unknown=false;
         if (r.getResolution()==null) { if(p.getMinimumResolution()>0) { why.add("最低分辨率证据缺失"); unknown=true; } }
         else if(r.getResolution()<p.getMinimumResolution()) { why.add("低于最低 "+p.getMinimumResolution()+"p"); return Condition.NO; }
@@ -114,7 +129,7 @@ public class QualityPolicyEngine {
             if(groups.isEmpty()) { why.add("必须字幕组未知"); unknown=true; }
             else { why.add("字幕组不在允许列表"); return Condition.NO; }
         }
-        if(!p.getContainers().isEmpty()) {
+        if(!p.getContainers().isEmpty()&&(!discovery||r.getContainer()!=null)) {
             if(r.getContainer()==null) { why.add("容器尚未确认"); unknown=true; }
             else if(!p.getContainers().contains(r.getContainer().toLowerCase(Locale.ROOT))) { why.add("不支持的资源格式"); return Condition.NO; }
         }

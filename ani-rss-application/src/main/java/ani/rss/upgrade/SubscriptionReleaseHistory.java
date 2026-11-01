@@ -21,7 +21,7 @@ public final class SubscriptionReleaseHistory {
             repository.save("upgrade_scan_cursors",id,target.getId(),null,success?"COMPLETE":"DEFERRED",1,cursor);
         }
     }
-    public static List<Item> merge(Ani subscription,String rss,List<Item> current) {
+    public static List<Item> merge(Ani subscription,String rss,List<Item> current,boolean recordHistory) {
         if(!SubscriptionQualitySelector.enabled(subscription)||!Objects.equals(rss,subscription.getUrl())) return current;
         var match=java.util.regex.Pattern.compile("/subject/(\\d+)").matcher(Objects.toString(subscription.getBgmUrl(),""));
         if(!match.find()) return current;
@@ -35,7 +35,7 @@ public final class SubscriptionReleaseHistory {
             for(Item item:current) {
                 if(SubjectEpisodeResolver.storySeason(target)!=null) item.setExpectedSourceSeason(SubjectEpisodeResolver.storySeason(target));
                 if(SubjectEpisodeResolver.seasonLabelVariant(target,parser.parse(item.getTitle(),target.getSubjectId(),"RSS_IDENTITY"))) item.setSourceSeasonLabelVerified(true);
-                if(!SourceIdentityRules.titleMatches(target,item.getTitle())) continue;
+                if(!recordHistory||!SourceIdentityRules.rssTitleMatches(target,item.getTitle())) continue;
                 Release release=parser.parse(item.getTitle(),target.getSubjectId(),"SUBSCRIPTION_RSS");
                 release.setTargetId(target.getId()); release.setSourceId(item.getInfoHash()); release.setInfoHash(ReleaseAnalysisService.canonicalHash(item.getTorrent()));
                 if(release.getInfoHash()==null) continue;
@@ -48,7 +48,7 @@ public final class SubscriptionReleaseHistory {
             for(Release release:facts) {
                 if("MERGED".equals(release.getState())||release.getInfoHash()==null||release.getTorrentUrl()==null
                         ||release.getEvidence().stream().anyMatch(e->"SOURCE_IDENTITY_REJECTED".equals(e.getSource()))
-                        ||!SourceIdentityRules.bound(release)&&!SourceIdentityRules.titleMatches(target,release.getTitle())) continue;
+                        ||SourceIdentityRules.unverifiedRss(target,release,release.getTitle())||!SourceIdentityRules.bound(release)&&!SourceIdentityRules.titleMatches(target,release.getTitle())) continue;
                 Release identity=UpgradeModels.snapshot(release,Release.class); SubjectEpisodeResolver.normalizeChapters(target,identity);
                 if(identity.getEvidence().stream().anyMatch(e->Set.of("CHAPTER_IDENTITY_UNRESOLVED","SOURCE_SEASON_CONFLICT").contains(e.getSource()))) continue;
                 Integer expectedSeason=SubjectEpisodeResolver.storySeason(target);

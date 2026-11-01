@@ -23,6 +23,7 @@ public class SpaceReservationService {
         if(margin>usable||bytes>usable-margin||other>usable-margin-bytes) throw new IOException("INSUFFICIENT_DISK_SPACE");
         reservations.put(operationId,new Reservation(key,bytes));
     }
+    synchronized void releaseAll() { reservations.clear(); }
     public synchronized void release(String operationId) { reservations.remove(operationId); }
     public synchronized void transfer(String from,String to) {
         Reservation source=reservations.remove(from),existing=reservations.get(to);

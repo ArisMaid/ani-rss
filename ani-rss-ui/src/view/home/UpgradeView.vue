@@ -263,6 +263,7 @@ const targetPage = ref({}), candidatePage = ref({}), jobPage = ref({})
 const versionPage = ref({}), aliasText = ref('{}')
 const targetOffset = ref(0), candidateOffset = ref(0), jobOffset = ref(0), versionOffset = ref(0), selectedTarget = ref(null)
 const targetCoverage = ref(null)
+let detailRequest = 0, candidateRequest = 0, versionRequest = 0
 const embyMappingText = ref(''), downloaderMappingText = ref(''), libraryText = ref('')
 const campaignDialog = ref(false), campaignForm = ref({}), policyDialog = ref(false), policyForm = ref(defaultPolicy()), preview = ref(null), dragIndex = ref(-1)
 const fansubSearch = ref({})
@@ -297,7 +298,11 @@ let timer
 async function loadStatus() { status.value = (await api.get(`${base}/status`)).data }
 async function loadTargets() { targetPage.value = (await api.get(`${base}/targets?offset=${targetOffset.value}`)).data }
 async function loadJobs() { jobPage.value = (await api.get(`${base}/jobs?offset=${jobOffset.value}`)).data }
-async function loadCandidates() { candidatePage.value = (await api.get(`${base}/candidates?targetId=${encodeURIComponent(selectedTarget.value.id)}&offset=${candidateOffset.value}`)).data }
+async function loadCandidates() {
+  const request = ++candidateRequest
+  const response = await api.get(`${base}/candidates?targetId=${encodeURIComponent(selectedTarget.value.id)}&offset=${candidateOffset.value}`)
+  if (request === candidateRequest) candidatePage.value = response.data
+}
 async function loadSettings() {
   config.value = (await api.get('/api/v2/config')).data
   settings.value = clone(config.value.upgrade)
@@ -403,8 +408,22 @@ async function previewPolicy() {
   const common = {subjectId: 'example', episodes: ['1'], languages: ['CHS'], container: 'mkv', chapterType: 'NORMAL', correction: 1}
   preview.value = (await api.post(`${base}/evaluate`, {policy: {...policyForm.value, groupAliases: mergeFansubAliases(JSON.parse(aliasText.value), presetCatalog.value.groups)}, candidate: {...common, groups: [policyForm.value.groups[0] || 'A组'], resolution: 1080}, current: {...common, groups: [policyForm.value.groups[1] || 'B组'], resolution: 2160}})).data
 }
-async function showCandidates(target) { selectedTarget.value = target; targetCoverage.value = null; candidateOffset.value = 0; versionOffset.value = 0; await Promise.all([loadCandidates(), loadVersions(), api.get(`${base}/targets/${encodeURIComponent(target.id)}/coverage`).then(response => { targetCoverage.value = response.data })]) }
-async function loadVersions() { versionPage.value = (await api.get(`${base}/versions?targetId=${encodeURIComponent(selectedTarget.value.id)}&offset=${versionOffset.value}`)).data }
+async function showCandidates(target) {
+  const request = ++detailRequest
+  selectedTarget.value = target
+  targetCoverage.value = null
+  detailDialog.value = false
+  candidatePage.value = {}; versionPage.value = {}
+  candidateOffset.value = 0; versionOffset.value = 0
+  await Promise.all([loadCandidates(), loadVersions(), api.get(`${base}/targets/${encodeURIComponent(target.id)}/coverage`).then(response => {
+    if (request === detailRequest) targetCoverage.value = response.data
+  })])
+}
+async function loadVersions() {
+  const request = ++versionRequest
+  const response = await api.get(`${base}/versions?targetId=${encodeURIComponent(selectedTarget.value.id)}&offset=${versionOffset.value}`)
+  if (request === versionRequest) versionPage.value = response.data
+}
 function showCandidate(row) {
   detailTitle.value = '候选证据'; detail.value = row; detailDialog.value = true
   correctionText.value = JSON.stringify(Object.fromEntries(['subjectId','episodes','season','groups','languages','subtitleLayout','subtitlePackaging','resolution','chapterType','contentEdition'].map(field => [field, row[field]])), null, 2)
@@ -424,7 +443,11 @@ async function exportPreview(targetId) {
     ElMessage.success('已导出只读比较结果，未创建下载或文件操作')
   } finally { busy.value = false }
 }
-async function protect(row, value) { await api.put(`${base}/versions/${row.id}/protection`, {protectedVersion: value}); await loadVersions() }
+async function protect(row, value) {
+  if (row.targetId !== selectedTarget.value?.id || !versionPage.value.items?.some(v => v.id === row.id)) return
+  await api.put(`${base}/versions/${row.id}/protection`, {protectedVersion: value})
+  if (row.targetId === selectedTarget.value?.id) await loadVersions()
+}
 async function importEmby() { await api.post(`${base}/emby/import-notification`, {}); await loadSettings(); await loadStatus() }
 function editTarget(target) { targetForm.value = {...clone(target), policyId: target.policyOverride, libraryLocked: target.libraryId !== 'UNASSIGNED'}; episodeMapText.value = JSON.stringify(target.episodeMapping || {}); rssText.value = (target.rssUrls || []).join('\n'); targetDialog.value = true }
 async function saveTarget() { try { await api.put(`${base}/targets/${targetForm.value.id}/override`, {...targetForm.value, episodeMapping: JSON.parse(episodeMapText.value), rssUrls: rssText.value.split('\n').map(s => s.trim()).filter(Boolean)}); targetDialog.value = false; await loadTargets() } catch(e) { if(e instanceof SyntaxError) ElMessage.error('章节映射 JSON 格式错误'); else throw e } }
@@ -439,7 +462,7 @@ async function inspect(path, title) { detail.value = (await api.post(base + path
 async function syncLibraries() { for(const id of settings.value.libraryIds) await api.post(`${base}/emby/sync`, {libraryId: id}); await loadJobs() }
 async function loadModels() { modelRows.value = (await api.get(`${base}/ai/models`)).data.data || [] }
 async function showJob(job) { detail.value = (await api.get(`${base}/jobs/${job.id}`)).data; detailTitle.value = '逐文件提交与事件'; correctionText.value = ''; detailDialog.value = true }
-async function resolveCandidate() { try { await api.post(`${base}/candidates/${detail.value.id}/resolve`, JSON.parse(correctionText.value)); detailDialog.value = false; correctionText.value = ''; await loadCandidates() } catch(e) { if(e instanceof SyntaxError) ElMessage.error('修正 JSON 格式错误'); else throw e } }
+async function resolveCandidate() { if (detail.value?.targetId !== selectedTarget.value?.id) return; try { await api.post(`${base}/candidates/${detail.value.id}/resolve`, JSON.parse(correctionText.value)); detailDialog.value = false; correctionText.value = ''; await loadCandidates() } catch(e) { if(e instanceof SyntaxError) ElMessage.error('修正 JSON 格式错误'); else throw e } }
 function stopTimer() { clearInterval(timer); timer = undefined }
 onMounted(reload)
 onActivated(() => { stopTimer(); timer = setInterval(() => { Promise.all([loadStatus(), loadJobs()]).catch(() => {}) }, 10000) })

@@ -12,8 +12,7 @@ public final class UpgradeFileCoordinator {
     private UpgradeFileCoordinator() {}
     public static Lease lease() { LOCK.lock(); return new Lease(); }
     public static boolean recoveryPending() {
-        var counts=new UpgradeRepository().counts("upgrade_jobs");
-        return java.util.stream.Stream.of("INSTALLING","INSTALLED","CLEANING_OLD","CLEANUP_PENDING").anyMatch(state->counts.getOrDefault(state,0L)>0);
+        return new UpgradeRepository().commitPending(null);
     }
     public static final class Lease implements AutoCloseable {
         private Lease() {}
@@ -26,10 +25,12 @@ public final class UpgradeFileCoordinator {
         if(!m.find()) return false;
         String subjectId=m.group(1);
         UpgradeRepository repository=new UpgradeRepository();
-        Path save=Path.of(new ani.rss.service.DownloadService().getDownloadPath(subscription,ConfigUtil.snapshot())).toAbsolutePath().normalize();
+        var config=ConfigUtil.snapshot();
+        Path save=Path.of(new ani.rss.service.DownloadService().getDownloadPath(subscription,config)).toAbsolutePath().normalize();
+        var campaigns=new UpgradeCampaignService(repository,new QualityPolicyEngine());
         return repository.targetsForSubject(subjectId).stream()
-                .filter(t->Objects.equals(subjectId,t.getSubjectId())&&!t.isExcluded())
-                .filter(t->new UpgradeCampaignService(repository,new QualityPolicyEngine()).eligible(t))
+                .filter(t->config.getUpgrade().hasLibrary(t.getLibraryId()))
+                .filter(campaigns::eligible)
                 .anyMatch(t->matchesOutput(t,save));
     }
     /** Recovery claims remain authoritative after mode changes and campaign pauses. */
@@ -61,15 +62,14 @@ public final class UpgradeFileCoordinator {
         archive.put("directory",next.toString()); archive.put("rss",subscription.getUrl()); archive.put("premiereVerified",false);
         archive.put("files",ownership.listBySubscription(subscription.getId()).stream().map(owner->Map.of("ownership",owner,"files",ownership.listFiles(owner.ownershipId()))).toList());
         String archiveId="completion-archive:"+subscription.getId(); repository.save("upgrade_events",archiveId,match.group(1),archiveId,"COMPLETION_ARCHIVE",1,archive);
-        if(repository.all("upgrade_targets",null,null,UpgradeModels.Target.class).stream().noneMatch(t->match.group(1).equals(t.getSubjectId()))) {
+        if(repository.targetsForSubject(match.group(1)).isEmpty()) {
             var saved=new UpgradeModels.Target(); saved.setId(UUID.randomUUID().toString()); saved.setSubjectId(match.group(1)); saved.setLibraryId("UNASSIGNED");
             saved.setTitle(subscription.getTitle()); saved.setOriginalTitle(subscription.getJpTitle()); saved.setFinished(true); saved.setState("WAITING_LIBRARY"); saved.setOutputDirectory(next.toString());
             saved.setPremiereSource("COMPLETION_ARCHIVE_UNVERIFIED");
             if(subscription.getUrl()!=null&&!subscription.getUrl().isBlank()) saved.getRssUrls().add(subscription.getUrl());
             repository.save("upgrade_targets",saved.getId(),saved.getLibraryId(),saved.getSubjectId()+":"+saved.getLibraryId(),saved.getState(),1,saved);
         }
-        for(var target:repository.all("upgrade_targets",null,null,UpgradeModels.Target.class)) {
-            if(!match.group(1).equals(target.getSubjectId())) continue;
+        for(var target:repository.targetsForSubject(match.group(1))) {
             boolean moved=false;
             for(var version:repository.all("upgrade_versions",target.getId(),"ACTIVE",UpgradeModels.Version.class)) {
                 if(version.getPath()==null||!Path.of(version.getPath()).toAbsolutePath().normalize().startsWith(previous)) continue;

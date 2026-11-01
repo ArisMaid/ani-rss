@@ -36,7 +36,10 @@ public class ItemsUtil {
 
     /** Preserves every same-episode release for quality analysis. */
     public static List<RawRelease> getItemsRaw(String rssUrl) {
-        Document document = XmlUtil.readXML(getRss(rssUrl));
+        return parseRaw(getRss(rssUrl));
+    }
+    public static List<RawRelease> parseRaw(String xml) {
+        Document document = XmlUtil.readXML(xml);
         NodeList nodes = document.getElementsByTagName("item");
         List<RawRelease> result = new ArrayList<>();
         for (int index = 0; index < nodes.getLength(); index++) {
@@ -60,39 +63,30 @@ public class ItemsUtil {
      * @return 视频列表
      */
     public static List<Item> getItems(Ani ani) {
-        Config config = ConfigUtil.CONFIG;
-        String url = ani.getUrl();
-        String subgroup = StrUtil.blankToDefault(ani.getSubgroup(), "未知字幕组");
-        List<Item> items = new ArrayList<>(ItemsUtil.getItems(ani, url, subgroup)
-                .stream()
-                .peek(item -> item.setMaster(true))
-                .toList());
+        return getItems(ani,false);
+    }
 
-        if (!config.getStandbyRss()) {
-            items.sort(Comparator.comparingDouble(Item::getEpisode));
-            return items;
-        }
+    /** Only the subscription scanner publishes candidates and source cursors. */
+    public static List<Item> scanItems(Ani ani) {
+        return getItems(ani,true);
+    }
 
-        List<StandbyRss> standbyRssList = ani.getStandbyRssList();
-        for (StandbyRss rss : standbyRssList) {
-            ThreadUtil.sleep(1000);
-            subgroup = StrUtil.blankToDefault(rss.getLabel(), "未知字幕组");
-            Ani clone = ObjUtil.clone(ani);
-            clone.setOffset(rss.getOffset());
-            items.addAll(ItemsUtil.getItems(clone, rss.getUrl(), subgroup)
-                    .stream()
-                    .peek(item -> item.setMaster(false))
-                    .toList());
+    private static List<Item> getItems(Ani ani,boolean recordHistory) {
+        Config config=ConfigUtil.CONFIG;
+        List<Item> items=new ArrayList<>(readFeed(ani,ani.getUrl(),StrUtil.blankToDefault(ani.getSubgroup(),"未知字幕组"),recordHistory));
+        items.forEach(item->item.setMaster(true));
+        if(config.getStandbyRss()) {
+            for(StandbyRss rss:ani.getStandbyRssList()) {
+                ThreadUtil.sleep(1000);
+                Ani source=ObjUtil.clone(ani);
+                source.setOffset(rss.getOffset());
+                var standby=readFeed(source,rss.getUrl(),StrUtil.blankToDefault(rss.getLabel(),"未知字幕组"),recordHistory);
+                standby.forEach(item->item.setMaster(false));
+                items.addAll(standby);
+            }
         }
-        // 多字幕组共存模式
-        Boolean coexist = config.getCoexist();
-        if (SubscriptionQualitySelector.enabled(ani)) {
-            items = SubscriptionQualitySelector.select(ani,items);
-        } else if (coexist) {
-            items = CollUtil.distinct(items, Item::getReName, false);
-        } else {
-            items = CollUtil.distinct(items, it -> it.getEpisode().toString(), false);
-        }
+        if(SubscriptionQualitySelector.enabled(ani)) items=rank(ani,items);
+        else if(config.getStandbyRss()) items=config.getCoexist()?CollUtil.distinct(items,Item::getReName,false):CollUtil.distinct(items,it->it.getEpisode().toString(),false);
         items.sort(Comparator.comparingDouble(Item::getEpisode));
         return items;
     }
@@ -106,21 +100,31 @@ public class ItemsUtil {
      * @return 视频列表
      */
     public static List<Item> getItems(Ani ani, String rssUrl, String subgroupName) {
+        List<Item> items=readFeed(ani,rssUrl,subgroupName,false);
+        return SubscriptionQualitySelector.enabled(ani)?rank(ani,items):items;
+    }
+
+    private static List<Item> rank(Ani ani,List<Item> items) {
+        List<Item> selected=SubscriptionQualitySelector.select(ani,items);
+        selected.forEach(item->RenameUtil.rename(ani,item));
+        return selected;
+    }
+
+    private static List<Item> readFeed(Ani ani,String rssUrl,String subgroupName,boolean recordHistory) {
         Config config = ConfigUtil.CONFIG;
 
         String xml;
-        boolean sourceAvailable=true;
+        RuntimeException fetchFailure=null;
         try { xml=getRss(rssUrl); }
         catch(RuntimeException failure) {
-            if(SubscriptionReleaseHistory.merge(ani,rssUrl,List.of()).isEmpty()) throw failure;
-            sourceAvailable=false; xml="<rss><channel/></rss>";
-            log.warn("订阅来源暂不可用，继续历史候选 subscriptionId:{}",ani.getId());
+            fetchFailure=failure;
+            xml="<rss><channel/></rss>";
         }
 
         List<Item> items = new ArrayList<>();
 
         Document document = XmlUtil.readXML(xml);
-        SubscriptionReleaseHistory.recordSource(ani,rssUrl,sourceAvailable);
+        if(recordHistory) SubscriptionReleaseHistory.recordSource(ani,rssUrl,fetchFailure==null);
         Node channel = document.getElementsByTagName("channel").item(0);
         NodeList childNodes = channel.getChildNodes();
         for (int i = childNodes.getLength() - 1; i >= 0; i--) {
@@ -259,10 +263,15 @@ public class ItemsUtil {
             items.add(addNewItem);
         }
 
-        items = SubscriptionReleaseHistory.merge(ani,rssUrl,items);
+        items = SubscriptionReleaseHistory.merge(ani,rssUrl,items,recordHistory);
+        if(fetchFailure!=null) {
+            if(items.isEmpty()) throw fetchFailure;
+            log.warn("订阅来源暂不可用，继续历史候选 subscriptionId:{}",ani.getId());
+        }
         items = items.stream()
                 .filter(item -> {
                     try {
+                        if(SubscriptionQualitySelector.enabled(ani)) item.setSourceOffset(ani.getOffset());
                         return RenameUtil.rename(ani, item);
                     } catch (Exception e) {
                         log.error("解析rss视频集次出现问题");
@@ -270,11 +279,7 @@ public class ItemsUtil {
                     }
                     return false;
                 }).toList();
-        if(SubscriptionQualitySelector.enabled(ani)) {
-            List<Item> selected=SubscriptionQualitySelector.select(ani,items);
-            selected.forEach(item->RenameUtil.rename(ani,item));
-            return selected;
-        }
+        if(SubscriptionQualitySelector.enabled(ani)) return items;
         return CollUtil.distinct(items, item -> item.getEpisode().toString(), true);
     }
 

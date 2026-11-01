@@ -5,13 +5,32 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /** Coordinates background task state and exclusive maintenance operations. */
 @Component
 public final class TaskCoordinator {
-    private final ReentrantLock maintenanceLock = new ReentrantLock(true);
+    private final ReentrantReadWriteLock gate = new ReentrantReadWriteLock(true);
+    private final ReentrantReadWriteLock.WriteLock maintenanceLock = gate.writeLock();
+    private final AtomicLong databaseGeneration = new AtomicLong();
+
+    public long databaseGeneration() { return databaseGeneration.get(); }
+    void databaseReloaded() { databaseGeneration.incrementAndGet(); }
+
+    public boolean enterWork() {
+        try {
+            if(!gate.readLock().tryLock(0,TimeUnit.MILLISECONDS)) return false;
+        } catch(InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        if(state.get()!=State.FAILED&&state.get()!=State.MAINTENANCE) return true;
+        leaveWork();
+        return false;
+    }
+    public void leaveWork() { gate.readLock().unlock(); }
     private final AtomicReference<State> state = new AtomicReference<>(State.STOPPED);
 
     public State state() {
@@ -43,15 +62,11 @@ public final class TaskCoordinator {
     }
 
     public void taskStarted() {
-        if (state.get() != State.MAINTENANCE) {
-            state.set(State.RUNNING);
-        }
+        state.updateAndGet(previous -> previous==State.MAINTENANCE?previous:State.RUNNING);
     }
 
     public void taskStopped() {
-        if (state.get() != State.MAINTENANCE) {
-            state.set(State.STOPPED);
-        }
+        state.updateAndGet(previous -> previous==State.MAINTENANCE?previous:State.STOPPED);
     }
 
     public void taskStopFailed() {

@@ -36,5 +36,9 @@ public class UpgradeSettings implements java.io.Serializable {
     private int noProgressHours = 6;
     private int downloadTimeoutHours = 72;
     private String timezone = "Asia/Shanghai";
+    public boolean hasLibrary(String libraryId) {
+        return !UpgradeCampaignService.monitorOnly(libraryId) && libraryIds.contains(libraryId);
+    }
+
     public record PathMapping(String remoteRoot, String localRoot) implements java.io.Serializable {}
 }

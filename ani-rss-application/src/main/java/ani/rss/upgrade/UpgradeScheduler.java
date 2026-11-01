@@ -1,6 +1,5 @@
 package ani.rss.upgrade;
 
-import ani.rss.commons.GsonStatic;
 import ani.rss.service.TaskCoordinator;
 import ani.rss.upgrade.UpgradeModels.*;
 import ani.rss.util.other.ConfigUtil;
@@ -33,6 +32,7 @@ public class UpgradeScheduler {
     private volatile boolean ready;
     private int targetOffset;
     private long nextRetention;
+    private long databaseGeneration;
     private final Object queueLock=new Object();
 
     public UpgradeScheduler(UpgradeRepository repository,UpgradeCampaignService campaigns,SubjectCatalogProvider catalog,EmbyLibraryIndexService emby,
@@ -49,20 +49,22 @@ public class UpgradeScheduler {
         instanceLock=instanceChannel.tryLock();
         if(instanceLock==null) throw new IOException("已有实例管理同一配置数据库，拒绝同时启动");
     }
-    public void recover() {
+    public synchronized void recover() {
+        space.releaseAll(); targetOffset=0; nextRetention=0;
         // Opening the repository completes schema migrations before any file work.
-        for(Job job:allJobs()) {
+        for(Job job:repository.all("upgrade_jobs",null,null,Job.class)) {
             job.setLeaseUntil(0);
             if(job.getReservedBytes()>0&&job.getStagingPath()!=null&&job.getState()!=JobState.COMPLETED&&(job.getState()!=JobState.CANCELLED||"CANCEL_STOP_PENDING".equals(job.getReasonCode()))) {
                 try { space.reserve("download:"+job.getId(),Path.of(ConfigUtil.snapshot().getUpgrade().getStagingRoot()),job.getReservedBytes(),ConfigUtil.snapshot().getUpgrade().getReserveBytes()); }
                 catch(Exception e) { repository.event(job.getId(),"SPACE_RESERVATION_RECOVERY", "空间预约恢复等待检查"); }
             }
-            if(Set.of(JobState.INSTALLING,JobState.INSTALLED,JobState.CLEANING_OLD,JobState.CLEANUP_PENDING).contains(job.getState())) {
+            if(job.getState().commitStarted()) {
                 try { commits.commit(job,target(job)); }
                 catch(Exception e) { fail(job,e); }
             }
             if("UPGRADE".equals(job.getKind())&&job.getState()==JobState.COMPLETED) { notifications.completed(target(job),job); enqueue("METADATA",job.getTargetId()); }
         }
+        databaseGeneration=coordinator.databaseGeneration();
         ready=true;
     }
     @PreDestroy public void close() throws IOException {
@@ -80,37 +82,32 @@ public class UpgradeScheduler {
         repository.resetCancellation(job.getId()); commits.saveJob(job); return job;
     }
     }
-    private List<Job> allJobs() {
-        List<Job> result=new ArrayList<>();
-        for(int offset=0;;offset+=200) { List<Job> page=repository.list("upgrade_jobs",null,null,offset,200,Job.class); result.addAll(page); if(page.size()<200) return result; }
-    }
     private Target target(Job job) { return repository.get("upgrade_targets",job.getTargetId(),Target.class).orElseThrow(()->new IllegalArgumentException("目标不存在")); }
 
     @Scheduled(fixedDelay=10000,initialDelay=10000)
     public synchronized void tick() {
-        if(!ready||coordinator.state()==TaskCoordinator.State.MAINTENANCE||coordinator.state()==TaskCoordinator.State.FAILED) return;
+        if(!ready||!coordinator.enterWork()) return;
         try {
+            if(databaseGeneration!=coordinator.databaseGeneration()) recover();
             if(System.currentTimeMillis()>=nextRetention) { repository.pruneExpiredEvents(System.currentTimeMillis()); nextRetention=System.currentTimeMillis()+86400000L; }
-            boolean automatic=ConfigUtil.snapshot().getUpgradeMode()==UpgradeMode.AUTOMATIC;
-            int processed=0;
-            for(Job job:allJobs()) {
-                if(processed>=12||Thread.currentThread().isInterrupted()) break;
-                if(job.getRetryAt()>System.currentTimeMillis()) continue;
-                if(repository.cancelRequested(job.getId())&&!Set.of(JobState.INSTALLING,JobState.INSTALLED,JobState.CLEANING_OLD,JobState.CLEANUP_PENDING,JobState.COMPLETED).contains(job.getState())) {
-                    if(job.getRemoteTaskId()!=null||job.getReservedBytes()>0||job.getState()!=JobState.CANCELLED) { cancelTransfer(job); processed++; }
+            var config=ConfigUtil.snapshot();
+            boolean automatic=config.getUpgradeMode()==UpgradeMode.AUTOMATIC;
+            for(Job job:repository.dueJobs(System.currentTimeMillis(),automatic)) {
+                if(Thread.currentThread().isInterrupted()) break;
+                if(job.isCancelRequested()&&!job.getState().commitStarted()) {
+                    cancelTransfer(job);
                     continue;
                 }
-                if(Set.of(JobState.COMPLETED,JobState.CANCELLED,JobState.FAILED,JobState.NOT_BETTER,JobState.NEEDS_REVIEW).contains(job.getState())) continue;
-                if("UPGRADE".equals(job.getKind())&&!automatic&&!Set.of(JobState.INSTALLING,JobState.INSTALLED,JobState.CLEANING_OLD,JobState.CLEANUP_PENDING).contains(job.getState())) {
+                if("UPGRADE".equals(job.getKind())&&!automatic&&!job.getState().commitStarted()) {
                     if(job.getState()!=JobState.PAUSED) { job.setState(JobState.PAUSED); job.setReasonCode("AUTOMATIC_MODE_DISABLED"); job.setMessage("自动模式已关闭，保留下载和候选"); commits.saveJob(job); }
                     continue;
                 }
-                job.setLeaseUntil(System.currentTimeMillis()+300000); commits.saveJob(job); processed++;
-                try { process(job); } catch(Exception e) { fail(job,e); }
+                job.setLeaseUntil(System.currentTimeMillis()+300000); commits.saveJob(job);
+                try { if(job.getState()==JobState.CANCELLED) cancelTransfer(job); else process(job); } catch(Exception e) { fail(job,e); }
                 finally { job.setLeaseUntil(0); commits.saveJob(job); }
             }
             if(!automatic) return;
-            for(String library:ConfigUtil.snapshot().getUpgrade().getLibraryIds()) {
+            for(String library:config.getUpgrade().getLibraryIds()) {
                 Cursor last=repository.get("upgrade_scan_cursors","emby:"+library,Cursor.class).orElse(null);
                 if(last==null||!last.isComplete()||last.getLastSuccess()<System.currentTimeMillis()-1800000L) enqueue("EMBY",library);
             }
@@ -128,12 +125,12 @@ public class UpgradeScheduler {
             targetOffset=targets.size()<20?0:targetOffset+20;
             for(Target target:targets) {
                 if(!campaigns.eligible(target)||target.getNextScan()>System.currentTimeMillis()) continue;
-                if(!UpgradeCampaignService.monitorOnly(target.getLibraryId())&&!emby.fresh(target.getLibraryId())) enqueue("EMBY",target.getLibraryId());
+                if(config.getUpgrade().hasLibrary(target.getLibraryId())&&!emby.fresh(target.getLibraryId())) enqueue("EMBY",target.getLibraryId());
                 enqueue("TARGET",target.getId());
                 long interval=target.isFinished()||Set.of("剧场版","OVA","OAD","Movie").contains(Objects.toString(target.getType(),""))?21600000:900000;
                 target.setNextScan(System.currentTimeMillis()+interval); repository.save("upgrade_targets",target.getId(),target.getLibraryId(),target.getSubjectId()+":"+target.getLibraryId(),target.getState(),target.getRevision(),target);
             }
-        } catch(RuntimeException e) { /* Individual source failures are persisted on their jobs. */ }
+        } finally { coordinator.leaveWork(); }
     }
     void cancelTransfer(Job job) {
         job.setState(JobState.CANCELLED);
@@ -163,7 +160,7 @@ public class UpgradeScheduler {
         if("TARGET".equals(job.getKind())) {
             if(campaigns.excludedBySelection(t)) { complete(job,"作品已从季度订阅取消，保留现有档案与媒体"); return; }
             if(!resolver.enrichStep(t)) return;
-            if(!UpgradeCampaignService.monitorOnly(t.getLibraryId())) emby.adopt(t);
+            if(ConfigUtil.CONFIG.getUpgrade().hasLibrary(t.getLibraryId())) emby.adopt(t);
             releases.rss(t);
             boolean complete;
             try { complete=releases.scanStep(t); }
@@ -174,24 +171,34 @@ public class UpgradeScheduler {
             if(complete) complete(job,"候选检索与决策完成"); return;
         }
         if(!"UPGRADE".equals(job.getKind())) return;
-        if(UpgradeCampaignService.monitorOnly(t.getLibraryId())&&!Set.of(JobState.INSTALLING,JobState.INSTALLED,JobState.CLEANING_OLD,JobState.CLEANUP_PENDING).contains(job.getState())) {
+        if(!ConfigUtil.CONFIG.getUpgrade().hasLibrary(t.getLibraryId())&&!job.getState().commitStarted()) {
             job.setState(JobState.PAUSED); job.setReasonCode("LIBRARY_REQUIRED"); job.setMessage("仅订阅监测：关联媒体库后才能自动下载或替换"); commits.saveJob(job); return;
         }
-        if(!campaigns.eligible(t)&&!Set.of(JobState.INSTALLING,JobState.INSTALLED,JobState.CLEANING_OLD,JobState.CLEANUP_PENDING).contains(job.getState())) {
+        if(!campaigns.eligible(t)&&!job.getState().commitStarted()) {
             job.setState(JobState.PAUSED); job.setMessage("日期任务暂停、范围缩小或目标已排除"); commits.saveJob(job); return;
         }
         Release r=repository.get("upgrade_releases",job.getReleaseId(),Release.class).orElseThrow();
+        if(!job.getState().commitStarted()&&SourceIdentityRules.unverifiedRss(t,r,r.getTitle()))
+            throw new IOException("RSS_SUBJECT_IDENTITY_UNVERIFIED");
         var p=campaigns.effectivePolicy(t);
         if(Set.of(JobState.QUEUED,JobState.PAUSED,JobState.RETRY_WAIT,JobState.WAITING_EVIDENCE).contains(job.getState())&&job.getRemoteTaskId()==null) {
             if(!emby.fresh(t.getLibraryId())) throw new IOException("EMBY_INDEX_STALE");
-            long active=allJobs().stream().filter(j->j.getState()==JobState.DOWNLOADING).count();
+            long active=repository.jobCount("DOWNLOADING");
             if(active>=ConfigUtil.snapshot().getUpgrade().getDownloadConcurrency()) return;
             job.setGeneration(ConfigUtil.snapshot().getUpgradeModeRevision()); job.setPolicyId(p.getId()); job.setPolicyRevision(p.getRevision()); job.setTargetRevision(t.getRevision());
-            downloads.submit(job,r); job.setState(JobState.DOWNLOADING); job.setReasonCode("DOWNLOAD_SUBMITTED"); job.setMessage("候选已进入独立暂存下载"); commits.saveJob(job); return;
+            downloads.submit(job,r); job.setLastProgressAt(System.currentTimeMillis()); job.setState(JobState.DOWNLOADING); job.setReasonCode("DOWNLOAD_SUBMITTED"); job.setMessage("候选已进入独立暂存下载"); commits.saveJob(job); return;
         }
         if(job.getState()==JobState.READY_TO_COMMIT&&(job.getGeneration()!=ConfigUtil.snapshot().getUpgradeModeRevision()||job.getPolicyRevision()!=p.getRevision()||!Objects.equals(job.getPolicyId(),p.getId())||job.getTargetRevision()!=t.getRevision())) job.setState(JobState.VERIFYING);
         if(Set.of(JobState.DOWNLOADING,JobState.RETRY_WAIT,JobState.PAUSED,JobState.VERIFYING).contains(job.getState())&&job.getRemoteTaskId()!=null) {
-            var task=downloads.task(job,r).orElseThrow(()->new IOException("REMOTE_TASK_MISSING"));
+            var remote=downloads.task(job,r);
+            if(remote.isEmpty()) {
+                new UpgradeOwnershipService().stopped(job);
+                space.release("download:"+job.getId());
+                job.setReservedBytes(0); job.setRemoteTaskId(null); job.setDownloadedBytes(0);
+                job.setCreatedAt(System.currentTimeMillis()); job.setLastProgressAt(job.getCreatedAt());
+                throw new IOException("REMOTE_TASK_MISSING");
+            }
+            var task=remote.get();
             if("ARIA2_METADATA".equals(task.getCategory())) { if(System.currentTimeMillis()-job.getLastProgressAt()>ConfigUtil.snapshot().getUpgrade().getNoProgressHours()*3600000L) throw new IOException("DOWNLOAD_NO_PROGRESS"); return; }
             long bytes=task.getCompleted()==null?0:task.getCompleted();
             if(bytes>job.getDownloadedBytes()) { job.setDownloadedBytes(bytes); job.setLastProgressAt(System.currentTimeMillis()); commits.saveJob(job); }
@@ -214,9 +221,7 @@ public class UpgradeScheduler {
                 if(overlapping.isEmpty()) { if(engine.evaluate(p,file.getAttributes(),null).verdict()==QualityPolicyEngine.Verdict.UPGRADE) selected.add(file); continue; }
                 Set<String> improvements=new HashSet<>(); boolean worthInstalling=false;
                 for(Version v:overlapping) {
-                    Release comparable=GsonStatic.fromJson(GsonStatic.toJson(v.getAttributes()),Release.class);
-                    comparable.getEpisodes().retainAll(file.getAttributes().getEpisodes());
-                    var decision=engine.evaluate(p,file.getAttributes(),comparable);
+                    var decision=engine.evaluateOverlap(p,file.getAttributes(),v.getAttributes());
                     if(decision.verdict()==QualityPolicyEngine.Verdict.UPGRADE) { worthInstalling=true; if(!v.isProtectedVersion()) improvements.add(v.getId()); }
                 }
                 if(worthInstalling) { selected.add(file); replaced.addAll(improvements); }
@@ -245,11 +250,6 @@ public class UpgradeScheduler {
         if(campaigns.excludedBySelection(t)) return;
         releases.refreshStoredEvidence(t);
         var p=campaigns.effectivePolicy(t);
-        // The transfer is isolated from the library. A missing container can be
-        // learned from downloaded metadata; actual installation always uses the
-        // complete policy and ffprobe result again.
-        var discoveryPolicy=GsonStatic.fromJson(GsonStatic.toJson(p),QualityPolicyEngine.Policy.class);
-        discoveryPolicy.setContainers(Set.of());
         List<Release> candidates=new ArrayList<>();
         for(int offset=0;;offset+=200) { List<Release> page=repository.list("upgrade_releases",t.getId(),null,offset,200,Release.class); candidates.addAll(page); if(page.size()<200) break; }
         SubjectEpisodeResolver.learnSeasonStart(t,candidates);
@@ -275,22 +275,20 @@ public class UpgradeScheduler {
                 if(assessed.getState()!=JobState.CANCELLED) { r.setState(assessed.getState().name()); r.setReason(assessed.getMessage()); repository.save("upgrade_releases",r.getId(),r.getTargetId(),r.getTargetId()+":"+(r.getInfoHash()==null?r.getSource()+":"+r.getSourceId():r.getInfoHash()),r.getState(),r.getRevision(),r); }
                 continue;
             }
-            boolean worth=false;
             for(String episode:r.getEpisodes()) {
-                List<Version> baseline=current.stream().filter(v->sameChapter(v.getAttributes(),r)&&v.getAttributes().getEpisodes().contains(episode)).toList();
-                var decision=engine.evaluate(discoveryPolicy,r,null);
-                if(!baseline.isEmpty()) {
-                    decision=baseline.stream().map(v->engine.evaluate(discoveryPolicy,episodeView(r,episode),episodeView(v.getAttributes(),episode)))
-                            .filter(d->d.verdict()==QualityPolicyEngine.Verdict.UPGRADE).findFirst()
-                            .orElseGet(()->engine.evaluate(discoveryPolicy,episodeView(r,episode),episodeView(baseline.get(0).getAttributes(),episode)));
+                QualityPolicyEngine.Decision decision=null;
+                for(Version version:current) {
+                    Release baseline=version.getAttributes();
+                    if(!sameChapter(baseline,r)||!baseline.getEpisodes().contains(episode)) continue;
+                    var comparison=engine.discover(p,r,baseline,episode);
+                    if(decision==null) decision=comparison;
+                    if(comparison.verdict()==QualityPolicyEngine.Verdict.UPGRADE) { decision=comparison; break; }
                 }
-                if(baseline.isEmpty()||baseline.stream().anyMatch(v->engine.evaluate(discoveryPolicy,episodeView(r,episode),episodeView(v.getAttributes(),episode)).verdict()==QualityPolicyEngine.Verdict.UPGRADE)) {
-                    if(decision.verdict()==QualityPolicyEngine.Verdict.UPGRADE) {
-                        String chapterKey=r.getSubjectId()+":"+r.getSeason()+":"+r.getChapterType()+":"+r.getContentEdition()+":"+episode;
-                        Release other=best.get(chapterKey);
-                        if(other==null||engine.evaluate(discoveryPolicy,episodeView(r,episode),episodeView(other,episode)).verdict()==QualityPolicyEngine.Verdict.UPGRADE) best.put(chapterKey,r);
-                        worth=true;
-                    }
+                if(decision==null) decision=engine.discover(p,r,null,episode);
+                if(decision.verdict()==QualityPolicyEngine.Verdict.UPGRADE) {
+                    String chapterKey=r.getSubjectId()+":"+r.getSeason()+":"+r.getChapterType()+":"+r.getContentEdition()+":"+episode;
+                    Release other=best.get(chapterKey);
+                    if(other==null||engine.discover(p,r,other,episode).verdict()==QualityPolicyEngine.Verdict.UPGRADE) best.put(chapterKey,r);
                 }
                 r.setState(decision.verdict().name()); r.setReason(String.join("；",decision.explanation()));
             }
@@ -302,7 +300,8 @@ public class UpgradeScheduler {
         boolean identityReview="NEEDS_REVIEW".equals(t.getState());
         if(!identityReview) t.setState(candidates.isEmpty()?(t.getPremiereDate()!=null&&t.getPremiereDate().compareTo(java.time.LocalDate.now(java.time.ZoneId.of(ConfigUtil.snapshot().getUpgrade().getTimezone())).toString())>0?"WAITING_PREMIERE":"NO_RESOURCE"):"MONITORING");
         repository.save("upgrade_targets",t.getId(),t.getLibraryId(),t.getSubjectId()+":"+t.getLibraryId(),t.getState(),t.getRevision(),t);
-        if(identityReview||UpgradeCampaignService.monitorOnly(t.getLibraryId())||ConfigUtil.snapshot().getUpgradeMode()!=UpgradeMode.AUTOMATIC||!campaigns.eligible(t)||!emby.fresh(t.getLibraryId())) return;
+        var config=ConfigUtil.snapshot();
+        if(identityReview||!config.getUpgrade().hasLibrary(t.getLibraryId())||config.getUpgradeMode()!=UpgradeMode.AUTOMATIC||!campaigns.eligible(t)||!emby.fresh(t.getLibraryId())) return;
         for(Release r:new LinkedHashSet<>(best.values())) {
             if(r.getInfoHash()==null) continue;
             String key=downloadKey(t,r);
@@ -319,7 +318,6 @@ public class UpgradeScheduler {
         }
     }
     private static String downloadKey(Target target,Release release) { return "download:"+target.getId()+":"+release.getInfoHash()+":"+target.getOutputRoot(); }
-    private static Release episodeView(Release release,String episode) { Release copy=GsonStatic.fromJson(GsonStatic.toJson(release),Release.class); copy.setEpisodes(new TreeSet<>(Set.of(episode))); return copy; }
     private static boolean sameChapter(Release first,Release second) { return Objects.equals(first.getSubjectId(),second.getSubjectId())&&Objects.equals(first.getChapterType(),second.getChapterType())&&Objects.equals(first.getSeason(),second.getSeason())&&Objects.equals(first.getContentEdition(),second.getContentEdition()); }
     private void complete(Job job,String message) { job.setState(JobState.COMPLETED); job.setReasonCode("SCAN_COMPLETE"); job.setMessage(message); job.setRetryable(false); commits.saveJob(job); }
     private void fail(Job job,Exception error) {

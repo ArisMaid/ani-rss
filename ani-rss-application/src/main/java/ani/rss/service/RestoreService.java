@@ -269,6 +269,7 @@ public class RestoreService {
         checkpointIf(injectFailures, Checkpoint.AUTH_LOADED);
         AniUtil.load(false);
         checkpointIf(injectFailures, Checkpoint.SUBSCRIPTIONS_LOADED);
+        taskCoordinator.databaseReloaded();
     }
 
     private void ensureTasksStoppedForRollback() {

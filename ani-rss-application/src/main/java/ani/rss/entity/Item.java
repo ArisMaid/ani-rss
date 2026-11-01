@@ -15,6 +15,7 @@ import java.util.Date;
 @Schema(description = "资源项")
 public class Item implements Serializable {
     /** Chapters selected from a collection; empty means the entire release. */
+    private Integer sourceOffset;
     private java.util.Set<String> selectedEpisodes = new java.util.TreeSet<>();
     /** Story season from subject metadata, separate from the chosen library folder season. */
     private Integer expectedSourceSeason;

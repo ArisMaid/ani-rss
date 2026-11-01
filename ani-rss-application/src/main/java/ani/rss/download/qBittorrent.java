@@ -179,15 +179,23 @@ public class qBittorrent implements BaseDownload {
 
         List<String> tags = new ArrayList<>(newTags(ani, item, config));
         String chapterSelection=SubscriptionQualitySelector.selectionTag(item);
-        if(chapterSelection!=null) tags.add(chapterSelection);
-        if(chapterSelection!=null&&new ReleaseAnalysisService().parse(item.getTitle(),ani.getBgmUrl(),"COLLECTION").getEpisodes().size()>1) tags.add(SubscriptionQualitySelector.COLLECTION_TAG);
+        if(chapterSelection!=null) {
+            tags.add(chapterSelection);
+            tags.add("ani-rss-offset="+SubscriptionQualitySelector.sourceOffset(ani,item));
+        }
+        boolean collection = chapterSelection != null && new ReleaseAnalysisService()
+                .parse(item.getTitle(), ani.getBgmUrl(), "COLLECTION").getEpisodes().size() > 1;
+        if (collection) tags.add(SubscriptionQualitySelector.COLLECTION_TAG);
         String hash = StrUtil.blankToDefault(TorrentUtil.getInfoHash(torrentFile),
                 StrUtil.blankToDefault(item.getInfoHash(), FileUtil.mainName(torrentFile)));
 
+        boolean checkMetadata=(torrentFile.length()==0||"txt".equalsIgnoreCase(FileUtil.extName(torrentFile)))&&!SubscriptionQualitySelector.containers(ani).isEmpty();
+        if(checkMetadata) tags.add(SubscriptionQualitySelector.CONTAINER_CHECK_TAG);
         Integer ratioLimit = config.getRatioLimit();
         Integer seedingTimeLimit = config.getSeedingTimeLimit();
         Integer inactiveSeedingTimeLimit = config.getInactiveSeedingTimeLimit();
-        Boolean rename = config.getRename();
+        boolean prepareFiles = config.getRename() || collection;
+        boolean stopAtMetadata = checkMetadata || collection || chapterSelection != null && config.getRename();
 
         Long upLimit = config.getUpLimit() * 1024;
         Long dlLimit = config.getDlLimit() * 1024;
@@ -218,18 +226,19 @@ public class qBittorrent implements BaseDownload {
                     .form("paused", false)
                     .form("stopped", false)
                     .form("urls", FileUtil.readUtf8String(torrentFile));
-            if(chapterSelection!=null&&rename) httpRequest.form("stopCondition","MetadataReceived");
+            if (stopAtMetadata) httpRequest.form("stopCondition", "MetadataReceived");
         } else {
             if (torrentFile.length() > 0) {
-                // 开启了重命名则在重命名后再开始下载
-                httpRequest.form("paused", rename)
-                        .form("stopped", rename)
+                // 文件选择或重命名完成后再开始下载。
+                httpRequest.form("paused", prepareFiles)
+                        .form("stopped", prepareFiles)
                         .form("torrents", torrentFile);
             } else {
                 httpRequest
                         .form("paused", false)
                         .form("stopped", false)
                         .form("urls", "magnet:?xt=urn:btih:" + FileUtil.mainName(torrentFile));
+                if (stopAtMetadata) httpRequest.form("stopCondition", "MetadataReceived");
             }
         }
         try {
@@ -332,12 +341,14 @@ public class qBittorrent implements BaseDownload {
         if (StrUtil.isBlank(hash)) {
             return DownloaderResult.rejected("QBITTORRENT_RECOVERY_HASH_MISSING");
         }
+        if(needsContainerCheck(torrentsInfo)&&!containerCheckPassed(torrentsInfo)) return DownloaderResult.rejected("CONTAINER_NOT_VERIFIED");
         boolean checked = execute(postApi("/api/v2/torrents/recheck")
                 .form("hashes", hash), qBittorrent::requireSuccess);
         if (!checked) {
             return DownloaderResult.rejected("QBITTORRENT_RECHECK_REJECTED");
         }
-        return start(torrentsInfo)
+        boolean resumed = hasCollection(torrentsInfo) ? rename(torrentsInfo) : start(torrentsInfo);
+        return resumed
                 ? DownloaderResult.success(null)
                 : DownloaderResult.rejected("QBITTORRENT_RESUME_REJECTED");
     }
@@ -376,12 +387,25 @@ public class qBittorrent implements BaseDownload {
                 .form("deleteFiles", false), qBittorrent::requireSuccess);
     }
 
+    private static boolean hasCollection(TorrentsInfo task) {
+        return task.getTagList() != null && task.getTagList().contains(SubscriptionQualitySelector.COLLECTION_TAG);
+    }
+
+    private static boolean needsContainerCheck(TorrentsInfo task) {
+        return task.getTagList()!=null&&task.getTagList().contains(SubscriptionQualitySelector.CONTAINER_CHECK_TAG);
+    }
+    private boolean containerCheckPassed(TorrentsInfo task) {
+        return downloadService.findAniByDownloadPath(task).map(ani->SubscriptionQualitySelector.permitsFiles(
+                SubscriptionQualitySelector.containers(ani),files(task,false).stream().map(qBittorrentTorrentsInfo.FileEntity::getName).toList())).orElse(false);
+    }
     @Override
     public Boolean rename(TorrentsInfo torrentsInfo) {
+        boolean collection = hasCollection(torrentsInfo);
+        if (needsContainerCheck(torrentsInfo) && !containerCheckPassed(torrentsInfo)) return false;
+        if (!config.getRename() && !collection) return start(torrentsInfo);
         String reName = torrentsInfo.getName();
 
-        if (StrUtil.isBlank(reName) || !ReUtil.contains(StringEnum.SEASON_REG, reName)
-                &&(torrentsInfo.getTagList()==null||!torrentsInfo.getTagList().contains(SubscriptionQualitySelector.COLLECTION_TAG))) {
+        if (!collection && (StrUtil.isBlank(reName) || !ReUtil.contains(StringEnum.SEASON_REG, reName))) {
             // 剧场版 OR OVA 直接开始任务
             Boolean start = start(torrentsInfo);
             Assert.isTrue(start, "开始任务失败 {}", reName);
@@ -434,16 +458,17 @@ public class qBittorrent implements BaseDownload {
         }
 
         Boolean subtitleIndependentFolderEnabled = config.getSubtitleIndependentFolderEnabled();
-        if(SubscriptionQualitySelector.preserveBatchFilenames(ani,reName,names)) {
+        if(collection || SubscriptionQualitySelector.preserveBatchFilenames(ani,reName,names)) {
             Set<String> selected=SubscriptionQualitySelector.selectedChapters(torrentsInfo.getTagList());
             if(!selected.isEmpty()) {
+                int offset=SubscriptionQualitySelector.taskOffset(ani,torrentsInfo.getTagList());
                 Map<Integer,Boolean> priorities=new LinkedHashMap<>(); Set<String> covered=new HashSet<>();
                 for(var file:files) {
-                    var selection=SubscriptionQualitySelector.selectedFile(ani,file.getName(),selected);
+                    var selection=SubscriptionQualitySelector.selectedFile(ani,file.getName(),selected,offset);
                     if(file.getName().matches("(?i).*\\.(mkv|mp4|avi|webm|ts)$")) {
                         if(selection==SubscriptionQualitySelector.FileSelection.UNKNOWN) throw new IllegalArgumentException("BATCH_FILE_CHAPTER_UNKNOWN");
                         if(selection==SubscriptionQualitySelector.FileSelection.SELECT) for(String e:new ReleaseAnalysisService().parse(file.getName(),ani.getBgmUrl(),"FILE_SELECTION").getEpisodes())
-                            covered.add(ReleaseAnalysisService.number(new java.math.BigDecimal(e).add(java.math.BigDecimal.valueOf(ani.getOffset())).toPlainString()));
+                            covered.add(ReleaseAnalysisService.number(new java.math.BigDecimal(e).add(java.math.BigDecimal.valueOf(offset)).toPlainString()));
                     }
                     if(selection!=SubscriptionQualitySelector.FileSelection.UNKNOWN) priorities.put(file.getIndex(),selection==SubscriptionQualitySelector.FileSelection.SELECT);
                 }

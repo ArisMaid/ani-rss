@@ -43,7 +43,17 @@ public class UpgradeDownloadService {
         for(TorrentsInfo task:snapshot.value()) if(release.getInfoHash()!=null&&release.getInfoHash().equalsIgnoreCase(task.getHash())) {
             // Same-hash ordinary downloads may supply read-only transfer input.
             // They retain ownership and never receive automatic rename/delete.
-            job.setRemoteTaskId(taskReference(task,config.getDownloadToolType())); job.setStagingPath(task.getSavePath()); job.setDownloaderType(config.getDownloadToolType()); job.setDownloaderIdentity(downloaderIdentity(config)); return task;
+            var ownership=new UpgradeOwnershipService();
+            String ownedRoot=ownership.saveRoot(job);
+            boolean ours=Objects.equals(job.getDownloaderIdentity(),downloaderIdentity(config))&&UpgradeOwnershipService.sameSaveRoot(task,ownedRoot);
+            job.setRemoteTaskId(taskReference(task,config.getDownloadToolType()));
+            if(ours) ownership.activate(job);
+            else {
+                if(ownedRoot!=null) ownership.stopped(job);
+                space.release("download:"+job.getId()); job.setReservedBytes(0);
+                job.setStagingPath(task.getSavePath());
+            }
+            job.setDownloaderType(config.getDownloadToolType()); job.setDownloaderIdentity(downloaderIdentity(config)); return task;
         }
         long active=snapshot.value().stream().filter(t->!t.finished()).count();
         int maximum=config.getDownloadCount()==null?0:config.getDownloadCount();
@@ -70,11 +80,15 @@ public class UpgradeDownloadService {
             }
         }
         if(release.getInfoHash()==null) throw new IOException("CANONICAL_HASH_REQUIRED");
-        new UpgradeOwnershipService().pending(job,release,remote);
+        var ownership=new UpgradeOwnershipService();
+        try { ownership.pending(job,release,remote); }
+        catch(IllegalStateException conflict) {
+            space.release("download:"+job.getId()); job.setReservedBytes(0); throw conflict;
+        }
         DownloadSubmission submission=new DownloadSubmission(DownloadSubmission.OwnerKind.UPGRADE_TARGET,job.getTargetId(),job.getId(),release.getInfoHash(),remote,release.getTitle(),release.getTorrentUrl(),torrent,release.getEpisodes());
         var result=client.submit(submission); if(!result.isSuccess()) throw new IOException(result.errorCode());
         job.setRemoteTaskId(result.remoteTaskId());
-        new UpgradeOwnershipService().activate(job);
+        ownership.activate(job);
         return null;
     }
     private String remotePath(Path local,UpgradeSettings settings) {
@@ -109,24 +123,23 @@ public class UpgradeDownloadService {
         if(job.getRemoteTaskId()==null) return;
         UpgradeOwnershipService ownership=new UpgradeOwnershipService();
         if(!ownership.owns(job)) { job.setRemoteTaskId(null); return; }
-        Optional<Job> shared=repository.all("upgrade_jobs",null,null,Job.class).stream()
-                .filter(other->!Objects.equals(job.getId(),other.getId())&&Objects.equals(job.getRemoteTaskId(),other.getRemoteTaskId())
-                        &&Objects.equals(job.getDownloaderIdentity(),other.getDownloaderIdentity())
-                        &&!Set.of(JobState.COMPLETED,JobState.CANCELLED,JobState.FAILED,JobState.NOT_BETTER).contains(other.getState())
-                        &&!repository.cancelRequested(other.getId())).findFirst();
+        Optional<Job> shared=repository.transferConsumer(job);
         if(shared.isPresent()) {
             Job survivor=shared.get(); survivor.setReservedBytes(Math.max(survivor.getReservedBytes(),job.getReservedBytes()));
             repository.save("upgrade_jobs",survivor.getId(),survivor.getTargetId(),survivor.getIdentityKey(),survivor.getState().name(),survivor.getPolicyRevision(),survivor);
             ownership.transfer(job,survivor); space.transfer("download:"+job.getId(),"download:"+survivor.getId());
             job.setReservedBytes(0); job.setRemoteTaskId(null); return;
         }
+        String ownedHash=ownership.infoHash(job).orElse(null);
+        if(ownedHash!=null&&repository.all("upgrade_versions",null,"ACTIVE",Version.class).stream().anyMatch(v->ownedHash.equalsIgnoreCase(v.getDownloadHash()))) {
+            job.setRemoteTaskId(null); return;
+        }
         var config=ConfigUtil.snapshot();
         if(!Objects.equals(job.getDownloaderIdentity(),downloaderIdentity(config))) throw new IOException("DOWNLOADER_CONFIGURATION_CHANGED");
         DownloaderClient client=TorrentUtil.client(); if(client==null) throw new IOException("DOWNLOADER_UNAVAILABLE");
         var snapshot=client.inventory(); if(!snapshot.isSuccess()) throw new IOException("DOWNLOADER_SNAPSHOT_FAILED");
-        String ownedHash=ownership.infoHash(job).orElse(null);
         for(TorrentsInfo task:snapshot.value()) if((Objects.equals(job.getRemoteTaskId(),task.getId())||task.getHash()!=null&&task.getHash().equalsIgnoreCase(job.getRemoteTaskId()))
-                &&(ownedHash==null||task.getHash()==null||ownedHash.equalsIgnoreCase(task.getHash()))) {
+                &&(ownedHash==null||task.getHash()==null||ownedHash.equalsIgnoreCase(task.getHash()))&&UpgradeOwnershipService.sameSaveRoot(task,ownership.saveRoot(job))) {
             if(!client.delete(task,false).isSuccess()) throw new IOException("OWNED_TRANSFER_STOP_FAILED");
         }
         ownership.stopped(job); job.setRemoteTaskId(null);
@@ -160,6 +173,7 @@ public class UpgradeDownloadService {
             if(videos.size()>1&&(!"NORMAL".equals(filename.getChapterType())&&!filename.getChapterType().equals(release.getChapterType())||filename.getEpisodes().isEmpty())) {
                 repository.event(job.getId(),"BATCH_FILE_IDENTITY_DEFERRED","合集中的一个文件章节未明确，保留该文件，继续验证可识别章节"); continue;
             }
+            if(SourceIdentityRules.unverifiedRss(target,release,UpgradePaths.fileName(video))) throw new IOException("RSS_FILE_IDENTITY_UNVERIFIED");
             if(filename.getSeason()!=null&&release.getSeason()!=null&&!filename.getSeason().equals(release.getSeason())) throw new IOException("FILE_SEASON_IDENTITY_CONFLICT");
             if(!filename.getEpisodes().isEmpty()&&!release.getEpisodes().containsAll(filename.getEpisodes())) throw new IOException("FILE_CHAPTER_IDENTITY_CONFLICT");
             if(videos.size()==1&&!filename.getEpisodes().isEmpty()&&!filename.getEpisodes().equals(release.getEpisodes())) throw new IOException("DOWNLOAD_COVERAGE_INCOMPLETE");

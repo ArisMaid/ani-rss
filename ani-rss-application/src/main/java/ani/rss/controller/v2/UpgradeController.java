@@ -78,7 +78,12 @@ public class UpgradeController {
     }
     @Auth @GetMapping("/mikan/preview") public Object mikanPreview(@RequestParam int year,@RequestParam String season) { return campaigns.mikanPreview(year,season); }
     @Auth @PostMapping("/campaigns") public Campaign createCampaign(@RequestBody Campaign c) { Campaign saved=campaigns.saveCampaign(null,c); if(saved.isEnabled()) scheduler.enqueue("CATALOG",saved.getId()); return saved; }
-    @Auth @PutMapping("/campaigns/{id}") public Campaign updateCampaign(@PathVariable String id,@RequestBody Campaign c) { Campaign saved=campaigns.saveCampaign(id,c); if(saved.isEnabled()) scheduler.enqueue("CATALOG",saved.getId()); return saved; }
+    @Auth @PutMapping("/campaigns/{id}") public Campaign updateCampaign(@PathVariable String id,@RequestBody Campaign c) {
+        Campaign previous=repository.get("upgrade_campaigns",id,Campaign.class).orElseThrow();
+        Campaign saved=campaigns.saveCampaign(id,c);
+        if(saved.isEnabled()&&(!previous.isEnabled()||UpgradeCampaignService.needsCatalogScan(previous,saved))) scheduler.enqueue("CATALOG",id);
+        return saved;
+    }
     @Auth @PostMapping("/campaigns/{id}/scan") @ResponseStatus(HttpStatus.ACCEPTED) public Job scan(@PathVariable String id) {
         Campaign c=repository.get("upgrade_campaigns",id,Campaign.class).orElseThrow();
         Cursor cursor=new Cursor(); cursor.setId("catalog:"+id); cursor.setScope(id); repository.save("upgrade_scan_cursors",cursor.getId(),id,null,"PENDING",1,cursor);

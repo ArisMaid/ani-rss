@@ -60,8 +60,8 @@ class UpgradeFollowupTest {
             release.setTargetId("t"); release.setInfoHash("a".repeat(40)); release.setTorrentUrl("magnet:?xt=urn:btih:"+release.getInfoHash()); release.setSourceId("old");
             new ReleaseProvider(repo,new ReleaseAnalysisService()).accept(release);
             Ani subscription=new Ani().setBgmUrl("https://bgm.tv/subject/100").setSeason(1).setUrl("https://rss.test/feed").setQualityPolicyId("p").setExclude(List.of()).setMatch(List.of()).setGlobalExclude(false);
-            var history=SubscriptionReleaseHistory.merge(subscription,subscription.getUrl(),List.of()); assertEquals(1,history.size()); assertEquals(release.getInfoHash(),history.get(0).getInfoHash());
-            subscription.setExclude(List.of("Blue Box")); assertTrue(SubscriptionReleaseHistory.merge(subscription,subscription.getUrl(),List.of()).isEmpty());
+            var history=SubscriptionReleaseHistory.merge(subscription,subscription.getUrl(),List.of(),false); assertEquals(1,history.size()); assertEquals(release.getInfoHash(),history.get(0).getInfoHash());
+            subscription.setExclude(List.of("Blue Box")); assertTrue(SubscriptionReleaseHistory.merge(subscription,subscription.getUrl(),List.of(),false).isEmpty());
             var chapters=new Cursor(); chapters.setId("chapters:t"); chapters.setComplete(true); repo.save("upgrade_scan_cursors",chapters.getId(),"t",null,"COMPLETE",1,chapters);
             var garden=new Cursor(); garden.setId("garden:t"); garden.setSearchRevision(1); garden.setComplete(true); garden.setLastFull(System.currentTimeMillis()); repo.save("upgrade_scan_cursors",garden.getId(),"t",null,"COMPLETE",1,garden);
             var coverage=UpgradeCoverageService.assess(repo,target,QualityPolicyPresets.catalog().presets().get(0).policy());
@@ -73,7 +73,7 @@ class UpgradeFollowupTest {
             release.setSeason(2);
             repo.save("upgrade_releases",release.getId(),"t",release.getInfoHash(),release.getState(),1,release);
             subscription.setSeason(7).setExclude(List.of());
-            var remappedHistory=SubscriptionReleaseHistory.merge(subscription,subscription.getUrl(),List.of());
+            var remappedHistory=SubscriptionReleaseHistory.merge(subscription,subscription.getUrl(),List.of(),false);
             assertEquals(1,remappedHistory.size(),"A library folder season must not discard a verified story-season release");
             assertEquals(2,remappedHistory.get(0).getExpectedSourceSeason());
         } finally { ani.rss.persistence.DatabaseManager.close(); cn.hutool.core.bean.BeanUtil.copyProperties(config,ani.rss.util.other.ConfigUtil.CONFIG); if(prior==null)System.clearProperty("CONFIG");else System.setProperty("CONFIG",prior); }
@@ -114,11 +114,11 @@ class UpgradeFollowupTest {
         var selected=SubscriptionQualitySelector.select(ani,List.of(batch,single),QualityPolicyPresets.catalog().presets().get(0).policy());
         assertEquals(2,selected.size()); assertEquals(Set.of("1","3"),batch.getSelectedEpisodes()); assertEquals(Set.of("2"),single.getSelectedEpisodes());
         Set<String> chapters=SubscriptionQualitySelector.selectedChapters(List.of(SubscriptionQualitySelector.selectionTag(batch)));
-        assertEquals(SubscriptionQualitySelector.FileSelection.SELECT,SubscriptionQualitySelector.selectedFile(ani,"Example - 01.mkv",chapters));
-        assertEquals(SubscriptionQualitySelector.FileSelection.SKIP,SubscriptionQualitySelector.selectedFile(ani,"Example - 02.chs.ass",chapters));
-        assertEquals(SubscriptionQualitySelector.FileSelection.UNKNOWN,SubscriptionQualitySelector.selectedFile(ani,"fonts/font.ttf",chapters));
-        assertEquals(SubscriptionQualitySelector.FileSelection.SKIP,SubscriptionQualitySelector.selectedFile(ani,"NCOP.mkv",chapters));
-        assertThrows(IllegalArgumentException.class,()->SubscriptionQualitySelector.selectedFile(ani,"Example [01-03].mkv",chapters));
+        assertEquals(SubscriptionQualitySelector.FileSelection.SELECT,SubscriptionQualitySelector.selectedFile(ani,"Example - 01.mkv",chapters,0));
+        assertEquals(SubscriptionQualitySelector.FileSelection.SKIP,SubscriptionQualitySelector.selectedFile(ani,"Example - 02.chs.ass",chapters,0));
+        assertEquals(SubscriptionQualitySelector.FileSelection.UNKNOWN,SubscriptionQualitySelector.selectedFile(ani,"fonts/font.ttf",chapters,0));
+        assertEquals(SubscriptionQualitySelector.FileSelection.SKIP,SubscriptionQualitySelector.selectedFile(ani,"NCOP.mkv",chapters,0));
+        assertThrows(IllegalArgumentException.class,()->SubscriptionQualitySelector.selectedFile(ani,"Example [01-03].mkv",chapters,0));
         ani.setOva(true); batch.setEpisode(1D); single.setEpisode(1D);
         SubscriptionQualitySelector.select(ani,List.of(batch,single),QualityPolicyPresets.catalog().presets().get(0).policy());
         assertEquals(Set.of("1","3"),batch.getSelectedEpisodes()); assertEquals(Set.of("2"),single.getSelectedEpisodes()); assertEquals(2D,single.getEpisode());

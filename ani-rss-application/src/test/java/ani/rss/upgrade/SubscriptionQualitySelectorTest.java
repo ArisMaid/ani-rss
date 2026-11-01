@@ -32,6 +32,19 @@ class SubscriptionQualitySelectorTest {
         assertTrue(SubscriptionQualitySelector.preserveBatchFilenames(ani,"Example",List.of("Example - 01.mkv","Example - 02.mkv")));
         assertFalse(SubscriptionQualitySelector.preserveBatchFilenames(ani,"Example S01E01",List.of("Example - 01 [1080p].mkv","Example - 01 [2160p].mkv")));
     }
+    @Test void sourceOffsetsSurviveCrossFeedSelectionAndKnownContainerConflictsAreRejected() {
+        var ani=new Ani().setId("s").setSeason(1).setOffset(0).setQualityPolicyId("p");
+        var policy=QualityPolicyPresets.catalog().presets().get(0).policy(); policy.setContainers(Set.of("mkv"));
+        var batch=item("桜都",1080,"CHS",1,"batch").setSourceOffset(-12).setTitle("[桜都] Example - 13-14 [1080p][CHS]");
+        var mp4=item("桜都",2160,"CHS",1,"mp4").setTitle("[桜都] Example - 01 [2160p][CHS][MP4]");
+        assertEquals(List.of(batch),SubscriptionQualitySelector.select(ani,List.of(mp4,batch),policy));
+        assertEquals(Set.of("1","2"),batch.getSelectedEpisodes());
+        int offset=SubscriptionQualitySelector.taskOffset(ani,List.of("ani-rss-offset=-12"));
+        assertEquals(SubscriptionQualitySelector.FileSelection.SELECT,SubscriptionQualitySelector.selectedFile(ani,"Example - 13.mkv",Set.of("1"),offset));
+        assertEquals(SubscriptionQualitySelector.FileSelection.SKIP,SubscriptionQualitySelector.selectedFile(ani,"Example - 14.mkv",Set.of("1"),offset));
+        assertTrue(SubscriptionQualitySelector.permitsFiles(policy.getContainers(),List.of("episode.mkv","sub.srt")));
+        assertFalse(SubscriptionQualitySelector.permitsFiles(policy.getContainers(),List.of("episode.mkv","episode.mp4")));
+    }
     @TempDir Path directory;
     @Test void actualRssParserRanksVersionsBeforeItRemovesDuplicateEpisodes() {
         String prior=System.getProperty("CONFIG"); var original=ani.rss.util.other.ConfigUtil.snapshot();
@@ -41,10 +54,7 @@ class SubscriptionQualitySelectorTest {
             ani.rss.util.other.ConfigUtil.CONFIG.setSkip5(false);
             var subscription=ani.rss.util.other.AniUtil.createAni().setTitle("Example").setSeason(1).setOva(false).setCustomEpisode(false).setBgmUrl("https://bgm.tv/subject/100").setUrl("https://rss.example/feed").setQualityPolicyId("p").setExclude(List.of()).setGlobalExclude(false).setCustomRenameTemplateEnable(true).setCustomRenameTemplate("${subgroup} S${seasonFormat}E${episodeFormat}");
             String xml="<rss><channel><item><title>[LoliHouse] Example - 01 [1080p][CHS]</title><guid>"+"a".repeat(40)+"</guid><enclosure url='https://rss.example/a.torrent' length='100'/></item><item><title>[桜都] Example - 01 [1080p][CHS]</title><guid>"+"b".repeat(40)+"</guid><enclosure url='magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' length='200'/></item></channel></rss>";
-            try(var rss=org.mockito.Mockito.mockStatic(ani.rss.util.other.ItemsUtil.class)) {
-                rss.when(()->ani.rss.util.other.ItemsUtil.getRss(subscription.getUrl())).thenReturn(xml);
-                rss.when(()->ani.rss.util.other.ItemsUtil.getItems(subscription,subscription.getUrl(),"自动优选")).thenCallRealMethod();
-                rss.when(()->ani.rss.util.other.ItemsUtil.isAllowedByDownloadRules(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.any())).thenCallRealMethod();
+            try(var rss=org.mockito.Mockito.mockStatic(ani.rss.util.other.ItemsUtil.class, invocation -> invocation.getMethod().getName().equals("getRss")?xml:invocation.callRealMethod())) {
                 var result=ani.rss.util.other.ItemsUtil.getItems(subscription,subscription.getUrl(),"自动优选");
                 assertEquals(1,result.size()); assertEquals("0".repeat(40),result.get(0).getInfoHash()); assertEquals(200L,result.get(0).getLength()); assertTrue(result.get(0).getReName().startsWith("桜都"));
             }

@@ -5,8 +5,8 @@ import java.util.List;
 import com.google.gson.JsonObject;
 
 public interface AiAnalysisClient {
-    JsonObject models();
-    JsonObject test();
+    JsonObject models(AiConnectionDraft draft);
+    JsonObject test(AiConnectionDraft draft);
     void analyze(List<Release> releases);
     default java.util.Optional<String> disambiguate(UpgradeModels.Target target,List<JsonObject> candidates) { return java.util.Optional.empty(); }
     default List<String> aliases(UpgradeModels.Target target) { return List.of(); }

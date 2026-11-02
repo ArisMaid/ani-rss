@@ -102,7 +102,7 @@
       <el-tab-pane label="执行与设置" name="settings">
         <el-scrollbar class="upgrade-scrollbar" always><div class="tab-scroll-content settings-content">
         <el-collapse>
-          <el-collapse-item title="Emby、路径与媒体校验设置" name="emby">
+          <el-collapse-item title="Emby、路径与下载设置" name="emby">
             <div v-if="settings" class="settings-form">
               <SettingsItem label="Emby 服务地址"><el-input v-model="settings.embyUrl" placeholder="http://127.0.0.1:8096"/></SettingsItem>
               <SettingsItem label="Emby API Key"><el-input v-model="settings.embyApiKey" type="password" show-password :placeholder="settings.embyKeyConfigured ? '已配置，留空保留' : '未配置'"/></SettingsItem>
@@ -117,24 +117,29 @@
               <SettingsItem label="ffmpeg 路径"><el-input v-model="settings.ffmpeg"/></SettingsItem>
               <SettingsItem label="全局默认规则"><el-select v-model="settings.defaultPolicyId" clearable><el-option v-for="p in policyRows" :key="p.id" :value="p.id" :label="p.name"/></el-select></SettingsItem>
               <SettingsItem label="洗版完成消息"><el-switch v-model="settings.notifications"/><span>复用已启用的消息通知渠道，文件动作不执行</span></SettingsItem>
+              <SettingsItem label="新自动下载并发"><el-input-number v-model="settings.downloadConcurrency" :min="1" :max="20"/></SettingsItem>
+              <SettingsItem label="预留空间（字节）"><el-input-number v-model="settings.reserveBytes" :min="0" :step="1073741824"/></SettingsItem>
+              <SettingsItem label="无进展小时上限"><el-input-number v-model="settings.noProgressHours" :min="1"/></SettingsItem>
+              <SettingsItem label="总等待小时上限"><el-input-number v-model="settings.downloadTimeoutHours" :min="1"/></SettingsItem>
               <SettingsItem><el-button :loading="busy" type="primary" @click="saveSettings">保存设置</el-button><el-button @click="inspect('/emby/test', 'Emby 连接与媒体库')">连接自检</el-button><el-button @click="syncLibraries">索引所选媒体库</el-button><el-button @click="importEmby">从现有通知导入连接</el-button></SettingsItem>
             </div>
           </el-collapse-item>
           <el-collapse-item title="DeepSeek 辅助与预算" name="ai">
             <div v-if="settings" class="settings-form">
-              <SettingsItem label="API 地址"><el-input v-model="settings.aiBaseUrl"/></SettingsItem>
-              <SettingsItem label="API Key"><el-input v-model="settings.aiApiKey" type="password" show-password :placeholder="settings.aiKeyConfigured ? '已配置，留空保留' : '未配置'"/></SettingsItem>
-              <SettingsItem label="清除 AI Key"><el-switch v-model="settings.clearAiKey"/></SettingsItem>
-              <SettingsItem label="模型 ID"><el-select v-model="settings.aiModel" filterable allow-create default-first-option><el-option v-for="model in modelRows" :key="model.id" :value="model.id" :label="model.id"/></el-select><el-button @click="loadModels">获取模型</el-button></SettingsItem>
-              <SettingsItem label="启用辅助"><el-switch v-model="settings.aiEnabled"/><span class="hint">先保存地址和模型，再执行结构化输出自检</span></SettingsItem>
+              <SettingsItem label="API 地址"><el-input v-model="settings.aiBaseUrl" aria-label="AI API 地址" placeholder="https://api.deepseek.com"/></SettingsItem>
+              <SettingsItem label="API Key"><el-input v-model="settings.aiApiKey" aria-label="AI API Key" type="password" show-password autocomplete="off" :disabled="settings.clearAiKey" :placeholder="savedKeyUsable ? '已配置，留空保留' : '请输入此服务的 API Key'"/></SettingsItem>
+              <SettingsItem v-if="settings.aiKeyConfigured" label="清除已保存密钥"><el-switch v-model="settings.clearAiKey" aria-label="清除已保存密钥"/></SettingsItem>
+              <SettingsItem label="模型 ID">
+                <el-autocomplete v-model="settings.aiModel" aria-label="模型 ID" :fetch-suggestions="suggestModels" :debounce="0" placeholder="直接输入模型 ID，或获取模型后选择"/>
+                <el-button :loading="aiBusy === 'models'" :disabled="!aiReady || !!aiBusy" @click="probeAi('models')">获取模型</el-button>
+                <el-button :loading="aiBusy === 'test'" :disabled="!aiReady || !settings.aiModel?.trim() || !!aiBusy" @click="probeAi('test')">连接自检</el-button>
+                <span v-if="aiFeedback" role="status" class="ai-feedback" :class="{'ai-error': aiError}">{{ aiFeedback }}</span>
+              </SettingsItem>
+              <SettingsItem label="启用辅助"><el-switch v-model="settings.aiEnabled" aria-label="启用辅助" :disabled="!settings.aiEnabled && !connectionTested"/><span class="hint">{{ connectionTested ? '当前连接已通过自检' : '填写密钥和模型后可直接自检。通过后可启用并保存。' }}</span></SettingsItem>
               <SettingsItem label="每日请求上限"><el-input-number v-model="settings.aiDailyRequests" :min="0"/></SettingsItem>
               <SettingsItem label="每日 token 上限"><el-input-number v-model="settings.aiDailyTokens" :min="0" :step="100000"/></SettingsItem>
               <SettingsItem label="AI 并发"><el-input-number v-model="settings.aiConcurrency" :min="1" :max="8"/></SettingsItem>
-              <SettingsItem label="新自动下载并发"><el-input-number v-model="settings.downloadConcurrency" :min="1" :max="20"/></SettingsItem>
-              <SettingsItem label="预留空间（字节）"><el-input-number v-model="settings.reserveBytes" :min="0" :step="1073741824"/></SettingsItem>
-              <SettingsItem label="无进展小时上限"><el-input-number v-model="settings.noProgressHours" :min="1"/></SettingsItem>
-              <SettingsItem label="总等待小时上限"><el-input-number v-model="settings.downloadTimeoutHours" :min="1"/></SettingsItem>
-              <SettingsItem><el-button type="primary" @click="saveSettings">保存设置</el-button><el-button @click="inspect('/ai/test', 'AI 结构化输出自检')">连接自检</el-button></SettingsItem>
+              <SettingsItem><el-button type="primary" :loading="busy" :disabled="!!aiBusy || (settings.aiEnabled && !connectionTested)" @click="saveSettings">保存设置</el-button></SettingsItem>
             </div>
           </el-collapse-item>
         </el-collapse>
@@ -259,6 +264,35 @@ import {dimensionLabels, jobLabels, moveDimension, parseMappings, mappingText, d
 const base = '/api/v2/upgrade'
 const status = ref({}), loading = ref(false), busy = ref(false), tab = ref('overview')
 const config = ref({}), settings = ref(null), policyRows = ref([]), campaignRows = ref([]), modelRows = ref([])
+const aiBusy = ref(''), aiFeedback = ref(''), aiError = ref(false), draftTested = ref(null)
+let aiRequest = 0
+const comparableAddress = value => (value || '').trim().replace(/\/+$/, '')
+const savedKeyUsable = computed(() => config.value.upgrade?.aiKeyConfigured && !settings.value?.clearAiKey
+  && comparableAddress(settings.value?.aiBaseUrl) === comparableAddress(config.value.upgrade.aiBaseUrl))
+const aiReady = computed(() => settings.value?.aiBaseUrl?.trim() && !settings.value.clearAiKey
+  && !!(settings.value.aiApiKey?.trim() || savedKeyUsable.value))
+const connectionTested = computed(() => draftTested.value ?? (savedKeyUsable.value && !settings.value.aiApiKey?.trim()
+  && settings.value.aiBaseUrl === config.value.upgrade.aiBaseUrl && settings.value.aiModel === config.value.upgrade.aiModel
+  && config.value.upgradeModeRevision === status.value.mode?.revision && status.value.aiTested))
+function resetAiFeedback() {
+  ++aiRequest
+  aiBusy.value = ''
+  aiFeedback.value = ''
+  aiError.value = false
+  draftTested.value = null
+}
+watch([() => settings.value?.aiBaseUrl, () => settings.value?.aiApiKey, () => settings.value?.clearAiKey], () => {
+  resetAiFeedback()
+  modelRows.value = []
+  if (settings.value?.clearAiKey) {
+    settings.value.aiApiKey = ''
+    settings.value.aiEnabled = false
+  }
+}, {flush: 'sync'})
+watch(() => settings.value?.aiModel, () => {
+  if (aiBusy.value === 'models') draftTested.value = null
+  else resetAiFeedback()
+}, {flush: 'sync'})
 const targetPage = ref({}), candidatePage = ref({}), jobPage = ref({})
 const versionPage = ref({}), aliasText = ref('{}')
 const targetOffset = ref(0), candidateOffset = ref(0), jobOffset = ref(0), versionOffset = ref(0), selectedTarget = ref(null)
@@ -303,13 +337,15 @@ async function loadCandidates() {
   const response = await api.get(`${base}/candidates?targetId=${encodeURIComponent(selectedTarget.value.id)}&offset=${candidateOffset.value}`)
   if (request === candidateRequest) candidatePage.value = response.data
 }
-async function loadSettings() {
-  config.value = (await api.get('/api/v2/config')).data
-  settings.value = clone(config.value.upgrade)
+function applySettings(saved) {
+  resetAiFeedback()
+  config.value = saved
+  settings.value = clone(saved.upgrade)
   embyMappingText.value = mappingText(settings.value.embyMappings)
   downloaderMappingText.value = mappingText(settings.value.downloaderMappings)
   libraryText.value = (settings.value.libraryIds || []).join(', ')
 }
+async function loadSettings() { applySettings((await api.get('/api/v2/config')).data) }
 async function reload() {
   loading.value = true
   try { await Promise.all([loadStatus(), loadTargets(), loadJobs(), loadSettings(),
@@ -454,13 +490,44 @@ async function saveTarget() { try { await api.put(`${base}/targets/${targetForm.
 async function saveSettings() {
   busy.value = true
   try { settings.value.embyMappings = parseMappings(embyMappingText.value); settings.value.downloaderMappings = parseMappings(downloaderMappingText.value); settings.value.libraryIds = libraryText.value.split(',').map(s => s.trim()).filter(Boolean)
-    config.value = (await api.put('/api/v2/config', {...config.value, upgrade: settings.value})).data
-    await loadSettings(); await loadStatus(); ElMessage.success('设置已保存')
+    applySettings((await api.put('/api/v2/config', {...config.value, upgrade: settings.value})).data)
+    await loadStatus(); ElMessage.success('设置已保存')
   } catch(e) { if(!e.status) ElMessage.error(e.message); else throw e } finally { busy.value = false }
 }
 async function inspect(path, title) { detail.value = (await api.post(base + path, {})).data; detailTitle.value = title; correctionText.value = ''; detailDialog.value = true; await loadSettings() }
 async function syncLibraries() { for(const id of settings.value.libraryIds) await api.post(`${base}/emby/sync`, {libraryId: id}); await loadJobs() }
-async function loadModels() { modelRows.value = (await api.get(`${base}/ai/models`)).data.data || [] }
+function suggestModels(query, done) {
+  const filter = (query || '').toLowerCase()
+  done(modelRows.value.filter(id => id.toLowerCase().includes(filter)).map(value => ({value})))
+}
+async function probeAi(action) {
+  if (aiBusy.value || !aiReady.value) return
+  const {aiBaseUrl, aiApiKey, aiModel, clearAiKey} = settings.value
+  if (action === 'test' && !aiModel?.trim()) return
+  const current = ++aiRequest
+  aiBusy.value = action
+  aiFeedback.value = ''
+  aiError.value = false
+  try {
+    const {data} = await api.post(`${base}/ai/${action}`, {aiBaseUrl, aiApiKey, aiModel, clearAiKey}, {silent: true})
+    if (current !== aiRequest) return
+    if (action === 'models') {
+      modelRows.value = [...new Set(data.data.map(row => row?.id).filter(id => typeof id === 'string' && id.trim()))]
+      aiFeedback.value = modelRows.value.length ? `已获取 ${modelRows.value.length} 个模型，点击模型 ID 输入框选择。` : '服务未列出模型，请直接输入模型 ID。'
+    } else {
+      draftTested.value = true
+      aiFeedback.value = `${data.model} 的 JSON 输出自检通过。`
+    }
+  } catch (error) {
+    if (current !== aiRequest) return
+    if (action === 'test') draftTested.value = false
+    else modelRows.value = []
+    aiError.value = true
+    aiFeedback.value = error.message + (action === 'models' ? '。也可直接输入模型 ID 后自检。' : '')
+  } finally {
+    if (current === aiRequest) aiBusy.value = ''
+  }
+}
 async function showJob(job) { detail.value = (await api.get(`${base}/jobs/${job.id}`)).data; detailTitle.value = '逐文件提交与事件'; correctionText.value = ''; detailDialog.value = true }
 async function resolveCandidate() { if (detail.value?.targetId !== selectedTarget.value?.id) return; try { await api.post(`${base}/candidates/${detail.value.id}/resolve`, JSON.parse(correctionText.value)); detailDialog.value = false; correctionText.value = ''; await loadCandidates() } catch(e) { if(e instanceof SyntaxError) ElMessage.error('修正 JSON 格式错误'); else throw e } }
 function stopTimer() { clearInterval(timer); timer = undefined }
@@ -487,6 +554,8 @@ onBeforeUnmount(stopTimer)
 .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
 .summary-grid strong { font-size: 26px; line-height: 1.8; }
 .settings-form { padding: 16px 0 0; }
+.ai-feedback { flex-basis: 100%; color: var(--el-text-color-secondary); }
+.ai-error { color: var(--el-color-danger); }
 .hint { color: var(--el-text-color-secondary); font-size: 13px; line-height: 1.6; }
 .upgrade-page :deep(.settings-item-content) { gap: 8px; }
 .upgrade-page :deep(.el-alert) { margin-bottom: 18px; border-radius: 6px; }

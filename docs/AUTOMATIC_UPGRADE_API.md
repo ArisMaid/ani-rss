@@ -33,8 +33,8 @@
 | POST `/emby/import-notification` | 显式复制一次现有 Emby 通知配置 |
 | POST `/emby/test` | 媒体库列表、实际路径映射与可读性样例 |
 | POST `/emby/sync` | `{"libraryId":"123"}`，202 返回索引任务 |
-| GET `/ai/models` | 请求配置服务的可用模型列表 |
-| POST `/ai/test` | 小型 JSON 输出自检；计入请求和 token 预算 |
+| POST `/ai/models` | 用表单草稿获取模型列表，返回 `data[].id`。GET 同路径读取已保存连接 |
+| POST `/ai/test` | 对表单草稿执行一次 JSON 输出自检，计入已保存的请求和 token 预算。无请求体或传 `{}` 时验证已保存连接并记录结果 |
 
 分页使用 `offset=0&limit=50`，limit 范围 1–200；返回 items、offset、limit、hasMore。预演返回 decisions、reasonDistribution 与分页字段。预演只反映保存的证据，不代表已通过实际文件校验或获得生产验收。
 
@@ -52,7 +52,9 @@
 
 ## 路径配置
 
-连接与路径设置通过现有 `/api/v2/config` 中的 upgrade 字段保存。提交时保留同次读取的完整配置和 upgradeModeRevision；旧页面覆盖新配置会返回 409。读取秘密字段返回空值和 `embyKeyConfigured`／`aiKeyConfigured`，空输入保留旧值；显式清除使用 clearEmbyKey／clearAiKey。
+连接与路径设置通过现有 `/api/v2/config` 中的 upgrade 字段保存。提交时保留同次读取的完整配置和 upgradeModeRevision。旧页面覆盖新配置会返回 409。读取秘密字段返回空值和 `embyKeyConfigured`／`aiKeyConfigured`。用 clearEmbyKey／clearAiKey 明确清除密钥。
+
+模型列表和自检的 POST 请求体支持 `aiBaseUrl`、`aiApiKey`、`aiModel`、`clearAiKey`。仅相同 API 地址可以留空复用已保存的 AI 密钥。草稿自检不会修改当前配置。通过后可在 30 分钟内保存同一地址、密钥和模型并启用辅助。草稿验证在服务重启后失效，已保存的验证随配置保留。
 
 ```json
 {

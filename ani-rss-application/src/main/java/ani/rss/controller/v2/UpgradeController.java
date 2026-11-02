@@ -1,6 +1,7 @@
 package ani.rss.controller.v2;
 
 import ani.rss.annotation.Auth;
+import ani.rss.exception.ApiProblemException;
 import ani.rss.upgrade.*;
 import ani.rss.upgrade.UpgradeModels.*;
 import ani.rss.util.other.ConfigUtil;
@@ -35,7 +36,7 @@ public class UpgradeController {
                 Map.entry("candidates",repository.counts("upgrade_releases")),Map.entry("dependencies",dependencies),Map.entry("aiEnabled",settings.isAiEnabled()),
                 Map.entry("commitInProgress",UpgradeCommitService.committing()||UpgradeFileCoordinator.recoveryPending()),Map.entry("scanCursors",repository.list("upgrade_scan_cursors",null,null,0,200,Cursor.class)),
                 Map.entry("aiUsage",repository.get("upgrade_ai_cache","usage:"+java.time.LocalDate.now(java.time.ZoneId.of(settings.getTimezone())),com.google.gson.JsonObject.class).orElseGet(com.google.gson.JsonObject::new)),
-                Map.entry("aiTested",Objects.equals(DeepSeekAnalysisClient.fingerprint(settings),settings.getAiTestFingerprint())),Map.entry("coverageMetrics",repository.coverageMetrics()));
+                Map.entry("aiTested",DeepSeekAnalysisClient.tested(settings)),Map.entry("coverageMetrics",repository.coverageMetrics()));
     }
     public record ModeRequest(UpgradeMode mode,long expectedRevision) {}
     @Auth @PutMapping("/mode") public UpgradeModeService.ModeView mode(@RequestBody ModeRequest request) { return modes.switchMode(request.mode(),request.expectedRevision()); }
@@ -207,6 +208,35 @@ public class UpgradeController {
     @Auth @PostMapping("/emby/test") public Map<String,Object> embyTest() { return emby.test(); }
     public record SyncRequest(String libraryId) {}
     @Auth @PostMapping("/emby/sync") @ResponseStatus(HttpStatus.ACCEPTED) public Job sync(@RequestBody SyncRequest request) { return scheduler.enqueue("EMBY",request.libraryId()); }
-    @Auth @PostMapping("/ai/test") public Object aiTest() { return ai.test(); }
-    @Auth @GetMapping("/ai/models") public Object models() { return ai.models(); }
+    @Auth @PostMapping("/ai/test") public Object aiTest(@RequestBody(required=false) AiConnectionDraft draft) {
+        return probe(() -> ai.test(draft));
+    }
+    @Auth @GetMapping("/ai/models") public Object savedModels() { return models(null); }
+    @Auth @PostMapping("/ai/models") public Object models(@RequestBody(required=false) AiConnectionDraft draft) {
+        return probe(() -> ai.models(draft));
+    }
+
+    private Object probe(java.util.function.Supplier<com.google.gson.JsonObject> operation) {
+        try { return operation.get(); }
+        catch (UpgradeHttp.SourceFailure failure) {
+            String code = failure.getMessage();
+            String message = switch (code) {
+                case "UPSTREAM_HTTP_401", "UPSTREAM_HTTP_403" -> "AI 服务拒绝访问，请检查 API Key 和模型权限";
+                case "UPSTREAM_HTTP_402" -> "AI 服务余额不足，请检查该密钥所属账户";
+                case "UPSTREAM_HTTP_404" -> "AI 接口或模型不存在，请检查 API 地址和模型 ID";
+                case "UPSTREAM_HTTP_400", "UPSTREAM_HTTP_422" -> "AI 服务拒绝请求，请检查模型 ID 和 JSON 输出支持";
+                case "UPSTREAM_HTTP_429" -> "AI 服务限流或配额不足，请检查配额后重试";
+                case "AI_DAILY_BUDGET_EXHAUSTED" -> "今日 AI 预算已用尽，请检查已保存的请求和 token 上限";
+                case "HTTP_CONCURRENCY_LIMIT", "HTTP_SOURCE_CONCURRENCY_LIMIT", "AI_CONCURRENCY_LIMIT" -> "当前并发请求已达上限，请稍后再试";
+                case "AI_INVALID_MODEL_LIST" -> "服务未返回有效模型列表，可手工输入模型 ID";
+                case "AI_EMPTY_RESPONSE" -> "模型返回空内容，请重试或选择支持 JSON 输出的模型";
+                case "AI_TRUNCATED_RESPONSE" -> "模型输出未完整结束，请检查模型的 JSON 输出支持";
+                case "AI_INVALID_JSON", "AI_SELF_TEST_FAILED", "AI_OUTPUT_TOO_LARGE" -> "模型未返回自检要求的 JSON 对象，请检查模型的结构化输出能力";
+                default -> "无法完成 AI 请求，请检查服务地址、网络与服务状态（" + code + "）";
+            };
+            HttpStatus status = code.equals("AI_DAILY_BUDGET_EXHAUSTED") || code.endsWith("CONCURRENCY_LIMIT")
+                    ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.BAD_GATEWAY;
+            throw new ApiProblemException(status, code, message, null, Map.of("retryable", failure.retryable()));
+        }
+    }
 }

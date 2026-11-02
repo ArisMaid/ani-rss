@@ -325,6 +325,19 @@ public class ConfigUtil {
         }
     }
 
+    public static void markSavedAiConnectionTested(String fingerprint) {
+        synchronized (SYNC_LOCK) {
+            Config current = snapshot();
+            var settings = current.getUpgrade();
+            if (!ani.rss.upgrade.DeepSeekAnalysisClient.fingerprint(settings).equals(fingerprint))
+                throw new IllegalArgumentException("AI 配置已在自检期间改变，请使用当前连接重新自检");
+            if (!fingerprint.equals(settings.getAiTestFingerprint())) {
+                settings.setAiTestFingerprint(fingerprint);
+                syncLocked(current);
+            }
+        }
+    }
+
     public static void switchUpgradeMode(ani.rss.upgrade.UpgradeMode mode, long expectedRevision) {
         synchronized (SYNC_LOCK) {
             Config candidate = snapshot();

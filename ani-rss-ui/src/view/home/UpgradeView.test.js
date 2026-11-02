@@ -3,7 +3,7 @@ import { expect, it, vi } from 'vitest'
 import { flushPromises, shallowMount } from '@vue/test-utils'
 import UpgradeView from './UpgradeView.vue'
 
-const api = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(async () => ({})) }))
+const api = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(async () => ({})), post: vi.fn() }))
 vi.mock('@/js/api.js', () => ({ default: api }))
 vi.mock('element-plus', () => ({ ElMessage: {}, ElMessageBox: {} }))
 vi.mock('@/view/custom/PageHeaderView.vue', () => ({ default: { template: '<div/>' } }))
@@ -41,4 +41,43 @@ it('keeps rows and protection actions on the selected series when earlier reques
   } finally {
     wrapper.unmount()
   }
+})
+
+it('uses the edited AI connection, suppresses repeat probes and discards results for previous credentials or models', async () => {
+  api.get.mockImplementation(async path => ({data: path === '/api/v2/config'
+    ? {upgrade: {libraryIds: [], aiBaseUrl: 'https://fixture.example', aiApiKey: '', aiModel: '', clearAiKey: false}}
+    : []}))
+  const wrapper = shallowMount(UpgradeView, { global: { config: { warnHandler() {} }, stubs: { 'el-tabs': true, 'el-dialog': true } } })
+  try {
+    await flushPromises()
+    const state = wrapper.vm.$.setupState
+    state.settings.aiApiKey = 'fixture'
+    let finish
+    api.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const first = state.probeAi('models')
+    await state.probeAi('models')
+    expect(api.post).toHaveBeenCalledTimes(1)
+    expect(api.post).toHaveBeenCalledWith('/api/v2/upgrade/ai/models', {
+      aiBaseUrl: 'https://fixture.example', aiApiKey: 'fixture', aiModel: '', clearAiKey: false
+    }, {silent: true})
+    state.settings.aiApiKey = 'replacement'
+    finish({data: {data: [{id: 'stale'}]}})
+    await first
+    expect(state.modelRows).toEqual([])
+    state.settings.aiModel = 'manual'
+    api.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    const previous = state.probeAi('test')
+    state.settings.aiModel = 'replacement-model'
+    finish({data: {success: true, model: 'manual'}})
+    await previous
+    expect(state.connectionTested).toBeFalsy()
+    api.post.mockResolvedValueOnce({data: {success: true, model: 'replacement-model'}})
+    await state.probeAi('test')
+    expect(state.connectionTested).toBe(true)
+    expect(state.settings.aiApiKey).toBe('replacement')
+    expect(state.detailDialog).toBe(false)
+    state.settings.clearAiKey = true
+    expect(state.connectionTested).toBeFalsy()
+    expect(state.aiReady).toBeFalsy()
+  } finally { wrapper.unmount() }
 })

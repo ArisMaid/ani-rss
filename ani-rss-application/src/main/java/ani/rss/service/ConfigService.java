@@ -134,7 +134,10 @@ public class ConfigService {
             }
         }
 
-        if(candidate.getUpgrade()!=null&&candidate.getUpgrade().isAiEnabled()&&!Objects.equals(ani.rss.upgrade.DeepSeekAnalysisClient.fingerprint(candidate.getUpgrade()),candidate.getUpgrade().getAiTestFingerprint())) throw new IllegalArgumentException("启用 AI 前请先保存地址、密钥与模型，并完成结构化输出自检");
+        if (candidate.getUpgrade() != null && candidate.getUpgrade().isAiEnabled()
+                && !ani.rss.upgrade.DeepSeekAnalysisClient.tested(candidate.getUpgrade())) {
+            throw new IllegalArgumentException("请先对当前 API 地址、密钥和模型执行连接自检，再保存并启用 AI 辅助");
+        }
         ConfigUtil.syncExpected(candidate,previousConfig.getUpgradeModeRevision());
         Config committed = ConfigUtil.snapshot();
         Integer newRenameSleepSeconds = committed.getRenameSleepSeconds();
@@ -360,11 +363,9 @@ public class ConfigService {
             var old = previous.getUpgrade() == null ? new ani.rss.upgrade.UpgradeSettings() : previous.getUpgrade();
             if (next.isClearEmbyKey()) next.setEmbyApiKey("");
             else if (StrUtil.isBlank(next.getEmbyApiKey())) next.setEmbyApiKey(old.getEmbyApiKey());
-            if (next.isClearAiKey()) next.setAiApiKey("");
-            else if (StrUtil.isBlank(next.getAiApiKey())) next.setAiApiKey(old.getAiApiKey());
+            ani.rss.upgrade.AiConnectionDraft.from(next).applyTo(next, old);
             next.setClearEmbyKey(false);
-            next.setClearAiKey(false);
-            next.setAiTestFingerprint(old.getAiTestFingerprint());
+            ani.rss.upgrade.DeepSeekAnalysisClient.applyVerifiedConnection(next, old);
         }
         if (StrUtil.isBlank(candidate.getTmdbApiKey())) candidate.setTmdbApiKey(previous.getTmdbApiKey());
         if (StrUtil.isBlank(candidate.getDownloadToolPassword())) candidate.setDownloadToolPassword(previous.getDownloadToolPassword());

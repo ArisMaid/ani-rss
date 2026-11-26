@@ -2,20 +2,28 @@ package ani.rss.service;
 
 import ani.rss.commons.GsonStatic;
 import ani.rss.entity.Config;
+import ani.rss.entity.Login;
 import ani.rss.entity.NotificationConfig;
+import ani.rss.enums.NotificationTypeEnum;
+import ani.rss.enums.OffsetTypeEnum;
+import cn.hutool.crypto.SecureUtil;
 import ani.rss.util.basic.LogUtil;
 import ani.rss.util.other.ConfigUtil;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.boot.info.GitProperties;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Path;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.Properties;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -104,6 +112,69 @@ class ConfigServiceSecretTest {
         List<NotificationConfig> stored = ConfigUtil.snapshot().getNotificationConfigList();
         assertEquals("operation-secret", stored.get(0).getTelegramBotToken());
         assertEquals("", stored.get(1).getTelegramBotToken());
+    }
+
+    @Test
+    void masksAstrBotKeyAndRestoresItOnlyForAUniqueIdentity() {
+        NotificationConfig saved = NotificationConfig.createNotificationConfig()
+                .setNotificationType(NotificationTypeEnum.ASTRBOT)
+                .setComment("AstrBot")
+                .setAstrBotApiKey("saved-astrbot-key");
+        assertEquals("http://127.0.0.1:6185", saved.getAstrBotHost());
+        assertEquals("", saved.getAstrBotUmo());
+        assertTrue(saved.getAstrBotImage());
+
+        ConfigUtil.sync(ConfigUtil.copy(original).setNotificationConfigList(List.of(saved)));
+        ConfigService service = configService();
+        Config response = service.config();
+        NotificationConfig masked = response.getNotificationConfigList().get(0);
+        assertEquals("", masked.getAstrBotApiKey());
+        assertEquals("saved-astrbot-key",
+                service.notificationForOperation(masked).getAstrBotApiKey());
+        assertEquals("", masked.getAstrBotApiKey());
+
+        service.setConfig(response);
+        assertEquals("saved-astrbot-key",
+                ConfigUtil.snapshot().getNotificationConfigList().get(0).getAstrBotApiKey());
+
+        NotificationConfig duplicate = NotificationConfig.createNotificationConfig()
+                .setNotificationType(NotificationTypeEnum.ASTRBOT)
+                .setComment("AstrBot")
+                .setAstrBotApiKey("other-key");
+        ConfigUtil.sync(ConfigUtil.snapshot().setNotificationConfigList(List.of(saved, duplicate)));
+        Config ambiguousResponse = service.config();
+        NotificationConfig ambiguous = ambiguousResponse.getNotificationConfigList().get(0);
+        assertEquals("", service.notificationForOperation(ambiguous).getAstrBotApiKey());
+        service.setConfig(ambiguousResponse.setNotificationConfigList(List.of(ambiguous)));
+        assertEquals("", ConfigUtil.snapshot().getNotificationConfigList().get(0).getAstrBotApiKey());
+    }
+
+    @Test
+    void computesDefaultLoginBeforeMaskingAndNeverPersistsTheSubmittedIndicator() throws Exception {
+        ConfigUtil.sync(ConfigUtil.copy(original)
+                .setOffsetType(null)
+                .setLogin(new Login("admin", SecureUtil.md5("admin"))));
+        ConfigService service = configService();
+        Config response = service.config();
+        assertTrue(response.getLogin().getIsDefault());
+        assertEquals("", response.getLogin().getPassword());
+        assertEquals(OffsetTypeEnum.AUTO_OFFSET, response.getOffsetType());
+        assertNull(ConfigUtil.snapshot().getLogin().getIsDefault());
+
+        response.getLogin().setIsDefault(false);
+        response.setOffsetType(OffsetTypeEnum.BGM_OFFSET);
+        service.setConfig(response);
+        assertTrue(service.config().getLogin().getIsDefault());
+        assertEquals(OffsetTypeEnum.BGM_OFFSET, service.config().getOffsetType());
+        assertNull(ConfigUtil.snapshot().getLogin().getIsDefault());
+        assertFalse(Files.readString(tempDir.resolve("config.v2.json")).contains("isDefault"));
+    }
+
+    private static ConfigService configService() {
+        ConfigService service = new ConfigService();
+        ReflectionTestUtils.setField(service, "gitProperties", new GitProperties(new Properties()));
+        ReflectionTestUtils.setField(service, "afdianService", mock(AfdianService.class));
+        return service;
     }
 
     @Test

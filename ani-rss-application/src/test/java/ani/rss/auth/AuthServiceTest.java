@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Files;
@@ -88,6 +89,22 @@ class AuthServiceTest {
         assertFalse(AuthService.validateRequest(request));
         request.addHeader(AuthService.CSRF_HEADER, result.csrfToken());
         assertTrue(AuthService.validateRequest(request));
+    }
+
+    @Test
+    void detectsDefaultLoginForBothSupportedPasswordFormats() {
+        Config config = new Config().setLogin(new Login());
+        assertTrue(AuthService.isDefaultLogin(config));
+        assertFalse(AuthService.isDefaultLogin(new Config()));
+
+        config.setLogin(new Login("admin", SecureUtil.md5("admin").toUpperCase(java.util.Locale.ROOT)));
+        assertTrue(AuthService.isDefaultLogin(config));
+        config.getLogin().setPassword(Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8().encode("admin"));
+        assertTrue(AuthService.isDefaultLogin(config));
+        config.getLogin().setUsername("operator");
+        assertFalse(AuthService.isDefaultLogin(config));
+        config.getLogin().setUsername("admin").setPassword(SecureUtil.md5("different-password"));
+        assertFalse(AuthService.isDefaultLogin(config));
     }
 
     @Test

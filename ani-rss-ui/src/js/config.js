@@ -30,6 +30,7 @@ export let configData = {
     "delete": false,
     "deleteStandbyRSSOnly": false,
     "offset": false,
+    "offsetType": "AUTO_OFFSET",
     "titleYear": true,
     "autoDisabled": false,
     "skip5": true,
@@ -46,7 +47,8 @@ export let configData = {
     "downloadCount": 0,
     "login": {
         "username": "admin",
-        "password": ""
+        "password": "",
+        "isDefault": false
     },
     "multiLoginForbidden": true,
     "loginEffectiveHours": 3,
@@ -86,7 +88,7 @@ export let configData = {
     "trackersUpdateUrls": "https://cf.trackerslist.com/best.txt",
     "notificationTemplate": "",
     "autoUpdate": false,
-    "version": "3.2.54.79",
+    "version": "3.3.1.80",
     "bgmImageSize": "medium",
     "customCss": "",
     "customJs": "",

@@ -1,7 +1,7 @@
 export let notificationTypeList = [
     {
         name: 'TELEGRAM',
-        label: 'TG通知'
+        label: 'TG 通知'
     },
     {
         name: 'MAIL',
@@ -9,11 +9,11 @@ export let notificationTypeList = [
     },
     {
         name: 'SERVER_CHAN',
-        label: 'Server酱'
+        label: 'Server 酱'
     },
     {
         name: "BARK",
-        label: "Bark通知"
+        label: "Bark 通知"
     },
     {
         name: 'SYSTEM',
@@ -24,8 +24,12 @@ export let notificationTypeList = [
         label: 'WebHook'
     },
     {
+        name: 'ASTRBOT',
+        label: 'AstrBot'
+    },
+    {
         name: 'EMBY_REFRESH',
-        label: 'Emby媒体库刷新'
+        label: 'Emby 媒体库刷新'
     },
     {
         name: 'SHELL',
@@ -37,10 +41,10 @@ export let notificationTypeList = [
     },
     {
         name: 'OPEN_LIST_UPLOAD',
-        label: 'OpenList上传'
+        label: 'OpenList 上传'
     }
 ]
 
 export let getLabel = (name) => {
-    return notificationTypeList.filter(item => item.name === name)[0].label;
+    return notificationTypeList.find(item => item.name === name)?.label || name;
 }

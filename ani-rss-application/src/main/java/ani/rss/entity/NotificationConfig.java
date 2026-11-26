@@ -283,6 +283,18 @@ public class NotificationConfig implements Serializable {
     @Schema(description = "Bark Volume")
     private Integer barkVolume;
 
+    @Schema(description = "AstrBot 服务地址")
+    private String astrBotHost;
+
+    @Schema(description = "AstrBot API Key")
+    private String astrBotApiKey;
+
+    @Schema(description = "AstrBot 目标会话 UMO")
+    private String astrBotUmo;
+
+    @Schema(description = "AstrBot 发送封面")
+    private Boolean astrBotImage;
+
     /**
      * 通知 状态
      */
@@ -330,6 +342,13 @@ public class NotificationConfig implements Serializable {
                 .setTelegramImage(true)
                 .setTelegramTopicId(-1)
                 .setTelegramFormat("");
+
+        // AstrBot
+        notificationConfig
+                .setAstrBotHost("http://127.0.0.1:6185")
+                .setAstrBotApiKey("")
+                .setAstrBotUmo("")
+                .setAstrBotImage(true);
 
         // webhook
         notificationConfig

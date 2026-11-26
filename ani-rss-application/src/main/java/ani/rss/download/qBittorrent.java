@@ -323,16 +323,8 @@ public class qBittorrent implements BaseDownload {
      * @return 下载是否成功
      */
     public Boolean start(TorrentsInfo torrentsInfo) {
-        boolean b = execute(postApi("/api/v2/torrents/start")
-                .form("hashes", torrentsInfo.getHash())
-                , qBittorrent::requireSuccess);
-        if (b) {
-            return true;
-        }
-
-        return execute(postApi("/api/v2/torrents/resume")
-                .form("hashes", torrentsInfo.getHash())
-                , qBittorrent::requireSuccess);
+        return execute(postApi("/api/v2/torrents/start")
+                .form("hashes", torrentsInfo.getHash()), qBittorrent::requireSuccess);
     }
 
     @Override

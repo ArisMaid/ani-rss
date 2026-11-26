@@ -1,6 +1,7 @@
 package ani.rss.update;
 
 import ani.rss.entity.About;
+import ani.rss.entity.Global;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -12,11 +13,26 @@ import java.security.MessageDigest;
 import java.util.HexFormat;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class BaseUpdateTest {
     @TempDir
     Path tempDir;
+
+    @Test
+    void selectsDesktopUpdaterBeforePlatformUpdaterAndStagesBesideTheCurrentJar() {
+        String[] originalArgs = Global.args().toArray(String[]::new);
+        try {
+            Global.setArgs(new String[]{"--ani-rss-desktop=true"});
+            assertInstanceOf(DesktopUpdate.class, BaseUpdate.getInstance());
+            assertEquals(tempDir.resolve("ani-rss.jar.pending"),
+                    DesktopUpdate.pendingPath(tempDir.resolve("ani-rss.jar").toFile()));
+        } finally {
+            Global.setArgs(originalArgs);
+        }
+    }
 
     @Test
     void writesOnlyAnExactlySizedDigestVerifiedUpdate() throws Exception {

@@ -35,9 +35,6 @@ public class AnimeGardenService {
     private static final long SUBJECT_SNAPSHOT_TTL_MILLIS = 10 * 60 * 1000L;
 
     @Resource
-    private CacheService cacheService;
-
-    @Resource
     private PublicScoreService publicScoreService;
 
     private final SubjectLoader subjectLoader;
@@ -90,7 +87,6 @@ public class AnimeGardenService {
     ) {
         this.subjectLoader = subjectLoader;
         this.bgmInfoLoader = bgmInfoLoader;
-        this.cacheService = cacheService;
         this.publicScoreService = publicScoreService;
         this.clock = Objects.requireNonNull(clock);
     }
@@ -157,21 +153,13 @@ public class AnimeGardenService {
         rememberSubjectSnapshot(bgmUrl, subjectList.stream()
                 .map(AnimeGarden.Subject::getId)
                 .toList());
-        JsonObject bgmCover = cacheService.getBgmCoverSnapshot();
         Set<String> subscribedBgmIds = new HashSet<>(bgmIdList);
 
-        // Subjects are the required list payload.  Cover and score are
-        // optional enrichment and must not serialize the first response on
-        // either public upstream.
         subjectList = subjectList.stream()
                 .peek(subject -> {
                     String id = subject.getId();
-                    String cover = Optional.ofNullable(bgmCover.get(id))
-                            .map(it -> GsonStatic.fromJson(it, BgmInfo.Images.class))
-                            .map(BgmInfo.Images::getSmall)
-                            .orElse("");
                     subject
-                            .setCover(cover)
+                            .setCover(posterUrl(id))
                             .setExists(subscribedBgmIds.contains(id));
                 })
                 .toList();
@@ -240,28 +228,22 @@ public class AnimeGardenService {
                     .setRetryableSubjectIds(new ArrayList<>());
         }
 
-        CacheService.CoverLookup coverLookup = cacheService.getBgmCoverForEnrichmentSnapshot();
-        JsonObject coverIndex = coverLookup.entries();
         PublicScoreService.BgmScoreLookup scoreLookup = publicScoreService.getCachedBgmScoresAndWarm(ids);
         Map<String, AnimeGarden.Enrichment> subjects = new LinkedHashMap<>();
-        LinkedHashSet<String> retryable = new LinkedHashSet<>(scoreLookup.retryableSubjectIds());
-        boolean coverIndexPending = !coverLookup.loaded()
-                || coverLookup.expiresAt() <= System.currentTimeMillis();
         for (String id : ids) {
-            String cover = Optional.ofNullable(coverIndex.get(id))
-                    .map(it -> GsonStatic.fromJson(it, BgmInfo.Images.class))
-                    .map(BgmInfo.Images::getSmall)
-                    .orElse("");
-            if (coverIndexPending) {
-                retryable.add(id);
-            }
             subjects.put(id, new AnimeGarden.Enrichment()
-                    .setCover(cover)
+                    .setCover(posterUrl(id))
                     .setScore(scoreLookup.scores().get(id)));
         }
         return new AnimeGarden.EnrichmentResponse()
                 .setSubjects(subjects)
-                .setRetryableSubjectIds(new ArrayList<>(retryable));
+                .setRetryableSubjectIds(new ArrayList<>(scoreLookup.retryableSubjectIds()));
+    }
+
+    private static String posterUrl(String id) {
+        return isValidSubjectId(id)
+                ? "https://bgm.animes.garden/bangumi/subject/" + id + "/poster.jpeg?quality=small"
+                : "";
     }
 
     private static boolean isValidSubjectId(String id) {

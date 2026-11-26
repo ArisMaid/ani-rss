@@ -3,7 +3,7 @@
     <component v-if="editOpen" :is="EditAniView" ref="editAniRef"/>
     <component v-if="playListOpen" :is="PlayListView" ref="playListRef"/>
     <component v-if="coverOpen" :is="CoverView" ref="coverRef"/>
-    <component v-if="delOpen" :is="DelAniView" ref="delAniRef"/>
+    <component v-if="delOpen" :is="DelAniView" ref="delAniRef" @callback="reloadAfterDelete"/>
     <component v-if="rateOpen" :is="BgmRateView" ref="bgmRateRef"/>
     <PageHeaderView title="首页" :subtitle="`${todayLabel} · ${todayText}`">
       <template #actions>
@@ -335,6 +335,12 @@ const loadAll = async () => {
   } finally {
     refreshLoading.value = false
   }
+}
+
+// 删除成功后刷新首页列表、统计和下载任务，并同步缓存中的订阅页列表。
+const reloadAfterDelete = async () => {
+  window.$reLoadList?.()
+  await loadAll()
 }
 
 const schedulePolling = () => {

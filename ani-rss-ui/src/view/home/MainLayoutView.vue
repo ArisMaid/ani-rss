@@ -53,19 +53,55 @@
         </KeepAlive>
       </RouterView>
     </main>
+    <!-- 仅命中默认凭据时按需加载提醒弹窗，避免在首屏引入额外对话框资源。 -->
+    <component
+        v-if="defaultLoginDialogVisible"
+        :is="DefaultLoginDialogView"
+        v-model="defaultLoginDialogVisible"
+        v-model:hide-reminder="hideDefaultLoginReminder"
+        @confirm="openSecuritySettings"/>
   </div>
 </template>
 
 <script setup>
-import {onMounted} from "vue";
-import {RouterView, useRoute} from "vue-router";
+import {defineAsyncComponent, onMounted, ref} from "vue";
+import {useLocalStorage} from "@vueuse/core";
+import {RouterView, useRoute, useRouter} from "vue-router";
 import {Collection, Download, House, Setting, Tickets, Refresh} from "@element-plus/icons-vue";
 import {initLayout} from "@/js/global.js";
+import * as http from "@/js/http.js";
+
+const DefaultLoginDialogView = defineAsyncComponent(() => import('./DefaultLoginDialogView.vue'))
 
 const route = useRoute()
+const router = useRouter()
+const defaultLoginDialogVisible = ref(false)
+// 在当前浏览器持久化提醒偏好，刷新页面或重新登录后仍然生效。
+const hideDefaultLoginReminder = useLocalStorage('hide-default-login-reminder', false)
+
+// 未选择“不再提醒”时读取后端判断，页面内切换路由时不重复弹窗。
+const checkDefaultLogin = async () => {
+  if (hideDefaultLoginReminder.value) {
+    return
+  }
+  try {
+    const res = await http.config()
+    // 请求期间其他标签页也可能更新提醒偏好，展示前再次判断。
+    defaultLoginDialogVisible.value = !hideDefaultLoginReminder.value && res.data?.login?.isDefault === true
+  } catch {
+    // 请求错误由接口层统一提示，避免影响主页面的正常展示。
+  }
+}
+
+// 关闭提醒并定位到安全页签，复用现有账号密码修改及保存流程。
+const openSecuritySettings = () => {
+  defaultLoginDialogVisible.value = false
+  router.push({path: '/settings', query: {tab: 'login'}})
+}
 
 onMounted(() => {
   initLayout()
+  checkDefaultLogin()
 })
 </script>
 

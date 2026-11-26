@@ -9,6 +9,7 @@ import ani.rss.entity.Login;
 import ani.rss.entity.NotificationConfig;
 import ani.rss.enums.AniSortTypeEnum;
 import ani.rss.enums.BgmTokenTypeEnum;
+import ani.rss.enums.OffsetTypeEnum;
 import ani.rss.persistence.ConfigStore;
 import ani.rss.util.basic.LogUtil;
 import cn.hutool.core.bean.BeanUtil;
@@ -119,6 +120,7 @@ public class ConfigUtil {
                 .setDelete(false)
                 .setDeleteStandbyRSSOnly(false)
                 .setOffset(false)
+                .setOffsetType(OffsetTypeEnum.AUTO_OFFSET)
                 .setTitleYear(true)
                 .setAutoDisabled(false)
                 .setDownloadPathTemplate(downloadPathTemplate)
@@ -375,6 +377,9 @@ public class ConfigUtil {
      * @param config 设置
      */
     public static void format(Config config) {
+        if (config.getOffsetType() == null) {
+            config.setOffsetType(OffsetTypeEnum.AUTO_OFFSET);
+        }
         ani.rss.upgrade.UpgradeModeService.normalize(config);
         if (!List.of("Original", "Subfolder", "NoSubfolder").contains(config.getQbContentLayout())) {
             config.setQbContentLayout("Original");

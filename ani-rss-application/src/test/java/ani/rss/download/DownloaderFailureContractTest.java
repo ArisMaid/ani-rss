@@ -1,6 +1,7 @@
 package ani.rss.download;
 
 import ani.rss.entity.Config;
+import ani.rss.entity.torrent.TorrentsInfo;
 import ani.rss.service.DownloadService;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -11,15 +12,19 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DownloaderFailureContractTest {
     private HttpServer server;
     private volatile int status;
     private volatile String body;
+    private final List<String> requests = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void startServer() throws IOException {
@@ -56,6 +61,16 @@ class DownloaderFailureContractTest {
     }
 
     @Test
+    void qbittorrentStartReportsFailureWithoutCallingResume() {
+        status = 404;
+        qBittorrent client = new qBittorrent(new DownloadService(), baseConfig());
+        TorrentsInfo torrent = new TorrentsInfo().setHash("test-hash");
+
+        assertThrows(DownloaderOperationException.class, () -> client.start(torrent));
+        assertEquals(List.of("POST /api/v2/torrents/start hashes=test-hash"), requests);
+    }
+
+    @Test
     void aria2ApplicationErrorIsNotRetryable() {
         body = "{\"jsonrpc\":\"2.0\",\"id\":\"test\",\"error\":{\"code\":1}}";
         Config config = baseConfig().setUuid("test");
@@ -74,7 +89,8 @@ class DownloaderFailureContractTest {
     }
 
     private void handle(HttpExchange exchange) throws IOException {
-        exchange.getRequestBody().readAllBytes();
+        String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        requests.add(exchange.getRequestMethod() + " " + exchange.getRequestURI().getPath() + " " + requestBody);
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
         exchange.sendResponseHeaders(status, bytes.length);
         try (var output = exchange.getResponseBody()) {

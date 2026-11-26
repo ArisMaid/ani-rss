@@ -9,7 +9,10 @@ import ani.rss.commons.PathPolicy;
 import ani.rss.entity.*;
 import ani.rss.entity.dto.RssToAniDTO;
 import ani.rss.entity.torrent.TorrentsInfo;
+import ani.rss.enums.OffsetTypeEnum;
 import ani.rss.exception.ResultException;
+import ani.rss.offset.AutoOffset;
+import ani.rss.offset.BaseOffset;
 import ani.rss.ownership.OwnershipService;
 import ani.rss.persistence.SubscriptionRepository;
 import ani.rss.service.SafeImageFetcher;
@@ -26,6 +29,7 @@ import cn.hutool.core.io.resource.ResourceUtil;
 import cn.hutool.core.lang.Assert;
 import cn.hutool.core.thread.ThreadUtil;
 import cn.hutool.core.util.ObjectUtil;
+import cn.hutool.core.util.ReflectUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.SecureUtil;
 import cn.hutool.extra.spring.SpringUtil;
@@ -298,20 +302,25 @@ public class AniUtil {
         }
 
         // 自动推断剧集偏移
-        if (config.getOffset()) {
-            ani.setOffset(inferOffset(ani, url, subgroup));
+        if (Boolean.TRUE.equals(config.getOffset())) {
+            OffsetTypeEnum offsetType = ObjectUtil.defaultIfNull(config.getOffsetType(), OffsetTypeEnum.AUTO_OFFSET);
+            BaseOffset baseOffset = ReflectUtil.newInstance(offsetType.getBaseOffsetClass());
+            ani.setOffset(autoOffset(ani, url, subgroup, baseOffset));
             for (StandbyRss rss : standbyRssList) {
-                rss.setOffset(inferOffset(ani, rss.getUrl(), ""));
+                rss.setOffset(autoOffset(ani, rss.getUrl(), "", baseOffset));
             }
         }
         return ani;
     }
 
     static int inferOffset(Ani ani, String url, String subgroup) {
-        // Parse each source against an unshifted copy, including after the primary offset was set.
-        Ani unshifted = ObjectUtil.clone(ani); unshifted.setOffset(0);
-        return ItemsUtil.getItems(unshifted, url, subgroup).stream().map(Item::getEpisode).filter(Objects::nonNull)
-                .min(Double::compare).map(episode -> ItemsUtil.is5(episode) ? -episode.intValue() : 1 - episode.intValue()).orElse(0);
+        return autoOffset(ani, url, subgroup, new AutoOffset());
+    }
+
+    private static int autoOffset(Ani ani, String url, String subgroup, BaseOffset baseOffset) {
+        // 主备 RSS 都按各自的原始集数计算偏移。
+        Ani unshifted = ObjectUtil.clone(ani).setOffset(0);
+        return baseOffset.getOffset(ani, ItemsUtil.getItems(unshifted, url, subgroup));
     }
 
 

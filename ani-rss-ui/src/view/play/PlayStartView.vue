@@ -1,10 +1,12 @@
 <template>
   <el-dialog v-model="dialogVisible" :title="playItem.name" center @close="onClose">
-    <div class="flex-center content">
+    <div class="flex-center content"
+         v-loading="playerLoading"
+         element-loading-text="正在加载播放器…">
       <div v-if="dialogVisible" class="player-content">
         <el-radio-group v-model="playerKind" aria-label="播放器" size="small" class="player-kind"><el-radio-button value="wasm">WASM 播放器</el-radio-button><el-radio-button value="standard">标准播放器</el-radio-button></el-radio-group>
-        <MoviPlayerView v-if="playerKind === 'wasm'" :play-item="playItem"/>
-        <ArtplayerView v-else :playItem="playItem"/>
+        <component :is="wasmPlayerComponent" v-if="playerKind === 'wasm' && wasmPlayerComponent" :play-item="playItem"/>
+        <ArtplayerView v-else-if="playerKind === 'standard'" :playItem="playItem"/>
       </div>
       <el-text v-if="subtitleLoading" class="subtitle-status" type="info">
         正在读取内封字幕…
@@ -17,22 +19,47 @@
 </template>
 <script setup>
 
-import {defineAsyncComponent, onBeforeUnmount, ref, watch} from "vue";
+import {onBeforeUnmount, ref, shallowRef, watch} from "vue";
 import {useLocalStorage} from '@vueuse/core'
+import {ElMessage} from "element-plus";
 import ArtplayerView from "./ArtplayerView.vue";
-const MoviPlayerView = defineAsyncComponent(() => import('./MoviPlayerView.vue'))
 import {toApiMedia} from "@/js/global.js";
 import * as http from "@/js/http.js";
 
 let dialogVisible = ref(false)
 let playItem = ref({})
+let playerLoading = ref(false)
 let subtitleLoading = ref(false)
 let subtitleError = ref('')
 let subtitleRequest
 let generation = 0
+// 缓存已加载的 WASM 播放器组件，避免 Vue 对组件定义做深层代理并呈现加载态。
+const wasmPlayerComponent = shallowRef()
 const playerKind = useLocalStorage('play-engine', 'wasm')
 if(!['wasm','standard'].includes(playerKind.value)) playerKind.value = 'wasm'
 let sidecarSubtitles = []
+
+const loadWasmPlayer = async currentGeneration => {
+  if (wasmPlayerComponent.value) {
+    playerLoading.value = false
+    return
+  }
+  playerLoading.value = true
+  try {
+    const {default: component} = await import('./MoviPlayerView.vue')
+    if (currentGeneration !== generation || !dialogVisible.value) return
+    wasmPlayerComponent.value = component
+  } catch {
+    if (currentGeneration === generation && dialogVisible.value) {
+      ElMessage.error('播放器加载失败，请刷新页面后重试')
+      dialogVisible.value = false
+    }
+  } finally {
+    if (currentGeneration === generation) {
+      playerLoading.value = false
+    }
+  }
+}
 
 const revokeSubtitles = subtitles => {
   for (const subtitle of subtitles || []) {
@@ -54,7 +81,11 @@ let show = (pi) => {
   playItem.value.src = toApiMedia(playItem.value.filename)
   dialogVisible.value = true
   sidecarSubtitles = playItem.value.subtitles.map(subtitle => ({...subtitle}))
-  if(playerKind.value === 'standard') loadInternalSubtitles(currentGeneration)
+  if (playerKind.value === 'standard') {
+    loadInternalSubtitles(currentGeneration)
+  } else {
+    void loadWasmPlayer(currentGeneration)
+  }
 }
 
 const loadInternalSubtitles = currentGeneration => {
@@ -88,10 +119,14 @@ const loadInternalSubtitles = currentGeneration => {
 
 watch(playerKind, kind => {
   if(!dialogVisible.value) return
-  generation++; subtitleRequest?.abort(); subtitleLoading.value = false; subtitleError.value = ''
+  generation++; subtitleRequest?.abort(); playerLoading.value = false; subtitleLoading.value = false; subtitleError.value = ''
   revokeSubtitles(playItem.value.subtitles)
   playItem.value.subtitles = sidecarSubtitles.map(subtitle => ({...subtitle}))
-  if(kind === 'standard') loadInternalSubtitles(generation)
+  if (kind === 'standard') {
+    loadInternalSubtitles(generation)
+  } else {
+    void loadWasmPlayer(generation)
+  }
 })
 
 defineExpose({
@@ -104,6 +139,7 @@ let onClose = () => {
   subtitleRequest = undefined
   revokeSubtitles(playItem.value.subtitles)
   dialogVisible.value = false
+  playerLoading.value = false
   subtitleLoading.value = false
   subtitleError.value = ''
   playItem.value = {}

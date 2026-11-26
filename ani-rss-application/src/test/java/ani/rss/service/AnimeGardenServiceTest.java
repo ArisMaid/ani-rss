@@ -121,22 +121,30 @@ class AnimeGardenServiceTest {
     }
 
     @Test
-    void returnsPartialEnrichmentAndRetryableStateForAColdScore() {
+    void returnsDirectPostersAndRetriesOnlyTheColdScore() {
         PublicScoreService scores = new PublicScoreService(id -> null, url -> "") {
             @Override
             public BgmScoreLookup getCachedBgmScoresAndWarm(java.util.Collection<String> subjectIds) {
-                return new BgmScoreLookup(Map.of(), Set.copyOf(subjectIds));
+                assertEquals(Set.of("123", "124"), Set.copyOf(subjectIds));
+                return new BgmScoreLookup(Map.of("124", 8.0), Set.of("123"));
             }
         };
         AnimeGardenService service = new AnimeGardenService(
-                () -> List.of(subject("123")), emptyCache(), scores);
-        service.list("");
+                () -> List.of(subject("123"), subject("124"), subject("bad"), subject(null)),
+                emptyCache(), scores);
+        String poster = "https://bgm.animes.garden/bangumi/subject/123/poster.jpeg?quality=small";
+        List<AnimeGarden.Subject> subjects = service.list("").stream()
+                .flatMap(week -> week.getSubjects().stream()).toList();
 
-        AnimeGarden.Enrichment enrichment = service.enrich(List.of("123"))
-                .getSubjects().get("123");
+        assertEquals(poster, subjects.get(0).getCover());
+        assertEquals("", subjects.get(2).getCover());
+        assertEquals("", subjects.get(3).getCover());
 
-        assertEquals(null, enrichment.getScore());
-        assertTrue(service.enrich(List.of("123")).getRetryableSubjectIds().contains("123"));
+        AnimeGarden.EnrichmentResponse result = service.enrich(List.of("123", "124"));
+        assertEquals(poster, result.getSubjects().get("123").getCover());
+        assertEquals(null, result.getSubjects().get("123").getScore());
+        assertEquals(8.0, result.getSubjects().get("124").getScore());
+        assertEquals(List.of("123"), result.getRetryableSubjectIds());
         scores.stopWarmupExecutors();
     }
 

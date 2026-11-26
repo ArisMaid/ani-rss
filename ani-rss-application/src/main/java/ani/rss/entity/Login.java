@@ -2,6 +2,7 @@ package ani.rss.entity;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 import lombok.experimental.Accessors;
 
 import java.io.Serializable;
@@ -10,6 +11,7 @@ import java.io.Serializable;
  * 登录
  */
 @Data
+@NoArgsConstructor
 @Accessors(chain = true)
 @Schema(description = "登录")
 public class Login implements Serializable {
@@ -33,4 +35,12 @@ public class Login implements Serializable {
      */
     @Schema(description = "key", hidden = true)
     private String key;
+
+    @Schema(description = "当前登录凭据是否为默认值")
+    private Boolean isDefault;
+
+    public Login(String username, String password) {
+        this.username = username;
+        this.password = password;
+    }
 }

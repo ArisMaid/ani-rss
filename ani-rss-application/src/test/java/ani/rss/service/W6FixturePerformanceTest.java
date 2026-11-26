@@ -202,7 +202,7 @@ class W6FixturePerformanceTest {
         assertTrue(defaultResult.stream().flatMap(week -> week.getSubjects().stream())
                 .anyMatch(subject -> "900001".equals(subject.getId())));
         assertEquals("900003", searchResult.get(0).getSubjects().get(0).getId());
-        assertEquals("http://fixture/900001.png",
+        assertEquals("https://bgm.animes.garden/bangumi/subject/900001/poster.jpeg?quality=small",
                 defaultEnrichment.getSubjects().get("900001").getCover());
         assertEquals(0.0, defaultEnrichment.getSubjects().get("900002").getScore());
         assertEquals(8.0, searchEnrichment.getSubjects().get("900003").getScore());

@@ -10,6 +10,7 @@ import ani.rss.entity.Config;
 import ani.rss.entity.web.ContentType;
 import ani.rss.entity.web.Header;
 import ani.rss.enums.BgmTokenTypeEnum;
+import ani.rss.enums.OffsetTypeEnum;
 import ani.rss.service.DownloadService;
 import ani.rss.service.MikanService;
 import ani.rss.util.basic.HttpReq;
@@ -367,9 +368,10 @@ public class BgmUtil {
      * @return 集id
      */
     public static String getEpisodeId(String subjectId, Double e) {
-        String epId = "";
-        String sortId = "";
-
+        if (e == null) {
+            return "";
+        }
+        OffsetTypeEnum offsetType = ObjectUtil.defaultIfNull(ConfigUtil.snapshot().getOffsetType(), OffsetTypeEnum.AUTO_OFFSET);
         String key = "BGM_getEpisodeId:" + subjectId;
 
         List<BgmEpisodes.BgmEpisode> episodes = CacheUtils.get(key);
@@ -378,17 +380,13 @@ public class BgmUtil {
             CacheUtils.put(key, episodes, TimeUnit.MINUTES.toMillis(10));
         }
         for (BgmEpisodes.BgmEpisode itemObject : episodes) {
-            if (itemObject.getEp() != null && itemObject.getEp().doubleValue() == e) {
-                epId = itemObject.getId();
-                break;
-            }
-            if (itemObject.getSort() != null && itemObject.getSort().doubleValue() == e) {
-                sortId = itemObject.getId();
-                break;
+            Integer episode = offsetType == OffsetTypeEnum.BGM_OFFSET ? itemObject.getSort() : itemObject.getEp();
+            if (episode != null && episode.doubleValue() == e) {
+                return itemObject.getId();
             }
         }
 
-        return StrUtil.blankToDefault(epId, sortId);
+        return "";
     }
 
     /**
@@ -746,7 +744,8 @@ public class BgmUtil {
             return episodeTitleMap;
         }
 
-        String key = "BGM_getEpisodeTitleMap:" + subjectId;
+        OffsetTypeEnum offsetType = ObjectUtil.defaultIfNull(ConfigUtil.snapshot().getOffsetType(), OffsetTypeEnum.AUTO_OFFSET);
+        String key = "BGM_getEpisodeTitleMap:" + subjectId + ":" + offsetType;
 
         Map<Integer, BgmEpisodes.BgmEpisode> cacheMap = CacheUtils.get(key);
         if (Objects.nonNull(cacheMap)) {
@@ -756,7 +755,7 @@ public class BgmUtil {
         try {
             List<BgmEpisodes.BgmEpisode> data = getEpisodes(subjectId, 0);
             for (BgmEpisodes.BgmEpisode episode : data) {
-                Integer ep = episode.getEp();
+                Integer ep = offsetType == OffsetTypeEnum.BGM_OFFSET ? episode.getSort() : episode.getEp();
                 if (ep == null) {
                     continue;
                 }

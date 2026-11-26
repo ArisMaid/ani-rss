@@ -2,6 +2,7 @@ package ani.rss.update;
 
 import ani.rss.commons.MavenUtils;
 import ani.rss.entity.About;
+import ani.rss.entity.Global;
 import ani.rss.util.basic.HttpReq;
 import cn.hutool.core.lang.Assert;
 import cn.hutool.system.OsInfo;
@@ -28,6 +29,9 @@ public interface BaseUpdate {
     Pattern SHA_256 = Pattern.compile("(?i)[0-9a-f]{64}");
 
     static BaseUpdate getInstance() {
+        if (Global.args().contains("--ani-rss-desktop=true")) {
+            return new DesktopUpdate();
+        }
         OsInfo osInfo = SystemUtil.getOsInfo();
 
         if (osInfo.isMac()) {

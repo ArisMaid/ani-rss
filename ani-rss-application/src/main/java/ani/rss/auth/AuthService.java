@@ -494,6 +494,25 @@ public class AuthService {
         }
     }
 
+    public static boolean isDefaultLogin(Config config) {
+        if (config == null || config.getLogin() == null) {
+            return false;
+        }
+        Login login = config.getLogin();
+        if (isUnconfiguredLogin(login)) {
+            return true;
+        }
+        if (!DEFAULT_USERNAME.equals(login.getUsername())) {
+            return false;
+        }
+
+        String password = login.getPassword();
+        if (isLegacyHash(password)) {
+            return constantEquals(md5(initialPassword()), password.toLowerCase(Locale.ROOT));
+        }
+        return matchesArgon2(initialPassword(), password);
+    }
+
     private static boolean isLegacyHash(String value) {
         return value != null && value.matches("(?i)[0-9a-f]{32}");
     }

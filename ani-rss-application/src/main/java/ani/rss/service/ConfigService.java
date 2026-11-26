@@ -57,7 +57,8 @@ public class ConfigService {
     public Config config() {
         String version = MavenUtils.getVersion();
         Config config = ConfigUtil.snapshot();
-        config.getLogin().setPassword("");
+        boolean isDefault = AuthService.isDefaultLogin(config);
+        config.getLogin().setPassword("").setIsDefault(isDefault);
         clearSecrets(config);
         config.setVersion(version)
                 .setGitInfo(getGitInfo())
@@ -103,6 +104,7 @@ public class ConfigService {
                 .setVerifyExpirationTime(null);
         preserveSecrets(previousConfig, candidate);
 
+        candidate.getLogin().setIsDefault(null);
         String loginPassword = candidate.getLogin().getPassword();
         String rawPassword = null;
         if (StrUtil.isBlank(loginPassword)) {
@@ -347,6 +349,7 @@ public class ConfigService {
                         .setServerChanSendKey("")
                         .setServerChan3ApiUrl("")
                         .setTelegramBotToken("")
+                        .setAstrBotApiKey("")
                         .setWebHookUrl("")
                         .setWebHookHeader("")
                         .setWebHookBody("")
@@ -419,6 +422,7 @@ public class ConfigService {
         if (StrUtil.isBlank(candidate.getServerChanSendKey())) candidate.setServerChanSendKey(previous.getServerChanSendKey());
         if (StrUtil.isBlank(candidate.getServerChan3ApiUrl())) candidate.setServerChan3ApiUrl(previous.getServerChan3ApiUrl());
         if (StrUtil.isBlank(candidate.getTelegramBotToken())) candidate.setTelegramBotToken(previous.getTelegramBotToken());
+        if (StrUtil.isBlank(candidate.getAstrBotApiKey())) candidate.setAstrBotApiKey(previous.getAstrBotApiKey());
         if (StrUtil.isBlank(candidate.getWebHookUrl())) candidate.setWebHookUrl(previous.getWebHookUrl());
         if (StrUtil.isBlank(candidate.getWebHookHeader())) candidate.setWebHookHeader(previous.getWebHookHeader());
         if (StrUtil.isBlank(candidate.getWebHookBody())) candidate.setWebHookBody(previous.getWebHookBody());

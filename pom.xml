@@ -5,7 +5,7 @@
 
     <groupId>ani.rss</groupId>
     <artifactId>ani-rss</artifactId>
-    <version>3.2.54.79</version>
+    <version>3.3.1.80</version>
 
     <name>ani-rss</name>
     <inceptionYear>2025</inceptionYear>
@@ -18,12 +18,12 @@
     <packaging>pom</packaging>
     <properties>
         <java.version>17</java.version>
-        <spring-ai.version>2.0.1</spring-ai.version>
-        <logback.version>1.6.5</logback.version>
+        <spring-ai.version>2.1.0-M1</spring-ai.version>
+        <logback.version>1.6.6</logback.version>
         <commons-compress.version>1.27.1</commons-compress.version>
         <bouncycastle.version>1.84</bouncycastle.version>
-        <jackson2-bom.version>2.21.5</jackson2-bom.version>
-        <jackson3-bom.version>3.1.5</jackson3-bom.version>
+        <jackson2-bom.version>2.21.8</jackson2-bom.version>
+        <jackson3-bom.version>3.1.8</jackson3-bom.version>
         <jacoco.version>0.8.15</jacoco.version>
         <spotbugs-maven-plugin.version>4.10.3.0</spotbugs-maven-plugin.version>
         <cyclonedx-maven-plugin.version>2.9.2</cyclonedx-maven-plugin.version>
@@ -37,7 +37,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.1.2</version>
+        <version>4.2.0</version>
         <relativePath/>
     </parent>
 
@@ -70,7 +70,7 @@
             <dependency>
                 <groupId>org.commonmark</groupId>
                 <artifactId>commonmark</artifactId>
-                <version>0.30.1</version>
+                <version>0.32.0</version>
             </dependency>
             <dependency>
                 <groupId>wushuo.tmdb.api</groupId>
@@ -107,7 +107,7 @@
             <dependency>
                 <groupId>org.springdoc</groupId>
                 <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-                <version>3.1.1</version>
+                <version>3.2.0</version>
             </dependency>
             <dependency>
                 <groupId>io.swagger.core.v3</groupId>

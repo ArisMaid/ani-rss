@@ -2,9 +2,9 @@
 
 ## 当前上游基线：v3.3.1
 
-fork `3.3.1.80` 按功能对照上游 `v3.2.55–v3.3.1`（`0ea2d5a3`）同步，不整体合并。覆盖 Bangumi `yyyy-MM` 与线程安全日期解析、重命名保留 `+NCOPED`、qBittorrent 仅调用 `/torrents/start`、自动偏移类型（`AUTO_OFFSET` / `BGM_OFFSET`）、首页删除订阅刷新、AnimeGarden 直连封面、AstrBot 通知与封面上传、通知管理页网格与快捷启停、WASM 播放器按需加载反馈、默认登录凭据按需提醒以及 `--ani-rss-desktop=true` 桌面更新暂存。
+fork `3.3.1.81`（`3.3.1.80` 在 `v3.3.1.80` 发布构建中因上游 `wushuo894/ani-rss-macos` 归档已下线返回 404 未发布，随即在 `package.sh` 移除 `macos` profile 并递增至 `.81`）按功能对照上游 `v3.2.55–v3.3.1`（`0ea2d5a3`）同步，不整体合并。覆盖 Bangumi `yyyy-MM` 与线程安全日期解析、重命名保留 `+NCOPED`、qBittorrent 仅调用 `/torrents/start`、自动偏移类型（`AUTO_OFFSET` / `BGM_OFFSET`）、首页删除订阅刷新、AnimeGarden 直连封面、AstrBot 通知与封面上传、通知管理页网格与快捷启停、WASM 播放器按需加载反馈、默认登录凭据按需提醒以及 `--ani-rss-desktop=true` 桌面更新暂存。
 
-同步适配与保留合同：`BgmOffset` 以 `subjectId` 缓存最小正篇集数并保留主备 RSS 各自按 `offset=0` 副本独立计算；`BgmUtil` 与 `WebMvcConfig` 维持 Java 17 兼容，不引入 Java 21+ `SequencedCollection` API；`AnimeGardenService` 保留快照隔离、48 项上限、过期 409 与评分重试；`AstrBotNotification` 的 `astrBotApiKey` 纳入 `ConfigService` 脱敏与唯一身份回填，封面读取受 `PathPolicy` 约束；默认登录检测由 `AuthService.isDefaultLogin` 在密码脱敏前计算且不落盘，前端提醒弹窗拆为懒加载组件以守住首屏包体；`linux/` 脚本保持指向 `ArisMaid/ani-rss` 的 `master` 分支。不移植上游移除 Windows EXE、macOS 打包、开机自启与 JDK 25 的改动，继续维持 Java 17、`ani-rss.jar` / `ani-rss.exe` 与 temurin/OpenJ9/ARM32 多架构发布合同。详见[工程决策记录](.agents/notes/implemented/architecture/2026-11-27-upstream-v3-3-1-sync.md)与[本次更新](UPDATE.md)。
+同步适配与保留合同：`BgmOffset` 以 `subjectId` 缓存最小正篇集数并保留主备 RSS 各自按 `offset=0` 副本独立计算；`BgmUtil` 与 `WebMvcConfig` 维持 Java 17 兼容，不引入 Java 21+ `SequencedCollection` API；`AnimeGardenService` 保留快照隔离、48 项上限、过期 409 与评分重试；`AstrBotNotification` 的 `astrBotApiKey` 纳入 `ConfigService` 脱敏与唯一身份回填，封面读取受 `PathPolicy` 约束；默认登录检测由 `AuthService.isDefaultLogin` 在密码脱敏前计算且不落盘，前端提醒弹窗拆为懒加载组件以守住首屏包体；`linux/` 脚本保持指向 `ArisMaid/ani-rss` 的 `master` 分支。不移植上游移除 Windows EXE、开机自启与 JDK 25 的改动，继续维持 Java 17、`ani-rss.jar` / `ani-rss.exe` 与 temurin/OpenJ9/ARM32 多架构发布合同；旧版 macOS DMG 打包因上游仓库下线不再随 `package.sh` 执行。详见[工程决策记录](.agents/notes/implemented/architecture/2026-11-27-upstream-v3-3-1-sync.md)与[本次更新](UPDATE.md)。
 
 ## 历史上游基线：v3.2.54
 

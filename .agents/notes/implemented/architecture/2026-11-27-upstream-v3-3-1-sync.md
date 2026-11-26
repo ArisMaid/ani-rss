@@ -1,4 +1,4 @@
-# Agent Note: 按功能同步上游 v3.2.55–v3.3.1 至 3.3.1.80
+# Agent Note: 按功能同步上游 v3.2.55–v3.3.1 至 3.3.1.81
 
 Status: implemented
 
@@ -13,7 +13,7 @@ Status: implemented
 
 ## Decision
 
-按能力逐项同步 `v3.2.55–v3.3.1` 的功能与缺陷修复，版本号按四段规则迭代为 `3.3.1.80`，全部改动严格适配并保留既有 fork 合同：
+按能力逐项同步 `v3.2.55–v3.3.1` 的功能与缺陷修复，版本号按四段规则迭代为 `3.3.1.81`（`3.3.1.80` 打包时因上游 `wushuo894/ani-rss-macos` 归档已返回 404 未发布，随后在 `package.sh` 移除 `macos` profile 并递增至 `.81`），全部改动严格适配并保留既有 fork 合同：
 
 1. **日期、重命名与下载器**：
    - `DateAdapter` 改用线程安全的 `DateUtil.formatDate` / `DateUtil.parse`，新增 `yyyy-MM` 解析，并对 `yyyy-MM-dd` 前缀先用 `LocalDate.parse` 校验以拒绝越界日期。
@@ -35,7 +35,7 @@ Status: implemented
 6. **前端交互与桌面更新兼容**：
    - `DashboardView.vue` 为懒加载 `DelAniView` 绑定 `@callback="reloadAfterDelete"`，删除订阅后同步刷新首页与订阅缓存列表。
    - `NotificationView.vue` 采用自适应网格、启用/禁用状态点与快捷启停菜单；`PlayStartView.vue` 保持 WASM/标准双引擎切换并补齐 WASM 按需加载提示与失败反馈；`AfdianView.vue` 移除旧讨论链接。
-   - `BaseUpdate.getInstance()` 优先响应 `Global.args().contains("--ani-rss-desktop=true")` 返回 `DesktopUpdate`（暂存 `.pending` 后退出），同时完整保留 Windows EXE、macOS 打包、开机自启、`linux/` 的 `master` 分支地址以及 Java 17 发布合同。
+   - `BaseUpdate.getInstance()` 优先响应 `Global.args().contains("--ani-rss-desktop=true")` 返回 `DesktopUpdate`（暂存 `.pending` 后退出），同时完整保留 Windows EXE、开机自启、`linux/` 的 `master` 分支地址以及 Java 17 发布合同；因上游已移除 `wushuo894/ani-rss-macos` 归档（HTTP 404），`package.sh` 调整为 `-P windows` 不再触发旧版 macOS 启动器下载。
 7. **依赖同步**：
    - 后端同步 Spring Boot `4.2.0`、Spring AI `2.1.0-M1`、CommonMark `0.32.0`、springdoc `3.2.0` 及与 Boot 4.2.0 一致的 Jackson/Logback BOM；前端同步 Element Plus `2.14.8`、Vue `3.5.46`、vue-router `4.6.5`、Vite `8.3.8`、`@vitejs/plugin-vue 6.0.11` 与 `terser 5.51.4`。
 
@@ -65,4 +65,4 @@ Status: implemented
 
 - **后端定向验证（JDK 17）**：10 个定向测试类共 55 项全部通过（覆盖 `DateAdapterTest`、`BgmOffsetTest`、`Upstream52SubscriptionTest`、`AnimeGardenServiceTest`、`W6FixturePerformanceTest`、`AstrBotNotificationTest`、`ConfigServiceSecretTest`、`AuthServiceTest`、`BaseUpdateTest`、`DownloaderFailureContractTest`），SpotBugs Max/Medium 零告警。
 - **前端本地验证（Node 26.12.1 / pnpm 12.15.0）**：10 个测试文件共 56 项全部通过，`pnpm install --frozen-lockfile`、唯一目录生产构建及 `pnpm check:bundle` 通过（`forbiddenModules = []`）。
-- **远端 CI 与发布验证**：推送 `master` 后通过 GitHub Actions `build-test`（全量 `mvn -B verify -Pci` + 前端 + W7/N08 浏览器 smoke）及 `v3.3.1.80` 精确 tag `build` 工作流（Release 附件与 GHCR 三组多架构镜像）核验。
+- **远端 CI 与发布验证**：推送 `master` 后通过 GitHub Actions `build-test`（全量 `mvn -B verify -Pci` + 前端 + W7/N08 浏览器 smoke）及 `v3.3.1.81` 精确 tag `build` 工作流（Release 附件与 GHCR 三组多架构镜像）核验。
